@@ -1,0 +1,85 @@
+{
+  "timestamp": "2025-04-06T20:09:02.420Z",
+  "testDataReady": true,
+  "documents": [
+    "api_documentation.md",
+    "product_overview.md"
+  ],
+  "queries": [
+    {
+      "text": "What are the main features of your product?",
+      "category": "PRODUCT",
+      "complexity": 1
+    },
+    {
+      "text": "How does your product dashboard work?",
+      "category": "PRODUCT",
+      "complexity": 2
+    },
+    {
+      "text": "How do I authenticate with your API?",
+      "category": "TECHNICAL",
+      "complexity": 3
+    },
+    {
+      "text": "What's the database connection limit?",
+      "category": "TECHNICAL",
+      "complexity": 2
+    },
+    {
+      "text": "Tell me about your collaboration features",
+      "category": "FEATURES",
+      "complexity": 1
+    },
+    {
+      "text": "What analytics capabilities do you offer?",
+      "category": "FEATURES",
+      "complexity": 2
+    },
+    {
+      "text": "How much does the professional plan cost?",
+      "category": "PRICING",
+      "complexity": 1
+    },
+    {
+      "text": "Do you offer discounts for enterprise customers?",
+      "category": "PRICING",
+      "complexity": 2
+    },
+    {
+      "text": "Can you share an example of customer success?",
+      "category": "CUSTOMER",
+      "complexity": 2
+    },
+    {
+      "text": "How do you support Fortune 500 customers?",
+      "category": "CUSTOMER",
+      "complexity": 2
+    },
+    {
+      "text": "What features are included in the $49/month plan?",
+      "category": "MIXED",
+      "complexity": 3,
+      "expected_categories": [
+        "PRICING",
+        "FEATURES"
+      ]
+    },
+    {
+      "text": "How does your API handle authentication for enterprise customers?",
+      "category": "MIXED",
+      "complexity": 3,
+      "expected_categories": [
+        "TECHNICAL",
+        "CUSTOMER"
+      ]
+    }
+  ],
+  "notes": [
+    "This is a test setup verification. To run the actual test:",
+    "1. Verify the metadata extraction implementation in utils/metadataExtractor.ts",
+    "2. Verify the admin workflow implementation in utils/adminWorkflow.ts",
+    "3. Verify the query router implementation in utils/queryRouter.ts",
+    "4. Run the actual E2E test with the correct function signatures"
+  ]
+}

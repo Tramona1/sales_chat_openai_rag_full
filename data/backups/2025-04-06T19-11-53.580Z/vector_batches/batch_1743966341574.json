@@ -1,0 +1,50 @@
+[
+  {
+    "text": "SalesBuddy AI offers powerful features for sales teams including real-time product information, customer insights, and guided selling. Our platform integrates with your CRM and provides instant access to your product documentation, pricing details, and competitive analysis. Sales representatives can use our conversational interface to quickly find answers during customer calls.",
+    "embedding": [],
+    "metadata": {
+      "source": "https://salesbuddy.example.com/product/features",
+      "title": "SalesBuddy Product Features",
+      "url": "https://salesbuddy.example.com/product/features",
+      "timestamp": "2023-07-15T12:00:00Z",
+      "category": "product",
+      "technicalLevel": 3,
+      "entities": "SalesBuddy AI,CRM",
+      "keywords": "SalesBuddy AI,CRM,product information,customer insights,guided selling,conversational interface,competitive analysis",
+      "summary": "SalesBuddy AI is a platform offering features like real-time product information, customer insights, and guided selling, integrating with CRM and providing access to product documentation, pricing details, and competitive analysis.",
+      "batch": "1743966341574"
+    }
+  },
+  {
+    "text": "The SalesBuddy API allows developers to integrate our conversational AI capabilities directly into their applications. All API requests must be authenticated using JWT tokens. To obtain a token, make a POST request to https://api.salesbuddy.ai/v1/auth/token with your API key in the header. The API has endpoints for conversation management, knowledge base updates, and analytics.",
+    "embedding": [],
+    "metadata": {
+      "source": "https://salesbuddy.example.com/api/documentation",
+      "title": "SalesBuddy API Documentation",
+      "url": "https://salesbuddy.example.com/api/documentation",
+      "timestamp": "2023-08-01T09:15:00Z",
+      "category": "technical",
+      "technicalLevel": 5,
+      "entities": "SalesBuddy API,JWT tokens,https://api.salesbuddy.ai/v1/auth/token,POST,API key,conversation management,knowledge base updates,analytics",
+      "keywords": "SalesBuddy API,developers,conversational AI,JWT tokens,authenticated,POST request,API key,conversation management,knowledge base updates,analytics",
+      "summary": "The document provides information about the SalesBuddy API, its authentication process and its various endpoints.",
+      "batch": "1743966341574"
+    }
+  },
+  {
+    "text": "SalesBuddy AI is available in three pricing tiers: Starter ($499/month for up to 10 users), Professional ($999/month for up to 25 users), and Enterprise ($2,499/month for unlimited users). The Professional plan includes all Starter features plus custom training and CRM integration. The Enterprise plan adds advanced analytics and dedicated support. Annual billing offers a 20% discount on all plans.",
+    "embedding": [],
+    "metadata": {
+      "source": "https://salesbuddy.example.com/pricing",
+      "title": "SalesBuddy Pricing Plans",
+      "url": "https://salesbuddy.example.com/pricing",
+      "timestamp": "2023-07-20T14:30:00Z",
+      "category": "pricing",
+      "technicalLevel": 1,
+      "entities": "SalesBuddy AI,Starter,Professional,Enterprise,$499/month,$999/month,$2,499/month,20% discount,custom training,CRM integration,advanced analytics,dedicated support",
+      "keywords": "SalesBuddy AI,pricing tiers,Starter,Professional,Enterprise,features,CRM integration,advanced analytics,dedicated support,annual billing",
+      "summary": "SalesBuddy AI offers three pricing tiers: Starter, Professional, and Enterprise, with varying features and user limits. Annual billing offers a 20% discount.",
+      "batch": "1743966341574"
+    }
+  }
+]

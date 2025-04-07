@@ -1,0 +1,112 @@
+{
+  "totalDocuments": 1458,
+  "averageDocumentLength": 708.2921810699588,
+  "uniqueTerms": 16659,
+  "termFrequencyStats": {
+    "min": 1,
+    "max": 18138,
+    "avg": 61.98991536106609
+  },
+  "mostCommonTerms": [
+    {
+      "term": "your",
+      "count": 1380,
+      "percentage": 94.65020576131687
+    },
+    {
+      "term": "hourly",
+      "count": 1372,
+      "percentage": 94.10150891632372
+    },
+    {
+      "term": "you",
+      "count": 1365,
+      "percentage": 93.62139917695474
+    },
+    {
+      "term": "hiring",
+      "count": 1358,
+      "percentage": 93.14128943758574
+    },
+    {
+      "term": "workstream",
+      "count": 1356,
+      "percentage": 93.00411522633745
+    },
+    {
+      "term": "payroll",
+      "count": 1342,
+      "percentage": 92.04389574759945
+    },
+    {
+      "term": "how",
+      "count": 1276,
+      "percentage": 87.51714677640604
+    },
+    {
+      "term": "help",
+      "count": 1273,
+      "percentage": 87.31138545953361
+    },
+    {
+      "term": "our",
+      "count": 1259,
+      "percentage": 86.35116598079561
+    },
+    {
+      "term": "resources",
+      "count": 1247,
+      "percentage": 85.5281207133059
+    },
+    {
+      "term": "free",
+      "count": 1246,
+      "percentage": 85.45953360768176
+    },
+    {
+      "term": "hr",
+      "count": 1239,
+      "percentage": 84.97942386831275
+    },
+    {
+      "term": "franchise",
+      "count": 1222,
+      "percentage": 83.81344307270233
+    },
+    {
+      "term": "get",
+      "count": 1217,
+      "percentage": 83.47050754458162
+    },
+    {
+      "term": "experience",
+      "count": 1210,
+      "percentage": 82.99039780521262
+    },
+    {
+      "term": "current",
+      "count": 1206,
+      "percentage": 82.71604938271605
+    },
+    {
+      "term": "hire",
+      "count": 1205,
+      "percentage": 82.6474622770919
+    },
+    {
+      "term": "email",
+      "count": 1194,
+      "percentage": 81.89300411522635
+    },
+    {
+      "term": "stay",
+      "count": 1192,
+      "percentage": 81.75582990397805
+    },
+    {
+      "term": "applicant",
+      "count": 1191,
+      "percentage": 81.6872427983539
+    }
+  ]
+}
