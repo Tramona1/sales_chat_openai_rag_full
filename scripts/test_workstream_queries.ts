@@ -1,29 +1,36 @@
 /**
- * Test Query Script
+ * Workstream Real Queries Test
  * 
- * This script tests the enhanced query system with sample queries to demonstrate
- * the reranking and query routing functionality.
+ * This script tests the hybrid search system with real Workstream-specific questions
+ * rather than generic mock data. These questions are designed to test the system's
+ * ability to retrieve relevant information from the processed Workstream data.
  */
 
 import { routeQuery } from '../utils/queryRouter';
 import { initializeHybridSearch } from '../utils/hybridSearch';
 
-const testQueries = [
+// Real Workstream-specific queries
+const workstreamQueries = [
   "What features does Workstream offer for hourly hiring?",
   "How does Workstream help with employee onboarding?",
   "What are the benefits of using Workstream for restaurant hiring?",
   "Can Workstream integrate with other HR systems?",
-  "How does Workstream's text-to-apply feature work?"
+  "How does Workstream's text-to-apply feature work?",
+  "What makes Workstream different from other HR platforms?",
+  "How does Workstream help franchise owners?",
+  "What industries does Workstream primarily serve?",
+  "Does Workstream offer payroll services?",
+  "How can Workstream reduce my time-to-hire?"
 ];
 
-async function testQuerySystem() {
+async function testWorkstreamQueries() {
   try {
     console.log("Initializing hybrid search system...");
     await initializeHybridSearch();
     
-    console.log("\n=== Testing Enhanced Query System with Workstream Queries ===\n");
+    console.log("\n=== Testing Real Workstream Queries ===\n");
     
-    for (const query of testQueries) {
+    for (const query of workstreamQueries) {
       console.log(`\n--- Query: "${query}" ---`);
       
       console.time('Query processing time');
@@ -50,8 +57,8 @@ async function testQuerySystem() {
       
       console.log(`\nFound ${result.results.length} results:`);
       
-      // Display the top 2 results with scores and snippets
-      const topResults = result.results.slice(0, 2);
+      // Display the top 3 results with scores and snippets
+      const topResults = result.results.slice(0, 3);
       topResults.forEach((result, index) => {
         console.log(`\n[Result ${index + 1}]`);
         console.log(`Source: ${result.item.metadata?.source || 'unknown'}`);
@@ -65,8 +72,8 @@ async function testQuerySystem() {
         
         // Display a snippet of the text
         const text = result.item.text;
-        const snippet = text.length > 200 
-          ? text.substring(0, 200) + '...' 
+        const snippet = text.length > 250 
+          ? text.substring(0, 250) + '...' 
           : text;
         console.log(`Snippet: "${snippet}"`);
       });
@@ -77,13 +84,13 @@ async function testQuerySystem() {
     console.log("Testing completed!");
     
   } catch (error) {
-    console.error("Error testing query system:", error);
+    console.error("Error testing Workstream queries:", error);
   }
 }
 
 // Run the test if this script is executed directly
 if (require.main === module) {
-  testQuerySystem()
+  testWorkstreamQueries()
     .then(() => process.exit(0))
     .catch(error => {
       console.error('Test failed:', error);
@@ -91,4 +98,4 @@ if (require.main === module) {
     });
 }
 
-export { testQuerySystem }; 
+export { testWorkstreamQueries }; 

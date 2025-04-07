@@ -10,13 +10,13 @@ import {
   initializeHybridSearch
 } from '../utils/hybridSearch';
 
-// Test queries
+// Test queries specific to Workstream
 const testQueries = [
-  "What features does SalesBuddy offer?",
-  "How much does the Professional plan cost?",
-  "How do I authenticate API requests?",
-  "What's included in the Enterprise plan?",
-  "Tell me about SalesBuddy's CRM integration"
+  "What features does Workstream offer for hourly hiring?",
+  "How does Workstream help with employee onboarding?",
+  "What are the benefits of using Workstream for restaurant hiring?",
+  "Can Workstream integrate with other HR systems?",
+  "How does Workstream's text-to-apply feature work?"
 ];
 
 async function runDirectSearchTest() {
@@ -24,7 +24,7 @@ async function runDirectSearchTest() {
     console.log("Initializing hybrid search system...");
     await initializeHybridSearch();
     
-    console.log("\n=== Testing Direct Hybrid Search ===\n");
+    console.log("\n=== Testing Direct Hybrid Search with Workstream Queries ===\n");
     
     for (const query of testQueries) {
       console.log(`\n--- Query: "${query}" ---`);

@@ -20,6 +20,7 @@
     "transform:workstream-data": "ts-node scripts/transform_workstream_data.ts",
     "process:all-data": "ts-node scripts/process_all_data.ts",
     "test:query": "ts-node scripts/test_query.ts",
+    "test:workstream": "ts-node scripts/test_workstream_queries.ts",
     "build": "tsc",
     "build:next": "next build",
     "start": "node dist/index.js",
