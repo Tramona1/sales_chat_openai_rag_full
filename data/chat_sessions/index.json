@@ -1,0 +1,19 @@
+{
+  "sessions": [
+    {
+      "id": "starbucks-1744010202596",
+      "companyName": "starbucks",
+      "updatedAt": "2025-04-07T07:16:42.596Z"
+    },
+    {
+      "id": "starbucks-1744010229435",
+      "companyName": "starbucks",
+      "updatedAt": "2025-04-07T07:17:09.435Z"
+    },
+    {
+      "id": "starbucks-1744010258771",
+      "companyName": "starbucks",
+      "updatedAt": "2025-04-07T07:17:38.771Z"
+    }
+  ]
+}

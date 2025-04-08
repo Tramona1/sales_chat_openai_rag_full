@@ -14,7 +14,7 @@ export declare function embedText(text: string): Promise<number[]>;
  */
 export declare function generateChatCompletion(systemPrompt: string, userPrompt: string, model?: string, jsonMode?: boolean): Promise<string>;
 /**
- * Generate a structured response with JSON output
+ * Generate a structured response from OpenAI API
  */
 export declare function generateStructuredResponse(systemPrompt: string, userPrompt: string, responseSchema: any, model?: string): Promise<any>;
 /**

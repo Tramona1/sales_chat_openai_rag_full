@@ -7,8 +7,9 @@ exports.default = handler;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const openaiClient_1 = require("@/utils/openaiClient");
-const vectorStore_1 = require("@/utils/vectorStore");
 const documentProcessing_1 = require("@/utils/documentProcessing");
+const adminWorkflow_1 = require("@/utils/adminWorkflow");
+const documentCategories_1 = require("@/utils/documentCategories");
 async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method not allowed' });
@@ -27,27 +28,34 @@ async function handler(req, res) {
         const source = title || 'Direct Text Input';
         // Process the text with source information
         const chunks = (0, documentProcessing_1.splitIntoChunks)(text, 500, source);
-        // Process chunks
-        let processedCount = 0;
-        for (const chunk of chunks) {
-            if (chunk.text.trim()) {
-                const embedding = await (0, openaiClient_1.embedText)(chunk.text);
-                const item = {
-                    embedding,
-                    text: chunk.text,
-                    metadata: {
-                        source,
-                        // Include the additional metadata from the chunking process
-                        ...(chunk.metadata || {})
-                    }
-                };
-                (0, vectorStore_1.addToVectorStore)(item);
-                processedCount++;
-            }
+        // Add to pending documents instead of directly to vector store
+        if (chunks.length > 0) {
+            // Create embedding for the first chunk to help with similarity search later
+            const embedding = await (0, openaiClient_1.embedText)(chunks[0].text);
+            // Add to pending documents - with correct parameter format
+            await (0, adminWorkflow_1.addToPendingDocuments)(text, {
+                source: source,
+                title: source,
+                contentType: 'text/plain',
+                primaryCategory: documentCategories_1.DocumentCategoryType.GENERAL,
+                secondaryCategories: [],
+                confidenceScore: 0.8,
+                summary: text.substring(0, 200) + (text.length > 200 ? '...' : ''),
+                keyTopics: [],
+                technicalLevel: 5,
+                entities: [],
+                keywords: [],
+                qualityFlags: [],
+                approved: false,
+                routingPriority: 5
+            }, embedding);
+            return res.status(200).json({
+                message: `Successfully processed text and created ${chunks.length} chunks. Content will be available after admin approval.`
+            });
         }
-        return res.status(200).json({
-            message: `Successfully processed text and created ${processedCount} chunks. You can now ask questions about this content!`
-        });
+        else {
+            return res.status(400).json({ message: 'No valid content chunks could be created from the text' });
+        }
     }
     catch (error) {
         console.error('Error processing text:', error);

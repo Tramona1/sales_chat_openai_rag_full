@@ -84,13 +84,19 @@ export const CATEGORY_ATTRIBUTES: Record<DocumentCategoryType, CategoryAttribute
     routingPriority: 1
   },
   [DocumentCategoryType.FEATURES]: {
-    displayName: 'Features',
-    description: 'Specific product features and capabilities',
-    associatedKeywords: ['feature', 'capability', 'function', 'module'],
+    displayName: 'Product Features',
+    description: 'Information about specific features and functionality',
+    associatedKeywords: [
+      'feature', 'features', 'functionality', 'capabilities', 'function',
+      'new', 'latest', 'recent', 'update', 'updated', 'upgrade', 
+      'launch', 'launched', 'release', 'released', 'rollout',
+      'quarter', 'quarterly', 'month', 'monthly', 'year', 'annual',
+      'enhancement', 'improvement', 'addition'
+    ],
     potentiallySensitive: false,
     requiresApproval: false,
-    color: '#FBBC05',
-    routingPriority: 2
+    color: '#3B82F6',
+    routingPriority: 5
   },
   [DocumentCategoryType.TECHNICAL]: {
     displayName: 'Technical Documentation',

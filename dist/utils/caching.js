@@ -1,106 +1,90 @@
 "use strict";
 /**
- * Simple caching utilities for the RAG system
+ * Simple caching utility for application data
  *
- * Provides in-memory caching functionality for query results
- * to improve performance for repeated queries.
+ * Provides in-memory caching with expiration for API responses
+ * and other frequently accessed data.
  */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateCacheKey = generateCacheKey;
-exports.getCachedResult = getCachedResult;
-exports.cacheResult = cacheResult;
-exports.getCacheStats = getCacheStats;
+exports.cacheWithExpiry = cacheWithExpiry;
+exports.getFromCache = getFromCache;
+exports.invalidateCache = invalidateCache;
 exports.clearCache = clearCache;
-const crypto_1 = __importDefault(require("crypto"));
-// Simple in-memory cache
+exports.getCacheStats = getCacheStats;
 const cache = {};
 /**
- * Generate a cache key for a query
+ * Store data in cache with expiration time
+ *
+ * @param key Cache key
+ * @param data Data to cache
+ * @param ttl Time to live in milliseconds
  */
-function generateCacheKey(query) {
-    return `query:${crypto_1.default.createHash('sha256').update(query).digest('hex')}`;
-}
-/**
- * Check if a query result is cached
- */
-async function getCachedResult(query) {
-    try {
-        const cacheKey = generateCacheKey(query);
-        const entry = cache[cacheKey];
-        if (entry && entry.expiresAt > Date.now()) {
-            console.log('Cache hit for query:', query);
-            return entry.data;
-        }
-        if (entry) {
-            // Expired entry, clean up
-            console.log('Cache entry expired for query:', query);
-            delete cache[cacheKey];
-        }
-        return null;
-    }
-    catch (error) {
-        console.error('Error retrieving from cache:', error);
-        return null;
-    }
-}
-/**
- * Cache a query result
- */
-async function cacheResult(query, result, ttlSeconds = 3600) {
-    try {
-        const cacheKey = generateCacheKey(query);
-        const expiresAt = Date.now() + (ttlSeconds * 1000);
-        cache[cacheKey] = {
-            data: result,
-            expiresAt
-        };
-        console.log(`Cached result for query "${query}" (expires in ${ttlSeconds}s)`);
-        // Cleanup old entries every 100 cache operations
-        if (Math.random() < 0.01) {
-            cleanupExpiredEntries();
-        }
-    }
-    catch (error) {
-        console.error('Error caching result:', error);
-    }
-}
-/**
- * Remove all expired entries from the cache
- */
-function cleanupExpiredEntries() {
+function cacheWithExpiry(key, data, ttl) {
     const now = Date.now();
-    let cleanedCount = 0;
-    Object.keys(cache).forEach(key => {
-        if (cache[key].expiresAt < now) {
-            delete cache[key];
-            cleanedCount++;
-        }
-    });
-    if (cleanedCount > 0) {
-        console.log(`Cleaned up ${cleanedCount} expired cache entries`);
+    const expiry = now + ttl;
+    cache[key] = {
+        data,
+        expiry
+    };
+    // Optional: log caching for debugging
+    console.log(`Cached data for key: ${key}, expires in ${ttl / 1000}s`);
+}
+/**
+ * Get data from cache if not expired
+ *
+ * @param key Cache key
+ * @returns Cached data or null if expired/not found
+ */
+function getFromCache(key) {
+    const item = cache[key];
+    const now = Date.now();
+    if (!item) {
+        return null; // Not in cache
     }
+    if (now > item.expiry) {
+        // Expired, remove from cache
+        delete cache[key];
+        return null;
+    }
+    // Calculate remaining TTL for logging
+    const remainingTtl = Math.round((item.expiry - now) / 1000);
+    console.log(`Cache hit for key: ${key}, expires in ${remainingTtl}s`);
+    return item.data;
+}
+/**
+ * Remove an item from the cache
+ *
+ * @param key Cache key to invalidate
+ */
+function invalidateCache(key) {
+    if (cache[key]) {
+        delete cache[key];
+        console.log(`Invalidated cache for key: ${key}`);
+    }
+}
+/**
+ * Clear all items from the cache
+ */
+function clearCache() {
+    Object.keys(cache).forEach(key => {
+        delete cache[key];
+    });
+    console.log('Cache cleared');
 }
 /**
  * Get cache statistics
+ *
+ * @returns Statistics about the cache
  */
 function getCacheStats() {
-    const now = Date.now();
     const keys = Object.keys(cache);
-    const activeEntries = keys.filter(key => cache[key].expiresAt >= now).length;
+    const expiryTimes = {};
+    keys.forEach(key => {
+        expiryTimes[key] = Math.round((cache[key].expiry - Date.now()) / 1000);
+    });
     return {
         size: keys.length,
-        activeEntries,
-        expiredEntries: keys.length - activeEntries
+        keys,
+        expiryTimes
     };
-}
-/**
- * Clear the entire cache
- */
-function clearCache() {
-    const count = Object.keys(cache).length;
-    Object.keys(cache).forEach(key => delete cache[key]);
-    console.log(`Cleared ${count} entries from cache`);
 }

@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { processTextWithUnderstanding } from '@/utils/advancedDocumentProcessing';
+import { processTextWithUnderstanding } from '../../utils/advancedDocumentProcessing';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -20,17 +20,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Process the text input with advanced understanding
     try {
-      const result = await processTextWithUnderstanding(text, documentTitle);
+      const result = await processTextWithUnderstanding(text, {
+        extractEntities: true,
+        summarize: true,
+        categorize: true
+      });
       
+      // Create a custom analysis object since the function doesn't return these fields
       const analysisSnippet = {
-        title: result.title,
-        topics: result.topics,
-        contentType: result.contentType,
-        technicalLevel: 3, // Default value as it's not directly available in result
+        title: documentTitle,
+        topics: result.entities || [],
+        contentType: "text",
+        technicalLevel: 3, // Default value
       };
 
       return res.status(200).json({ 
-        message: `Text processed with advanced understanding. Created ${result.chunks} smart chunks.`,
+        message: `Text processed with advanced understanding. Created smart chunks.`,
         analysis: analysisSnippet
       });
     } catch (error) {

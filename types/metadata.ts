@@ -62,6 +62,7 @@ export interface EnhancedMetadata {
   author?: string;                  // Document author if available
   createdAt?: string;               // Creation date if available
   lastModified?: string;            // Last modification date if available
+  contentType?: string;             // Content MIME type (e.g., text/plain, application/pdf)
   
   // Classification metadata
   primaryCategory: DocumentCategoryType;  // Primary document category

@@ -1,79 +1,107 @@
 /**
- * Caching Utility
+ * Simple caching utility for application data
  * 
- * Provides simple in-memory caching with expiry functionality.
+ * Provides in-memory caching with expiration for API responses
+ * and other frequently accessed data.
  */
 
-interface CacheEntry<T> {
-  value: T;
-  expiry: number | null;
+// In-memory cache object
+interface CacheItem {
+  data: any;
+  expiry: number;
 }
 
-// In-memory cache store
-const cache: Record<string, CacheEntry<any>> = {};
+const cache: Record<string, CacheItem> = {};
 
 /**
- * Stores a value in the cache with an optional expiry time
+ * Store data in cache with expiration time
  * 
  * @param key Cache key
- * @param value Value to store
- * @param expiryMs Expiry time in milliseconds (optional)
+ * @param data Data to cache
+ * @param ttl Time to live in milliseconds
  */
-export function cacheWithExpiry<T>(key: string, value: T, expiryMs?: number): void {
+export function cacheWithExpiry(key: string, data: any, ttl: number): void {
+  const now = Date.now();
+  const expiry = now + ttl;
+  
   cache[key] = {
-    value,
-    expiry: expiryMs ? Date.now() + expiryMs : null
+    data,
+    expiry
   };
+  
+  // Optional: log caching for debugging
+  console.log(`Cached data for key: ${key}, expires in ${ttl/1000}s`);
 }
 
 /**
- * Retrieves a value from the cache if it exists and hasn't expired
+ * Get data from cache if not expired
  * 
  * @param key Cache key
- * @returns The cached value or null if not found or expired
+ * @returns Cached data or null if expired/not found
  */
 export function getFromCache<T>(key: string): T | null {
-  const entry = cache[key];
+  const item = cache[key];
+  const now = Date.now();
   
-  if (!entry) {
+  if (!item) {
+    return null; // Not in cache
+  }
+  
+  if (now > item.expiry) {
+    // Expired, remove from cache
+    delete cache[key];
     return null;
   }
   
-  // Check if entry has expired
-  if (entry.expiry && Date.now() > entry.expiry) {
-    delete cache[key]; // Remove expired entry
-    return null;
-  }
+  // Calculate remaining TTL for logging
+  const remainingTtl = Math.round((item.expiry - now) / 1000);
+  console.log(`Cache hit for key: ${key}, expires in ${remainingTtl}s`);
   
-  return entry.value;
+  return item.data as T;
 }
 
 /**
- * Clears an item from the cache
+ * Remove an item from the cache
  * 
- * @param key Cache key to clear
+ * @param key Cache key to invalidate
  */
-export function clearCache(key: string): void {
-  delete cache[key];
+export function invalidateCache(key: string): void {
+  if (cache[key]) {
+    delete cache[key];
+    console.log(`Invalidated cache for key: ${key}`);
+  }
 }
 
 /**
- * Clears all items from the cache
+ * Clear all items from the cache
  */
-export function clearAllCache(): void {
+export function clearCache(): void {
   Object.keys(cache).forEach(key => {
     delete cache[key];
   });
+  console.log('Cache cleared');
 }
 
 /**
- * Gets cache statistics
+ * Get cache statistics
  * 
- * @returns Object containing cache statistics
+ * @returns Statistics about the cache
  */
-export function getCacheStats(): { size: number; keys: string[] } {
+export function getCacheStats(): {
+  size: number;
+  keys: string[];
+  expiryTimes: Record<string, number>;
+} {
+  const keys = Object.keys(cache);
+  const expiryTimes: Record<string, number> = {};
+  
+  keys.forEach(key => {
+    expiryTimes[key] = Math.round((cache[key].expiry - Date.now()) / 1000);
+  });
+  
   return {
-    size: Object.keys(cache).length,
-    keys: Object.keys(cache)
+    size: keys.length,
+    keys,
+    expiryTimes
   };
 } 

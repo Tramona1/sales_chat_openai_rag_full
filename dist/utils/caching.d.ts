@@ -1,30 +1,41 @@
 /**
- * Simple caching utilities for the RAG system
+ * Simple caching utility for application data
  *
- * Provides in-memory caching functionality for query results
- * to improve performance for repeated queries.
+ * Provides in-memory caching with expiration for API responses
+ * and other frequently accessed data.
  */
 /**
- * Generate a cache key for a query
+ * Store data in cache with expiration time
+ *
+ * @param key Cache key
+ * @param data Data to cache
+ * @param ttl Time to live in milliseconds
  */
-export declare function generateCacheKey(query: string): string;
+export declare function cacheWithExpiry(key: string, data: any, ttl: number): void;
 /**
- * Check if a query result is cached
+ * Get data from cache if not expired
+ *
+ * @param key Cache key
+ * @returns Cached data or null if expired/not found
  */
-export declare function getCachedResult(query: string): Promise<any | null>;
+export declare function getFromCache<T>(key: string): T | null;
 /**
- * Cache a query result
+ * Remove an item from the cache
+ *
+ * @param key Cache key to invalidate
  */
-export declare function cacheResult(query: string, result: any, ttlSeconds?: number): Promise<void>;
+export declare function invalidateCache(key: string): void;
+/**
+ * Clear all items from the cache
+ */
+export declare function clearCache(): void;
 /**
  * Get cache statistics
+ *
+ * @returns Statistics about the cache
  */
 export declare function getCacheStats(): {
     size: number;
-    activeEntries: number;
-    expiredEntries: number;
+    keys: string[];
+    expiryTimes: Record<string, number>;
 };
-/**
- * Clear the entire cache
- */
-export declare function clearCache(): void;

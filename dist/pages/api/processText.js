@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = handler;
-const advancedDocumentProcessing_1 = require("@/utils/advancedDocumentProcessing");
+const advancedDocumentProcessing_1 = require("../../utils/advancedDocumentProcessing");
 async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method Not Allowed' });
@@ -17,15 +17,20 @@ async function handler(req, res) {
             : 'Direct Text Input';
         // Process the text input with advanced understanding
         try {
-            const result = await (0, advancedDocumentProcessing_1.processTextWithUnderstanding)(text, documentTitle);
+            const result = await (0, advancedDocumentProcessing_1.processTextWithUnderstanding)(text, {
+                extractEntities: true,
+                summarize: true,
+                categorize: true
+            });
+            // Create a custom analysis object since the function doesn't return these fields
             const analysisSnippet = {
-                title: result.title,
-                topics: result.topics,
-                contentType: result.contentType,
-                technicalLevel: 3, // Default value as it's not directly available in result
+                title: documentTitle,
+                topics: result.entities || [],
+                contentType: "text",
+                technicalLevel: 3, // Default value
             };
             return res.status(200).json({
-                message: `Text processed with advanced understanding. Created ${result.chunks} smart chunks.`,
+                message: `Text processed with advanced understanding. Created smart chunks.`,
                 analysis: analysisSnippet
             });
         }

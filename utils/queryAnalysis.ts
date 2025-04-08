@@ -42,6 +42,7 @@ export interface QueryAnalysis {
   technicalLevel: number; // 1-10 scale
   estimatedResultCount: number;
   isTimeDependent: boolean;
+  query: string; // Original query text
 }
 
 // Result from the LLM for query analysis
@@ -78,6 +79,9 @@ export async function analyzeQuery(query: string): Promise<QueryAnalysis> {
     // Analyze with LLM if not cached
     const analysis = await analyzeLLM(query);
     
+    // Attach the original query to the analysis object
+    analysis.query = query;
+    
     // Cache result
     cacheWithExpiry(cacheKey, analysis, QUERY_ANALYSIS_CACHE_TIMEOUT);
     
@@ -93,7 +97,8 @@ export async function analyzeQuery(query: string): Promise<QueryAnalysis> {
       queryType: 'FACTUAL',
       technicalLevel: 5,
       estimatedResultCount: 10,
-      isTimeDependent: false
+      isTimeDependent: false,
+      query: query
     };
   }
 }
@@ -141,7 +146,8 @@ async function analyzeLLM(query: string): Promise<QueryAnalysis> {
     queryType: normalizeQueryType(result.queryType),
     technicalLevel: Math.min(Math.max(result.technicalLevel || 5, 1), 10),
     estimatedResultCount: Math.max(result.estimatedResultCount || 5, 1),
-    isTimeDependent: Boolean(result.isTimeDependent)
+    isTimeDependent: Boolean(result.isTimeDependent),
+    query: query // Add the original query
   };
 }
 
@@ -207,26 +213,115 @@ function normalizeQueryType(type: string): QueryType {
  * @param analysis The query analysis result
  * @returns Optimization parameters for retrieval
  */
-export function getRetrievalParameters(analysis: QueryAnalysis) {
+export function getRetrievalParameters(analysis: QueryAnalysis): {
+  limit: number;
+  hybridRatio: number;
+  rerank: boolean;
+  rerankCount: number;
+  categoryFilter: {
+    categories: DocumentCategory[];
+    strict: boolean;
+  };
+  technicalLevelRange: {
+    min: number;
+    max: number;
+  };
+  expandQuery: boolean;
+} {
+  // ---- Improved query analysis section ----
+  // We need to determine the nature of the query more accurately
+  const query = analysis.query || '';
+  
+  // 1. Pattern-based detection for different query types
+  // Company identification terms
+  const companyIdentifiers = /\b(our|we|us|workstream|company)\b/i;
+  
+  // Question and information-seeking patterns
+  const questionPatterns = /\b(what|who|how|when|where|why|which|tell me about|explain|describe)\b/i;
+  
+  // Product/service terminology pattern
+  const productTerms = /\b(product|service|feature|plan|pricing|tier|offering|platform|tool|solution)\b/i;
+  
+  // People & organization pattern
+  const peopleTerms = /\b(team|employee|staff|founder|investor|partner|client|customer)\b/i;
+  
+  // 2. Classify the query
+  const isCompanyQuery = companyIdentifiers.test(query);
+  const isQuestionQuery = questionPatterns.test(query);
+  const hasProductTerms = productTerms.test(query);
+  const hasPeopleTerms = peopleTerms.test(query);
+  
+  // Calculate a "company-specificity" score from 0-1
+  // This is more nuanced than a binary yes/no
+  let companySpecificityScore = 0;
+  if (isCompanyQuery) companySpecificityScore += 0.5;
+  if (hasProductTerms) companySpecificityScore += 0.3;
+  if (hasPeopleTerms) companySpecificityScore += 0.2;
+  
+  // Clamp between 0-1
+  companySpecificityScore = Math.min(1, companySpecificityScore);
+  
+  console.log(`Query analysis: company=${isCompanyQuery}, question=${isQuestionQuery}, product=${hasProductTerms}, people=${hasPeopleTerms}`);
+  console.log(`Company specificity score: ${companySpecificityScore.toFixed(2)}`);
+  
+  // 3. Adjust hybrid ratio based on company specificity
+  // The more company-specific, the more we rely on keyword search (lower ratio)
+  let hybridRatio = 0.5 - (companySpecificityScore * 0.3);
+  
+  // Further adjustment based on query type
+  if (analysis.queryType === 'FACTUAL' || analysis.queryType === 'DEFINITIONAL') {
+    // Factual queries benefit from more keyword matching
+    hybridRatio -= 0.1;
+  } else if (analysis.queryType === 'COMPARATIVE' || analysis.queryType === 'EXPLORATORY') {
+    // Exploratory queries benefit from more vector similarity
+    hybridRatio += 0.1;
+  }
+  
+  // Ensure the ratio stays within valid bounds
+  hybridRatio = Math.max(0.2, Math.min(0.8, hybridRatio));
+  
+  // Log decisions for debugging
+  console.log(`Selected hybrid ratio: ${hybridRatio.toFixed(2)} (lower means more keyword influence)`);
+  
+  // 4. Determine category filtering strategy based on query
+  // For company-specific queries, make sure to include GENERAL category 
+  // as it often contains company information
+  let categoryFilter = determineCategoryFilter(analysis);
+  
+  // If this is likely a company query and GENERAL isn't already included, add it
+  if (companySpecificityScore > 0.3 && 
+      !categoryFilter.categories.includes('GENERAL')) {
+    categoryFilter.categories.push('GENERAL');
+    console.log('Added GENERAL category to search because query appears company-specific');
+  }
+  
+  // 5. Determine result limit - increase for company queries to ensure we get relevant results
+  let resultLimit = estimateResultLimit(analysis);
+  if (companySpecificityScore > 0.5) {
+    // For strongly company-specific queries, ensure we get enough results
+    resultLimit = Math.max(resultLimit, 10);
+  }
+  
   return {
     // Number of results to fetch
-    limit: estimateResultLimit(analysis),
+    limit: resultLimit,
     
     // Hybrid search parameters
-    hybridRatio: determineHybridRatio(analysis),
+    hybridRatio: hybridRatio,
     
     // Re-ranking parameters
     rerank: true,
     rerankCount: Math.min(50, analysis.estimatedResultCount * 5),
     
-    // Category boosting
-    categoryFilter: determineCategoryFilter(analysis),
+    // Category boosting - use our enhanced logic
+    categoryFilter: categoryFilter,
     
     // Technical level matching
     technicalLevelRange: determineTechnicalLevelRange(analysis),
     
     // Whether to use query expansion
-    expandQuery: shouldExpandQuery(analysis),
+    // Enable for company queries to get related terms
+    expandQuery: companySpecificityScore > 0.5 || shouldExpandQuery(analysis),
   };
 }
 
@@ -253,31 +348,6 @@ function estimateResultLimit(analysis: QueryAnalysis): number {
   
   // Ensure reasonable bounds
   return Math.min(Math.max(baseLimit, 3), 25);
-}
-
-/**
- * Determines the hybrid search ratio (vector vs BM25) based on query type
- */
-function determineHybridRatio(analysis: QueryAnalysis): number {
-  // Default is balanced (0.5)
-  let ratio = 0.5;
-  
-  // Adjust based on query type and entities
-  if (analysis.queryType === 'FACTUAL' && analysis.entities.length > 0) {
-    // More keyword-based for factual queries with specific entities
-    ratio = 0.3;
-  } else if (analysis.queryType === 'EXPLORATORY') {
-    // More semantic for exploratory queries
-    ratio = 0.7;
-  } else if (analysis.queryType === 'COMPARATIVE') {
-    // More balanced for comparative queries
-    ratio = 0.5;
-  } else if (analysis.technicalLevel >= 8) {
-    // More keyword-based for highly technical queries
-    ratio = 0.4;
-  }
-  
-  return ratio;
 }
 
 /**

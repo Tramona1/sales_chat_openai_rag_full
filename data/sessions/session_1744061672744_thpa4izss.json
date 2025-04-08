@@ -1,0 +1,32 @@
+{
+  "sessionType": "general",
+  "title": "Tell me about our ceo",
+  "salesNotes": "",
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "Welcome to the Workstream Knowledge Assistant! Ask questions about our HR, Payroll, and Hiring platform for the hourly workforce.",
+      "timestamp": "2025-04-07T21:34:30.669Z"
+    },
+    {
+      "role": "user",
+      "content": "tell me about our ceo",
+      "timestamp": "2025-04-07T21:34:30.669Z"
+    }
+  ],
+  "keywords": [
+    "about",
+    "welcome",
+    "workstream",
+    "knowledge",
+    "assistant",
+    "questions",
+    "payroll",
+    "hiring",
+    "platform",
+    "hourly"
+  ],
+  "id": "session_1744061672744_thpa4izss",
+  "createdAt": "2025-04-07T21:34:32.744Z",
+  "updatedAt": "2025-04-07T21:34:32.744Z"
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "query": "What features set us apart from our competitors?",
+    "response": "We stand out from our competitors with features designed to help you hire faster and smarter. Here's how:\n\n*   **Applicant Sourcing:** Our data shows that **text-to-apply** is **5x more effective** than job boards, and **referrals** are **8.7x more effective** [1]. Social media is also **2.8x more effective** for sourcing than job boards [1].\n*   **Communication Speed and Automation:** We help you connect with applicants quickly, which is crucial because businesses have a **2.4x greater chance** of a successful hire by proactively contacting the applicant first [1]. You have a **25% greater chance** of hiring candidates if contacted within an hour of applying [1]. Our platform automates messages at key touchpoints but still allows for personalization.\n*   **Smart Screening:** Using smart screening questions allows you to potentially hire applicants on the same day as their interview, leading to a **2.4x greater chance** of a successful hire [1].\n*   **Interview Scheduling:** Applicants are **2.6x more likely** to accept an offer when they can schedule their interview immediately [1]. Employers have a **16% greater chance** of a successful hire when applicants interview the same week they apply [1].\n*   **Text Messaging:** We utilize text messaging to improve the applicant experience. Hourly workers rate their experience **50% higher** when they receive text messages, which boast a **90% open rate** and **18x the response rate of emails** [1].\n\nOverall, our HR, Hiring, and Payroll platform streamlines how local businesses manage and pay their hourly workers. We automate the hiring process and use text to engage applicants, reducing hiring time by **70%** [1].\n\nAs Darrin White, COO of Frisch's, said, \"We were losing on hiring because we didn’t respond to applicants fast enough. Automating communication between us and the applicants increases our chances 10 to 1\" [1].\n",
+    "feedback": "positive",
+    "messageIndex": 2,
+    "queryTopics": [
+      "what",
+      "features",
+      "apart",
+      "from",
+      "competitors"
+    ],
+    "sessionId": "session_1744059533528_uzk0vuqsy",
+    "metadata": {
+      "sessionType": "company",
+      "timestamp": "2025-04-07T21:01:32.740Z",
+      "sessionId": "session_1744059533528_uzk0vuqsy"
+    },
+    "id": "feedback_1744059692837_vtpt2udk",
+    "timestamp": 1744059692837
+  }
+]

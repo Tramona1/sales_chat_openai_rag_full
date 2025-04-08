@@ -1,193 +1,123 @@
-# SalesBuddy API Documentation
+# Workstream API Documentation
 
 ## Overview
 
-The SalesBuddy API allows developers to integrate our conversational AI capabilities directly into their applications. This document provides technical details about authentication, endpoints, request formats, and response structures.
+The Workstream API allows you to integrate our HR, hiring, and payroll functionality into your existing systems. This document provides details on authentication, endpoints, and example requests.
 
 ## Authentication
 
-All API requests must be authenticated using JWT tokens. To obtain a token:
-
-1. Make a POST request to `https://api.salesbuddy.ai/v1/auth/token`
-2. Include your API key in the header: `X-API-Key: your_api_key_here`
-3. The response will contain a JWT token valid for 24 hours
-
-Example token request:
-
-```bash
-curl -X POST https://api.salesbuddy.ai/v1/auth/token \
-  -H "X-API-Key: your_api_key_here" \
-  -H "Content-Type: application/json"
-```
-
-Example response:
-
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expires_at": "2023-07-01T23:59:59Z"
-}
-```
-
-## API Endpoints
-
-### Conversation Management
-
-#### Start Conversation
+All API requests require an API key that should be included in the header:
 
 ```
-POST /v1/conversations
+Authorization: Bearer YOUR_API_KEY
 ```
 
-Request body:
+To obtain an API key, contact your Workstream account manager or visit the developer settings in your dashboard.
 
-```json
-{
-  "user_id": "u-123456",
-  "context": {
-    "customer_id": "c-78910",
-    "product_focus": ["SalesBuddy Pro", "Analytics Add-on"]
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "conversation_id": "conv-abcdef123456",
-  "created_at": "2023-06-30T14:22:10Z"
-}
-```
-
-#### Send Message
+## Base URL
 
 ```
-POST /v1/conversations/{conversation_id}/messages
+https://api.workstream.us/v1
 ```
 
-Request body:
+## Endpoints
 
-```json
-{
-  "message": "What features are included in the Professional tier?",
-  "attachment_urls": []
-}
+### Applicants
+
+#### GET /applicants
+
+Retrieve a list of applicants with optional filtering.
+
+**Parameters:**
+- `status` (optional): Filter by application status (applied, screening, interviewing, hired, rejected)
+- `location_id` (optional): Filter by location ID
+- `position_id` (optional): Filter by position ID
+- `from_date` (optional): Filter by application date (YYYY-MM-DD)
+- `to_date` (optional): Filter by application date (YYYY-MM-DD)
+- `limit` (optional): Number of results to return (default: 50, max: 100)
+- `offset` (optional): Pagination offset (default: 0)
+
+**Example Request:**
+```
+GET https://api.workstream.us/v1/applicants?status=interviewing&limit=20
 ```
 
-Response:
+#### POST /applicants
 
-```json
-{
-  "message_id": "msg-123456",
-  "response": "The Professional tier includes all Starter features plus custom training capabilities, dedicated support hours, and full CRM integration with Salesforce, HubSpot, or Microsoft Dynamics.",
-  "confidence_score": 0.98,
-  "sources": [
-    {
-      "document_id": "doc-pricing-001",
-      "relevance": 0.95
-    }
-  ]
-}
-```
+Create a new applicant record.
 
-### Knowledge Base Management
+**Parameters:**
+- `first_name` (required): Applicant's first name
+- `last_name` (required): Applicant's last name
+- `email` (required): Applicant's email address
+- `phone` (required): Applicant's phone number
+- `position_id` (required): ID of the position
+- `location_id` (required): ID of the location
+- `resume` (optional): Resume file (PDF, DOC, DOCX)
+- `cover_letter` (optional): Cover letter text
+- `custom_fields` (optional): Object containing custom field values
 
-#### Add Document
+### Positions
 
-```
-POST /v1/knowledge/documents
-```
+#### GET /positions
 
-Request body:
+Retrieve a list of open positions.
 
-```json
-{
-  "title": "Professional Tier Specifications",
-  "content": "Full markdown or text content...",
-  "metadata": {
-    "category": "pricing",
-    "visibility": "internal",
-    "version": "2023-Q2"
-  }
-}
-```
+**Parameters:**
+- `location_id` (optional): Filter by location ID
+- `status` (optional): Filter by status (open, closed, draft)
+- `limit` (optional): Number of results to return (default: 50, max: 100)
+- `offset` (optional): Pagination offset (default: 0)
 
-Response:
+### Employees
 
-```json
-{
-  "document_id": "doc-pricing-002",
-  "status": "processing",
-  "estimated_completion": "2023-06-30T14:25:10Z"
-}
-```
+#### GET /employees
+
+Retrieve a list of employees.
+
+**Parameters:**
+- `location_id` (optional): Filter by location ID
+- `status` (optional): Filter by status (active, terminated, on_leave)
+- `department` (optional): Filter by department
+- `limit` (optional): Number of results to return (default: 50, max: 100)
+- `offset` (optional): Pagination offset (default: 0)
+
+### Payroll
+
+#### GET /payroll/runs
+
+Retrieve a list of payroll runs.
+
+**Parameters:**
+- `status` (optional): Filter by status (pending, processing, completed, failed)
+- `from_date` (optional): Filter by run date (YYYY-MM-DD)
+- `to_date` (optional): Filter by run date (YYYY-MM-DD)
+- `limit` (optional): Number of results to return (default: 50, max: 100)
+- `offset` (optional): Pagination offset (default: 0)
 
 ## Rate Limits
 
-The API has the following rate limits:
+The API is rate-limited to 100 requests per minute per API key. If you exceed this limit, you'll receive a 429 Too Many Requests response.
 
-- Authentication: 10 requests per minute
-- Conversation endpoints: 60 requests per minute per API key
-- Knowledge base endpoints: 30 requests per minute per API key
+## Error Codes
 
-Exceeding these limits will result in 429 Too Many Requests responses.
+- `400`: Bad Request - The request was invalid
+- `401`: Unauthorized - Invalid API key
+- `403`: Forbidden - You don't have permission to access this resource
+- `404`: Not Found - The resource was not found
+- `429`: Too Many Requests - You've exceeded the rate limit
+- `500`: Internal Server Error - Something went wrong on our end
 
-## Error Handling
+## Webhooks
 
-The API uses standard HTTP status codes and returns error details in the response body:
+Workstream can send webhooks to notify your systems of events in real-time. Available webhook events include:
 
-```json
-{
-  "error": {
-    "code": "invalid_request",
-    "message": "Invalid conversation ID format",
-    "details": {
-      "param": "conversation_id",
-      "value": "invalid-id-format"
-    }
-  }
-}
-```
+- `applicant.created`: When a new applicant submits an application
+- `applicant.status_changed`: When an applicant's status changes
+- `employee.hired`: When an applicant is converted to an employee
+- `employee.terminated`: When an employee is terminated
+- `payroll.completed`: When a payroll run is completed
 
-## Webhook Integration
+To configure webhooks, visit the Integrations section of your Workstream dashboard.
 
-You can configure webhooks to receive real-time notifications:
-
-1. Register a webhook URL in the developer dashboard
-2. Select the events you want to subscribe to
-3. We'll send POST requests to your URL when those events occur
-
-Example webhook payload:
-
-```json
-{
-  "event_type": "conversation.completed",
-  "conversation_id": "conv-abcdef123456",
-  "timestamp": "2023-06-30T15:01:22Z",
-  "data": {
-    "duration_seconds": 423,
-    "message_count": 8,
-    "satisfaction_score": 9
-  }
-}
-```
-
-## SDK Libraries
-
-We provide official SDK libraries for:
-- Python: `pip install salesbuddy-python`
-- JavaScript: `npm install salesbuddy-node`
-- Java: Available through Maven Central
-- C#: Available through NuGet
-
-## Technical Support
-
-For technical assistance with API integration:
-- Email: api-support@salesbuddy.ai
-- Developer Forum: https://developers.salesbuddy.ai/forum
-- Office Hours: Tuesdays and Thursdays, 9 AM - 12 PM PT
-
----
-
-*API specifications are subject to change. Always check the developer portal for the most current documentation.* 
+*Note: This documentation is for internal testing purposes only.*

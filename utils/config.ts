@@ -2,14 +2,11 @@
  * Configuration utility
  * 
  * Provides access to application configuration from various sources.
+ * Browser-compatible version that uses environment variables.
  */
 
-import fs from 'fs';
-import path from 'path';
-import dotenv from 'dotenv';
-
-// Load environment variables
-dotenv.config();
+// No direct file system imports in browser environment
+import { defaultsDeep } from 'lodash';
 
 // Config interface
 export interface Config {
@@ -41,17 +38,17 @@ const defaultConfig: Config = {
     defaultModel: 'gemini-1.5-pro',
   },
   vectorStore: {
-    path: path.join(process.cwd(), 'data', 'vectorStore.json'),
-    backupPath: path.join(process.cwd(), 'data', 'backups'),
+    path: '/data/vectorStore.json',
+    backupPath: '/data/backups',
   },
   logging: {
     level: 'info',
-    logToFile: true,
-    logPath: path.join(process.cwd(), 'logs'),
+    logToFile: false, // No file logging in browser
+    logPath: '/logs',
   }
 };
 
-// Cache for config to avoid repeated disk access
+// Cache for config to avoid repeated processing
 let configCache: Config | null = null;
 
 /**
@@ -66,28 +63,18 @@ export function getConfig(): Config {
   }
   
   try {
-    // Load config from file if it exists
-    const configPath = path.join(process.cwd(), 'config.json');
-    let fileConfig: Config = {};
-    
-    if (fs.existsSync(configPath)) {
-      const configContent = fs.readFileSync(configPath, 'utf8');
-      fileConfig = JSON.parse(configContent);
-    }
-    
-    // Merge configs with environment variables taking precedence
+    // In browser environment, we only use environment variables
+    // and default values since we can't access the file system
     const config: Config = {
       ...defaultConfig,
-      ...fileConfig,
       openai: {
         ...defaultConfig.openai,
-        ...fileConfig.openai,
-        apiKey: process.env.OPENAI_API_KEY || fileConfig.openai?.apiKey,
+        // Access environment variables from Next.js public runtime config
+        apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY || defaultConfig.openai?.apiKey,
       },
       gemini: {
         ...defaultConfig.gemini,
-        ...fileConfig.gemini,
-        apiKey: process.env.GEMINI_API_KEY || fileConfig.gemini?.apiKey,
+        apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || defaultConfig.gemini?.apiKey,
       },
     };
     

@@ -3,4 +3,5 @@ export interface FeedbackLog {
   text: string;
   response: string;
   timestamp: number;
+  sessionId?: string;
 } 

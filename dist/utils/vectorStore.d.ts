@@ -1,4 +1,5 @@
 export interface VectorStoreItem {
+    id?: string;
     embedding: number[];
     text: string;
     metadata?: {
@@ -8,6 +9,19 @@ export interface VectorStoreItem {
         isStructured?: boolean;
         infoType?: string;
         priority?: string;
+        category?: string;
+        technicalLevel?: number;
+        entities?: string;
+        keywords?: string;
+        summary?: string;
+        lastUpdated?: string;
+        timestamp?: string;
+        createdAt?: string;
+        approvedAt?: string;
+        isAuthoritative?: string;
+        isDeprecated?: string;
+        deprecatedBy?: string;
+        deprecatedAt?: string;
     };
 }
 declare let vectorStore: VectorStoreItem[];

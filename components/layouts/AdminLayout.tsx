@@ -1,28 +1,30 @@
 import React, { ReactNode, useState } from 'react';
-import {
-  AppBar,
-  Box,
-  CssBaseline,
-  Drawer,
-  IconButton,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Toolbar,
-  Typography,
-  Divider,
-  useTheme
-} from '@mui/material';
-import MenuIcon from '@mui/icons-material/Menu';
-import DashboardIcon from '@mui/icons-material/Dashboard';
-import ArticleIcon from '@mui/icons-material/Article';
-import ApprovalIcon from '@mui/icons-material/Approval';
-import SettingsIcon from '@mui/icons-material/Settings';
-import LogoutIcon from '@mui/icons-material/Logout';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+
+// Import custom UI components
+import Box from '../ui/Box';
+import Divider from '../ui/Divider';
+import Typography from '../ui/Typography';
+import AppBar from '../ui/AppBar';
+import Toolbar from '../ui/Toolbar';
+import Drawer from '../ui/Drawer';
+import IconButton from '../ui/IconButton';
+import List from '../ui/List';
+import ListItem from '../ui/ListItem';
+import ListItemButton from '../ui/ListItemButton';
+import ListItemIcon from '../ui/ListItemIcon';
+import ListItemText from '../ui/ListItemText';
+import CssBaseline from '../ui/CssBaseline';
+
+// Import custom icons
+import {
+  MenuIcon,
+  DashboardIcon,
+  ArticleIcon,
+  ApprovalIcon,
+  SettingsIcon
+} from '../ui/icons';
 
 const drawerWidth = 280;
 
@@ -31,7 +33,7 @@ interface AdminLayoutProps {
 }
 
 const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
-  const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const router = useRouter();
 
   const handleDrawerToggle = () => {
@@ -48,7 +50,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
   const drawer = (
     <div>
       <Toolbar>
-        <Typography variant="h6" noWrap component="div">
+        <Typography variant="h6" component="div">
           RAG Admin
         </Typography>
       </Toolbar>
@@ -65,22 +67,11 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
           </Link>
         ))}
       </List>
-      <Divider />
-      <List>
-        <ListItem disablePadding>
-          <ListItemButton>
-            <ListItemIcon>
-              <LogoutIcon />
-            </ListItemIcon>
-            <ListItemText primary="Logout" />
-          </ListItemButton>
-        </ListItem>
-      </List>
     </div>
   );
 
   return (
-    <Box sx={{ display: 'flex' }}>
+    <Box display="flex">
       <CssBaseline />
       <AppBar
         position="fixed"
@@ -99,7 +90,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap component="div">
+          <Typography variant="h6" component="div">
             Sales Team Knowledge Base Admin
           </Typography>
         </Toolbar>

@@ -1,4 +1,5 @@
 "use strict";
+var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.QueryProcessingError = exports.NetworkError = exports.VectorStoreError = exports.AIModelError = exports.DocumentProcessingError = void 0;
 exports.handleOpenAIError = handleOpenAIError;
@@ -8,8 +9,24 @@ exports.safeExecute = safeExecute;
 exports.standardizeApiErrorResponse = standardizeApiErrorResponse;
 exports.formatValidationError = formatValidationError;
 exports.logError = logError;
+exports.logWarning = logWarning;
+exports.logInfo = logInfo;
+exports.logDebug = logDebug;
 exports.createError = createError;
+exports.formatApiError = formatApiError;
+exports.withErrorHandling = withErrorHandling;
 const openai_1 = require("openai");
+const config_1 = require("./config");
+// Get the config
+const config = (0, config_1.getConfig)();
+// Browser-compatible logging configuration
+const LOG_LEVEL = {
+    debug: 0,
+    info: 1,
+    warn: 2,
+    error: 3
+};
+const currentLevel = LOG_LEVEL[((_a = config.logging) === null || _a === void 0 ? void 0 : _a.level) || 'info'];
 // Custom error classes for better error identification
 class DocumentProcessingError extends Error {
     constructor(message, originalError) {
@@ -171,29 +188,78 @@ function formatValidationError(message, fieldErrors) {
     };
 }
 /**
- * Log error with standardized format for easier debugging
+ * Log error in browser-compatible way
  */
-function logError(error, context) {
-    const timestamp = new Date().toISOString();
-    const contextInfo = context ? `[${context}] ` : '';
-    console.error(`${timestamp} ${contextInfo}Error: ${error.message}`);
-    if (error.stack && process.env.NODE_ENV !== 'production') {
-        console.error(`Stack trace: ${error.stack}`);
+function logError(message, error, level = 'error') {
+    // Skip logging if level is below the configured level
+    if (LOG_LEVEL[level] < currentLevel) {
+        return;
     }
-    // Log additional details if available
-    if (error.response) {
-        console.error('Response data:', error.response.data);
-        console.error('Response status:', error.response.status);
+    // In browser - use console for logging
+    console.error(`[${level.toUpperCase()}] ${message}`, error);
+    // No file system operations in this browser-compatible version
+}
+/**
+ * Log warning in browser-compatible way
+ */
+function logWarning(message, data) {
+    if (currentLevel <= LOG_LEVEL.warn) {
+        console.warn(`[WARN] ${message}`, data);
     }
 }
 /**
- * Create a simple error with additional context
+ * Log info in browser-compatible way
+ */
+function logInfo(message, data) {
+    if (currentLevel <= LOG_LEVEL.info) {
+        console.info(`[INFO] ${message}`, data);
+    }
+}
+/**
+ * Log debug in browser-compatible way
+ */
+function logDebug(message, data) {
+    if (currentLevel <= LOG_LEVEL.debug) {
+        console.debug(`[DEBUG] ${message}`, data);
+    }
+}
+/**
+ * Create an error with a specific code
  */
 function createError(message, code, additionalDetails) {
     const error = new Error(message);
-    if (code)
+    if (code) {
         error.code = code;
-    if (additionalDetails)
+    }
+    if (additionalDetails) {
         error.details = additionalDetails;
+    }
     return error;
+}
+/**
+ * Format API errors consistently for response
+ */
+function formatApiError(message = 'An unexpected error occurred', code = 'UNKNOWN_ERROR', details) {
+    return {
+        error: {
+            message,
+            code,
+            timestamp: new Date().toISOString()
+        }
+    };
+}
+/**
+ * Higher-order function for error handling
+ * Wraps a function with automatic error handling
+ */
+function withErrorHandling(fn, errorMessage = 'Operation failed') {
+    return async (...args) => {
+        try {
+            return await fn(...args);
+        }
+        catch (error) {
+            logError(errorMessage, error);
+            throw createError(error instanceof Error ? error.message : errorMessage, error.code || 'UNKNOWN_ERROR');
+        }
+    };
 }

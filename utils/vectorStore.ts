@@ -14,6 +14,14 @@ export interface VectorStoreItem {
     entities?: string;
     keywords?: string;
     summary?: string;
+    lastUpdated?: string;
+    timestamp?: string;
+    createdAt?: string;
+    approvedAt?: string; // Timestamp when the document was approved
+    isAuthoritative?: string; // Marks this as the authoritative source for this information
+    isDeprecated?: string; // Marks this document as outdated/deprecated
+    deprecatedBy?: string; // ID of the document that supersedes this one
+    deprecatedAt?: string; // Timestamp when this document was deprecated
   };
 }
 

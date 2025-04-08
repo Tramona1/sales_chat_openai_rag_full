@@ -1,3 +1,9 @@
+declare const LOG_LEVEL: {
+    debug: number;
+    info: number;
+    warn: number;
+    error: number;
+};
 export declare class DocumentProcessingError extends Error {
     readonly originalError?: Error | undefined;
     constructor(message: string, originalError?: Error | undefined);
@@ -42,10 +48,38 @@ export declare function standardizeApiErrorResponse(error: any): ApiErrorRespons
  */
 export declare function formatValidationError(message: string, fieldErrors?: Record<string, string>): ApiErrorResponse;
 /**
- * Log error with standardized format for easier debugging
+ * Log error in browser-compatible way
  */
-export declare function logError(error: any, context?: string): void;
+export declare function logError(message: string, error?: any, level?: keyof typeof LOG_LEVEL): void;
 /**
- * Create a simple error with additional context
+ * Log warning in browser-compatible way
+ */
+export declare function logWarning(message: string, data?: any): void;
+/**
+ * Log info in browser-compatible way
+ */
+export declare function logInfo(message: string, data?: any): void;
+/**
+ * Log debug in browser-compatible way
+ */
+export declare function logDebug(message: string, data?: any): void;
+/**
+ * Create an error with a specific code
  */
 export declare function createError(message: string, code?: string, additionalDetails?: any): Error;
+/**
+ * Format API errors consistently for response
+ */
+export declare function formatApiError(message?: string, code?: string, details?: any): {
+    error: {
+        message: string;
+        code: string;
+        timestamp: string;
+    };
+};
+/**
+ * Higher-order function for error handling
+ * Wraps a function with automatic error handling
+ */
+export declare function withErrorHandling<T, Args extends any[]>(fn: (...args: Args) => Promise<T>, errorMessage?: string): (...args: Args) => Promise<T>;
+export {};

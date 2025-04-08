@@ -1,6 +1,6 @@
-{"timestamp":"2025-04-07T02:11:28.225Z","level":"info","message":"Loaded vector documents","details":{"count":1458}}
-{"timestamp":"2025-04-07T02:11:28.227Z","level":"info","message":"Loaded corpus statistics","details":{"termsCount":0,"documentCount":0}}
-{"timestamp":"2025-04-07T02:11:28.227Z","level":"info","message":"Hybrid search system initialized","details":{"documentCount":0,"vectorDocumentsCount":1458}}
-{"timestamp":"2025-04-07T02:18:50.302Z","level":"info","message":"Loaded vector documents","details":{"count":1458}}
-{"timestamp":"2025-04-07T02:18:50.303Z","level":"info","message":"Loaded corpus statistics","details":{"termsCount":0,"documentCount":0}}
-{"timestamp":"2025-04-07T02:18:50.303Z","level":"info","message":"Hybrid search system initialized","details":{"documentCount":0,"vectorDocumentsCount":1458}}
+{"timestamp":"2025-04-07T07:17:15.969Z","level":"info","message":"Loaded vector documents","details":{"count":1460}}
+{"timestamp":"2025-04-07T07:17:15.978Z","level":"info","message":"Loaded corpus statistics","details":{"termsCount":17753,"documentCount":1460}}
+{"timestamp":"2025-04-07T07:17:15.978Z","level":"info","message":"Hybrid search system initialized","details":{"documentCount":1460,"vectorDocumentsCount":1460}}
+{"timestamp":"2025-04-07T07:31:45.545Z","level":"info","message":"Loaded vector documents","details":{"count":1460}}
+{"timestamp":"2025-04-07T07:31:45.555Z","level":"info","message":"Loaded corpus statistics","details":{"termsCount":17753,"documentCount":1460}}
+{"timestamp":"2025-04-07T07:31:45.556Z","level":"info","message":"Hybrid search system initialized","details":{"documentCount":1460,"vectorDocumentsCount":1460}}

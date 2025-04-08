@@ -9,7 +9,7 @@
     "test:metadata": "jest types/__tests__/metadata.test.ts",
     "test:smart-ingestion": "ts-node scripts/test_smart_ingestion.ts",
     "evaluate:baseline": "ts-node scripts/run_baseline_evaluation.ts",
-    "calculate:corpus-stats": "ts-node scripts/calculate-corpus-stats.ts",
+    "calculate:corpus-stats": "ts-node scripts/calculate_corpus_statistics.ts",
     "test:bm25": "ts-node scripts/test_bm25.ts",
     "test:hybrid": "ts-node scripts/test_hybrid_search.ts",
     "test:reranking": "ts-node scripts/test_reranking.ts",
@@ -21,11 +21,18 @@
     "process:all-data": "ts-node scripts/process_all_data.ts",
     "test:query": "ts-node scripts/test_query.ts",
     "test:workstream": "ts-node scripts/test_workstream_queries.ts",
+    "fix:hybrid-search": "ts-node scripts/fix_hybrid_search.ts",
     "build": "tsc",
     "build:next": "next build",
-    "start": "node dist/index.js",
+    "clean:build": "rm -rf dist && next build",
+    "start": "next start",
     "dev": "next dev",
-    "dev:ts-ignore": "DISABLE_ESLINT_PLUGIN=true TS_NODE_TRANSPILE_ONLY=true next dev"
+    "dev:ts-ignore": "DISABLE_ESLINT_PLUGIN=true TS_NODE_TRANSPILE_ONLY=true next dev",
+    "lint": "next lint",
+    "test:hybrid-search": "ts-node scripts/test_hybrid_search_direct.ts",
+    "reset:process": "ts-node scripts/reset_and_process.ts",
+    "process:failed": "ts-node scripts/process_failed_docs.ts",
+    "test:direct": "ts-node scripts/direct_search_test.ts"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -44,7 +51,7 @@
     "pdf-parse": "^1.1.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "recharts": "^2.9.0",
+    "recharts": "^2.15.2",
     "tesseract.js": "^6.0.0"
   },
   "devDependencies": {

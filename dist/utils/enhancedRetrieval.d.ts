@@ -6,7 +6,7 @@
  */
 import { Document } from './bm25';
 import { VectorStoreItem } from './vectorStore';
-export { Document, VectorStoreItem };
+export type { Document, VectorStoreItem };
 /**
  * Configuration for enhanced retrieval
  */

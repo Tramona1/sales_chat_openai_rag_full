@@ -1,0 +1,32 @@
+{
+  "sessionType": "general",
+  "title": "Who is our new ceo?",
+  "salesNotes": "",
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "Welcome to the Workstream Knowledge Assistant! Ask questions about our HR, Payroll, and Hiring platform for the hourly workforce.",
+      "timestamp": "2025-04-07T21:24:40.935Z"
+    },
+    {
+      "role": "user",
+      "content": "who is our new ceo?",
+      "timestamp": "2025-04-07T21:24:48.921Z"
+    }
+  ],
+  "keywords": [
+    "welcome",
+    "workstream",
+    "knowledge",
+    "assistant",
+    "questions",
+    "about",
+    "payroll",
+    "hiring",
+    "platform",
+    "hourly"
+  ],
+  "id": "session_1744061090964_kh66vv27j",
+  "createdAt": "2025-04-07T21:24:50.964Z",
+  "updatedAt": "2025-04-07T21:24:50.964Z"
+}

@@ -1,20 +1,10 @@
 import { OpenAI } from 'openai';
-import fs from 'fs';
-import path from 'path';
 import { getConfig } from './config';
 
 // Get the config
 const config = getConfig();
 
-// Log directory
-const logDir = config.logging?.logPath || path.join(process.cwd(), 'logs');
-
-// Ensure log directory exists
-if (!fs.existsSync(logDir)) {
-  fs.mkdirSync(logDir, { recursive: true });
-}
-
-// Current log level
+// Browser-compatible logging configuration
 const LOG_LEVEL = {
   debug: 0,
   info: 1,
@@ -205,150 +195,101 @@ export function formatValidationError(message: string, fieldErrors?: Record<stri
 }
 
 /**
- * Logs an error message with details
- * 
- * @param message Error message
- * @param details Additional error details
+ * Log error in browser-compatible way
  */
-export function logError(message: string, details: any): void {
-  // Always log to console
-  console.error(`[ERROR] ${message}`, details);
+export function logError(message: string, error?: any, level: keyof typeof LOG_LEVEL = 'error') {
+  // Skip logging if level is below the configured level
+  if (LOG_LEVEL[level] < currentLevel) {
+    return;
+  }
+
+  // In browser - use console for logging
+  console.error(`[${level.toUpperCase()}] ${message}`, error);
   
-  // Log to file if configured
-  if (config.logging?.logToFile) {
-    const timestamp = new Date().toISOString();
-    const logEntry = {
-      timestamp,
-      level: 'error',
-      message,
-      details
-    };
-    
-    const logFile = path.join(logDir, `errors-${new Date().toISOString().split('T')[0]}.log`);
-    
-    try {
-      fs.appendFileSync(
-        logFile, 
-        JSON.stringify(logEntry) + '\n',
-        { encoding: 'utf8' }
-      );
-    } catch (err) {
-      console.error(`Failed to write to error log: ${err}`);
-    }
-  }
+  // No file system operations in this browser-compatible version
 }
 
 /**
- * Logs a warning message
- * 
- * @param message Warning message
- * @param details Additional details
+ * Log warning in browser-compatible way
  */
-export function logWarning(message: string, details?: any): void {
+export function logWarning(message: string, data?: any) {
   if (currentLevel <= LOG_LEVEL.warn) {
-    console.warn(`[WARN] ${message}`, details || '');
-    
-    // Log to file if configured
-    if (config.logging?.logToFile) {
-      const timestamp = new Date().toISOString();
-      const logEntry = {
-        timestamp,
-        level: 'warn',
-        message,
-        details
-      };
-      
-      const logFile = path.join(logDir, `application-${new Date().toISOString().split('T')[0]}.log`);
-      
-      try {
-        fs.appendFileSync(
-          logFile, 
-          JSON.stringify(logEntry) + '\n',
-          { encoding: 'utf8' }
-        );
-      } catch (err) {
-        console.error(`Failed to write to log: ${err}`);
-      }
-    }
+    console.warn(`[WARN] ${message}`, data);
   }
 }
 
 /**
- * Logs an info message
- * 
- * @param message Info message
- * @param details Additional details
+ * Log info in browser-compatible way
  */
-export function logInfo(message: string, details?: any): void {
+export function logInfo(message: string, data?: any) {
   if (currentLevel <= LOG_LEVEL.info) {
-    console.info(`[INFO] ${message}`, details || '');
-    
-    // Log to file if configured
-    if (config.logging?.logToFile) {
-      const timestamp = new Date().toISOString();
-      const logEntry = {
-        timestamp,
-        level: 'info',
-        message,
-        details
-      };
-      
-      const logFile = path.join(logDir, `application-${new Date().toISOString().split('T')[0]}.log`);
-      
-      try {
-        fs.appendFileSync(
-          logFile, 
-          JSON.stringify(logEntry) + '\n',
-          { encoding: 'utf8' }
-        );
-      } catch (err) {
-        console.error(`Failed to write to log: ${err}`);
-      }
-    }
+    console.info(`[INFO] ${message}`, data);
   }
 }
 
 /**
- * Logs a debug message
- * 
- * @param message Debug message
- * @param details Additional details
+ * Log debug in browser-compatible way
  */
-export function logDebug(message: string, details?: any): void {
+export function logDebug(message: string, data?: any) {
   if (currentLevel <= LOG_LEVEL.debug) {
-    console.debug(`[DEBUG] ${message}`, details || '');
-    
-    // Log to file if configured
-    if (config.logging?.logToFile) {
-      const timestamp = new Date().toISOString();
-      const logEntry = {
-        timestamp,
-        level: 'debug',
-        message,
-        details
-      };
-      
-      const logFile = path.join(logDir, `application-${new Date().toISOString().split('T')[0]}.log`);
-      
-      try {
-        fs.appendFileSync(
-          logFile, 
-          JSON.stringify(logEntry) + '\n',
-          { encoding: 'utf8' }
-        );
-      } catch (err) {
-        console.error(`Failed to write to log: ${err}`);
-      }
-    }
+    console.debug(`[DEBUG] ${message}`, data);
   }
 }
 
 /**
- * Create a simple error with additional context
+ * Create an error with a specific code
  */
 export function createError(message: string, code?: string, additionalDetails?: any): Error {
-  const error: any = new Error(message);
-  if (code) error.code = code;
-  if (additionalDetails) error.details = additionalDetails;
+  const error = new Error(message);
+  if (code) {
+    (error as any).code = code;
+  }
+  if (additionalDetails) {
+    (error as any).details = additionalDetails;
+  }
   return error;
+}
+
+/**
+ * Format API errors consistently for response
+ */
+export function formatApiError(
+  message: string = 'An unexpected error occurred',
+  code: string = 'UNKNOWN_ERROR',
+  details?: any
+): {
+  error: {
+    message: string;
+    code: string;
+    timestamp: string;
+  }
+} {
+  return {
+    error: {
+      message,
+      code,
+      timestamp: new Date().toISOString()
+    }
+  };
+}
+
+/**
+ * Higher-order function for error handling
+ * Wraps a function with automatic error handling
+ */
+export function withErrorHandling<T, Args extends any[]>(
+  fn: (...args: Args) => Promise<T>,
+  errorMessage: string = 'Operation failed'
+): (...args: Args) => Promise<T> {
+  return async (...args: Args) => {
+    try {
+      return await fn(...args);
+    } catch (error) {
+      logError(errorMessage, error);
+      throw createError(
+        error instanceof Error ? error.message : errorMessage,
+        (error as any).code || 'UNKNOWN_ERROR'
+      );
+    }
+  };
 } 

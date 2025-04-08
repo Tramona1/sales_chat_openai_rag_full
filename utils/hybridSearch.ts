@@ -5,19 +5,32 @@
  * to improve retrieval accuracy based on query analysis and document metadata.
  */
 
-import { VectorStoreItem, getAllVectorStoreItems } from './vectorStore';
+import { VectorStoreItem, getAllVectorStoreItems, cosineSimilarity, getSimilarItems } from './vectorStore';
 import { calculateBM25Score, loadCorpusStatistics } from './bm25';
 import { embedText } from './openaiClient';
 import { logError, logInfo } from './errorHandling';
 import { DocumentCategory } from '../types/metadata';
 import fs from 'fs';
 import path from 'path';
+import { DocumentCategoryType } from './documentCategories';
+import { 
+  filterDocumentsByCategoryPath,
+  parseCategoryPath,
+  buildCategoryHierarchyWithCounts,
+  getAllEntitiesFromDocuments,
+  getTechnicalLevelDistribution,
+  CategoryHierarchy
+} from './hierarchicalCategories';
 
-// Use local type definitions instead of importing them
-export interface Document {
+// Local types instead of importing from @/types/search
+interface Document {
   id: string;
   text: string;
-  metadata?: any;
+  metadata?: Record<string, any>;
+}
+
+interface DocumentEmbedding extends Document {
+  embedding: number[];
 }
 
 interface MetadataFilter {
@@ -28,6 +41,13 @@ interface MetadataFilter {
   lastUpdatedAfter?: string;
   entities?: string[];
   keywords?: string[];
+}
+
+interface SearchResultItem {
+  text: string;
+  source?: string;
+  metadata?: Record<string, any>;
+  relevanceScore?: number;
 }
 
 export interface SearchResult {
@@ -52,7 +72,7 @@ let initialized = false;
 
 // Result from hybrid search
 export interface HybridSearchResult {
-  item: VectorStoreItem & { id: string };
+  item: VectorStoreItem;
   score: number;
   bm25Score: number;
   vectorScore: number;
@@ -78,6 +98,29 @@ export interface HybridSearchFilter {
   
   // Custom metadata filters
   customFilters?: Record<string, any>;
+}
+
+// Update HybridSearchOptions interface to include hierarchy-related options
+export interface HybridSearchOptions {
+  limit?: number;
+  includeDeprecated?: boolean; // Option to include deprecated documents
+  onlyAuthoritative?: boolean; // Option to only include authoritative documents
+  priorityInfoType?: string;
+  categoryPath?: string[]; // Add support for hierarchical category filtering
+  includeFacets?: boolean; // Option to include facet information in results
+  technicalLevelRange?: { min: number; max: number }; // Technical level filtering
+  entityFilters?: Record<string, string[]>; // Entity-based filtering
+}
+
+// Update interface to include facets and implement iterable for backwards compatibility
+export interface HybridSearchResponse {
+  results: Array<VectorStoreItem & { score: number }>;
+  facets?: {
+    categories: CategoryHierarchy[];
+    entities: Record<string, Array<{ name: string, count: number }>>;
+    technicalLevels: Array<{ level: number, count: number }>;
+  };
+  [Symbol.iterator](): Iterator<VectorStoreItem & { score: number }>;
 }
 
 /**
@@ -223,36 +266,410 @@ export async function performHybridSearch(
   }
   
   try {
-    // Tokenize query
+    // Log the search query and parameters
+    console.log(`Searching for: "${query}"`);
+    console.log(`Search parameters: limit=${limit}, hybridRatio=${hybridRatio}, filter=${JSON.stringify(filter || {})}`);
+    
+    // Enhanced query analysis - using a more flexible pattern-based approach
+    const lowercaseQuery = query.toLowerCase();
+    
+    // Check for company-specific signals using possessive pronouns and company name
+    const isCompanyQuery = /\b(our|we|us|workstream)\b/i.test(query);
+    
+    // Check for question words which often indicate information-seeking queries
+    const isQuestionQuery = /\b(what|who|how|when|where|why|which|tell me about|explain)\b/i.test(query);
+    
+    // Check for product-related terms directly
+    const isProductQuery = /\b(product|service|feature|offering|platform|solution|tool|application|app|software)\b/i.test(query);
+    
+    // Check for feature-related queries specifically
+    const isFeatureQuery = /\b(feature|new feature|latest feature|launch|update|upgrade|release|rollout)\b/i.test(query);
+    
+    // Check for time references that might indicate recent feature queries
+    const hasTimeReference = /\b(recent|recently|new|latest|this quarter|this month|this year)\b/i.test(query);
+    
+    // Special handling for feature queries with time references
+    const isRecentFeaturesQuery = isFeatureQuery && hasTimeReference;
+    
+    // Check for leadership/CEO-related queries
+    const isLeadershipQuery = /\b(ceo|chief executive|leadership|founder|executive|management team|executive team|desmond lim)\b/i.test(query);
+    
+    // Determine if this is likely a company-specific information query
+    const isCompanyInfoQuery = isCompanyQuery && (isQuestionQuery || isProductQuery);
+    
+    console.log(`Query analysis: company-specific=${isCompanyQuery}, question format=${isQuestionQuery}, product-related=${isProductQuery}, feature-query=${isFeatureQuery}, time-reference=${hasTimeReference}, recent-features=${isRecentFeaturesQuery}, info query=${isCompanyInfoQuery}, leadership-query=${isLeadershipQuery}`);
+    
+    // Check for investor-related queries
+    const isInvestorQuery = /\b(investor|funding|investment|venture|capital|vc|backed|series|raised)\b/i.test(query);
+    
+    // If this is an investor query, temporarily modify the filter to include all categories
+    let effectiveFilter = filter;
+    if (isInvestorQuery) {
+      console.log("Detected investor-related query, enabling investor-specific search");
+      // Create a modified version of the filter with broader category settings
+      effectiveFilter = {
+        ...filter,
+        categories: ['GENERAL', 'PRODUCT', 'CUSTOMER_CASE'],
+        strictCategoryMatch: false,
+        technicalLevelMin: 1,
+        technicalLevelMax: 10
+      };
+    }
+    
+    // If this is a leadership query, temporarily modify the filter to be more inclusive
+    else if (isLeadershipQuery) {
+      console.log("Detected leadership/CEO-related query, enabling leadership-specific search");
+      // Create a modified version of the filter with broader category settings for leadership
+      effectiveFilter = {
+        ...filter,
+        categories: ['PRODUCT', 'GENERAL', 'FAQ'] as DocumentCategory[],
+        strictCategoryMatch: false,
+        technicalLevelMin: 0,
+        technicalLevelMax: 10
+      };
+    }
+    
+    // If this is a feature query with time reference, adjust the filter to be more permissive
+    if (isRecentFeaturesQuery) {
+      console.log('This is a query about recent features - adjusting filter to be more permissive');
+      if (effectiveFilter) {
+        // Initialize categories array if it doesn't exist
+        if (!effectiveFilter.categories) {
+          effectiveFilter.categories = [];
+        }
+        
+        // Make sure we include the FEATURES category
+        if (!effectiveFilter.categories.includes('features' as any)) {
+          effectiveFilter.categories.push('features' as any);
+        }
+        // Also include PRODUCT as fallback since they often contain feature info
+        if (!effectiveFilter.categories.includes('product' as any)) {
+          effectiveFilter.categories.push('product' as any);
+        }
+        // Make category matching less strict for these queries
+        effectiveFilter.strictCategoryMatch = false;
+      }
+    }
+    
+    // Generate query embedding for vector search
+    const queryEmbedding = await embedText(query);
+    
+    // Tokenize query for BM25 search
     const queryTokens = tokenizeText(query);
+    console.log(`Tokenized query: [${queryTokens.join(', ')}]`);
     
-    // Apply BM25 search
-    const bm25Results = computeBM25Scores(queryTokens, vectorDocuments);
+    // Split query into search terms for simple text matching
+    const searchTerms = lowercaseQuery.split(/\s+/).filter(term => term.length > 2);
     
-    // Currently we're just using BM25, in a real implementation you would:
-    // 1. Get vector embeddings for the query
-    // 2. Compute cosine similarity with document vectors
-    // 3. Combine with BM25 scores using hybridRatio
+    // Add commonly searched terms for product-related queries
+    let enhancedSearchTerms = [...searchTerms];
+    if (isProductQuery || lowercaseQuery.includes('product')) {
+      enhancedSearchTerms = [...enhancedSearchTerms, 'product', 'service', 'feature', 'solution', 'platform'];
+    }
     
-    // For now, we'll just use BM25 scores
-    const results = bm25Results
-      .filter(result => applyMetadataFilter(result.item, filter))
-      .map(result => ({
-        ...result,
-        item: {
-          ...result.item,
-          id: result.item.id || `result-${Math.random().toString(36).substring(2, 9)}`
-        },
-        vectorScore: 0,
-        score: result.score
-      }))
+    // Find relevant documents using both methods
+    const results: SearchResult[] = [];
+    
+    // Keep track of how many documents were discarded by filter
+    let filteredOutCount = 0;
+    let processedCount = 0;
+    
+    // Fallback documents to use if we don't find enough matches
+    const fallbackDocuments: Array<{doc: Document, score: number}> = [];
+    
+    for (const doc of vectorDocuments) {
+      processedCount++;
+      let vectorScore = 0;
+      let bm25Score = 0;
+      let textMatchScore = 0;
+      
+      // Apply the effective filter (original or modified)
+      if (effectiveFilter && !applyMetadataFilter(doc, effectiveFilter)) {
+        filteredOutCount++;
+        
+        // For company-specific queries, keep some documents as fallbacks even if they don't match the filter
+        if (isCompanyInfoQuery && doc.text) {
+          const lowercaseText = doc.text.toLowerCase();
+          
+          // Keep documents that mention products or the company
+          if (lowercaseText.includes('workstream') || lowercaseText.includes('product')) {
+            const basicScore = calculateBasicTextMatch(lowercaseText, enhancedSearchTerms);
+            if (basicScore > 0.1) {
+              fallbackDocuments.push({doc, score: basicScore});
+            }
+          }
+        }
+        continue;
+      }
+      
+      // Simple text match for all documents - this is crucial for when embeddings fail
+      if (doc.text) {
+        const lowercaseText = doc.text.toLowerCase();
+        const docSource = (doc.metadata?.source || '').toLowerCase();
+        
+        // Check for company name in the document - this is a strong signal
+        if (lowercaseText.includes('workstream')) {
+          textMatchScore += 0.3;
+        }
+        
+        // For investor-related queries, boost documents from the investor page or with investor information
+        if (isInvestorQuery) {
+          // Strongly boost the dedicated investors page
+          if (docSource.includes('/investors')) {
+            textMatchScore += 1.5;
+          }
+          
+          // Boost documents from the about page which often has investor info
+          if (docSource.includes('/about')) {
+            textMatchScore += 0.7;
+          }
+          
+          // Boost documents containing investor lists
+          if (lowercaseText.includes('our investors') || 
+              lowercaseText.includes('backed by') || 
+              lowercaseText.includes('series a') || 
+              lowercaseText.includes('series b') || 
+              lowercaseText.includes('funding round')) {
+            textMatchScore += 0.8;
+          }
+        }
+        
+        // For product-related queries, boost documents that mention products explicitly
+        if (isProductQuery && (lowercaseText.includes('product') || lowercaseText.includes('service'))) {
+          textMatchScore += 0.4;
+        }
+        
+        // For company information queries, find documents with exact matches of search terms
+        if (isCompanyInfoQuery) {
+          // Count how many query terms appear in the document
+          let matchedTermCount = 0;
+          let importantTermMatches = 0;
+          
+          for (const term of enhancedSearchTerms) {
+            if (lowercaseText.includes(term)) {
+              matchedTermCount++;
+              
+              // Identify important non-stopwords (length > 4 is a simple heuristic)
+              if (term.length > 4) {
+                importantTermMatches++;
+                textMatchScore += 0.1; // Boost for important term matches
+              } else {
+                textMatchScore += 0.02; // Smaller boost for common words
+              }
+            }
+          }
+          
+          // Calculate term match ratio (what percentage of query terms are in the document)
+          const termMatchRatio = enhancedSearchTerms.length > 0 ? matchedTermCount / enhancedSearchTerms.length : 0;
+          
+          // Boost documents that match a high percentage of query terms
+          if (termMatchRatio > 0.3) { // Lowered from 0.5 to be more lenient
+            textMatchScore += 0.2; // Significant boost for high coverage
+          }
+          
+          // Boost documents with source URLs that might contain the query topics
+          if (searchTerms.some(term => docSource.includes(term))) {
+            textMatchScore += 0.15;
+          }
+        }
+      }
+      
+      // Calculate BM25 score if we have corpus stats
+      const hasCorpusStats = documentCount > 0 && Object.keys(documentFrequencies).length > 0;
+      if (hasCorpusStats) {
+        // Get document tokens
+        const docTokens = tokenizeText(doc.text);
+        
+        // Calculate BM25 score for each query token
+        for (const token of queryTokens) {
+          if (!documentFrequencies[token] || documentFrequencies[token] <= 0) continue;
+          
+          // Count token occurrences in document
+          const tf = docTokens.filter(t => t === token).length;
+          if (tf <= 0) continue;
+          
+          // Calculate BM25 for this token
+          const idf = Math.log((documentCount - documentFrequencies[token] + 0.5) / (documentFrequencies[token] + 0.5) + 1);
+          const k1 = 1.2; // BM25 parameter
+          const b = 0.75; // BM25 parameter
+          const avgDocLength = 300; // Average document length (this could be calculated more precisely)
+          const docLength = docTokens.length;
+          
+          // BM25 score formula
+          const numerator = tf * (k1 + 1);
+          const denominator = tf + k1 * (1 - b + b * (docLength / avgDocLength));
+          const termScore = idf * (numerator / denominator);
+          
+          // For company info queries, give higher weight to BM25 scores
+          if (isCompanyInfoQuery) {
+            bm25Score += termScore * 1.5;
+          } else {
+            bm25Score += termScore;
+          }
+        }
+      } else {
+        // Fallback if corpus stats aren't available - use text match score
+        bm25Score = textMatchScore * 0.8;
+      }
+      
+      // Calculate vector score if document has embedding
+      if (doc.hasOwnProperty('embedding') && Array.isArray((doc as any).embedding)) {
+        const docEmbedding = (doc as any).embedding;
+        vectorScore = cosineSimilarity(queryEmbedding, docEmbedding);
+      } else if (textMatchScore > 0) {
+        // For documents without embeddings but with text matches, 
+        // assign a small vector score to ensure they get considered
+        vectorScore = 0.15 * textMatchScore;
+      }
+      
+      // Dynamic hybridRatio adjustment based on query type and text matches
+      let effectiveHybridRatio = hybridRatio;
+      
+      // For company info queries, bias more toward text matching
+      if (isCompanyInfoQuery) {
+        // If we have good text matches, reduce vector influence
+        if (textMatchScore > 0.3) {
+          effectiveHybridRatio = Math.max(0.2, hybridRatio - 0.2);
+        }
+      }
+      
+      // Combined score calculation - weighted average of the scores
+      let combinedScore = (vectorScore * effectiveHybridRatio) + (bm25Score * (1 - effectiveHybridRatio));
+      
+      // Add text match score as a bonus for all queries
+      if (textMatchScore > 0) {
+        // Higher boost for company info queries
+        const textMatchBoost = isCompanyInfoQuery ? 0.35 : 0.15; // Increased boost
+        combinedScore += textMatchScore * textMatchBoost;
+      }
+      
+      // For product-related queries with company context, further boost the score
+      if (isCompanyInfoQuery && isProductQuery && textMatchScore > 0) {
+        combinedScore *= 1.3; // 30% boost
+      }
+      
+      // For company documents with company queries, always include even if score is low
+      const isCompanyDoc = doc.text && doc.text.toLowerCase().includes('workstream');
+      const shouldForceInclude = isCompanyQuery && isCompanyDoc && textMatchScore > 0;
+      
+      // Lower threshold for inclusion - increase recall for product-related queries
+      const inclusionThreshold = isProductQuery ? 0.05 : 0.1;
+      
+      // Only add if the document has some relevance
+      if (combinedScore > inclusionThreshold || shouldForceInclude) {
+        // If we need to force include a company document, ensure a minimum score
+        if (shouldForceInclude && combinedScore < 0.15) {
+          combinedScore = 0.15;
+        }
+        
+        results.push({
+          item: doc,
+          score: combinedScore,
+          vectorScore,
+          bm25Score
+        });
+      }
+    }
+    
+    // Add fallback documents if we don't have enough results
+    if (results.length < limit && isCompanyInfoQuery && fallbackDocuments.length > 0) {
+      console.log(`Adding ${Math.min(fallbackDocuments.length, limit - results.length)} fallback documents because we only found ${results.length} results`);
+      
+      // Sort fallbacks by score and take what we need
+      const sortedFallbacks = fallbackDocuments
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit - results.length);
+      
+      // Add fallbacks to results
+      sortedFallbacks.forEach(({doc, score}) => {
+        results.push({
+          item: doc,
+          score: score * 0.8, // Slightly discount fallback scores
+          vectorScore: 0,
+          bm25Score: score
+        });
+      });
+    }
+    
+    // Second-level fallback: If we still have zero results, try without any filters
+    // This is especially important for CEO/leadership queries
+    if (results.length === 0 && effectiveFilter) {
+      console.log(`No results found with filters. Attempting a more relaxed search...`);
+      
+      // Create a minimal count of results by scanning all documents without filters
+      const unfilteredResults: SearchResult[] = [];
+      for (const doc of vectorDocuments) {
+        if (doc.text) {
+          const lowercaseText = doc.text.toLowerCase();
+          // Very simple relevance check - just look for any query terms
+          const relevanceScore = calculateBasicTextMatch(lowercaseText, searchTerms);
+          
+          if (relevanceScore > 0) {
+            unfilteredResults.push({
+              item: doc,
+              score: relevanceScore * 0.7, // Mark these as less relevant
+              vectorScore: 0,
+              bm25Score: relevanceScore
+            });
+          }
+        }
+      }
+      
+      // If we found some results without filters, use them
+      if (unfilteredResults.length > 0) {
+        console.log(`Found ${unfilteredResults.length} results without filters`);
+        // Sort by score and take only what we need
+        const sortedUnfiltered = unfilteredResults
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+        
+        // Use these as our results
+        return sortedUnfiltered;
+      }
+    }
+    
+    // Log search statistics
+    console.log(`Processed ${processedCount} documents. Filtered out: ${filteredOutCount}. Results before sorting: ${results.length}`);
+    
+    // Sort by combined score (descending) and take top 'limit' results
+    const sortedResults = results
+      .sort((a, b) => b.score - a.score)
       .slice(0, limit);
     
-    return results;
+    console.log(`Hybrid search found ${sortedResults.length} results`);
+    if (sortedResults.length > 0) {
+      console.log(`Top result: score=${sortedResults[0].score.toFixed(4)}, bm25=${sortedResults[0].bm25Score?.toFixed(4) || 'n/a'}, vector=${sortedResults[0].vectorScore?.toFixed(4) || 'n/a'}`);
+      console.log(`Top result source: ${sortedResults[0].item.metadata?.source || 'Unknown'}`);
+      console.log(`Top result excerpt: ${sortedResults[0].item.text.substring(0, 150)}...`);
+    }
+    
+    return sortedResults;
   } catch (error) {
-    logError('Error performing hybrid search', error);
+    logError('Hybrid search failed', error);
     return [];
   }
+}
+
+/**
+ * Calculate a basic text match score between document text and search terms
+ */
+function calculateBasicTextMatch(documentText: string, searchTerms: string[]): number {
+  let score = 0;
+  let matchCount = 0;
+  
+  for (const term of searchTerms) {
+    if (documentText.includes(term)) {
+      matchCount++;
+      score += term.length > 4 ? 0.15 : 0.05;
+    }
+  }
+  
+  // Boost if most terms match
+  if (matchCount > searchTerms.length * 0.6) {
+    score += 0.2;
+  }
+  
+  return score;
 }
 
 /**
@@ -599,4 +1016,279 @@ function calculateMetadataBoost(
   }
   
   return { totalBoost, matchesCategory, categoryBoost, technicalLevelMatch };
+}
+
+/**
+ * Enhanced hybrid search that combines vector search with keyword-based content filtering
+ * and can exclude deprecated documents
+ * 
+ * @param query User query text
+ * @param options Search options like limit, includeDeprecated, etc.
+ * @returns Array of matching documents with scores
+ */
+export async function hybridSearch(
+  query: string,
+  options: HybridSearchOptions = {}
+): Promise<HybridSearchResponse> {
+  const {
+    limit = 10,
+    includeDeprecated = false,
+    onlyAuthoritative = false,
+    priorityInfoType,
+    categoryPath,
+    includeFacets = false,
+    technicalLevelRange,
+    entityFilters
+  } = options;
+  
+  // Get search results using the existing implementation
+  const searchResults = await performSearchImplementation(
+    query, 
+    limit, 
+    includeDeprecated, 
+    onlyAuthoritative, 
+    priorityInfoType
+  );
+  
+  // Filter by category path if needed
+  let filteredResults = [...searchResults];
+  if (categoryPath && categoryPath.length > 0) {
+    const categoryFilteredItems = filterDocumentsByCategoryPath(
+      searchResults, 
+      categoryPath
+    );
+    
+    // Keep only items that remain after filtering
+    filteredResults = searchResults.filter(item => 
+      categoryFilteredItems.some(filtered => filtered.id === item.id)
+    );
+  }
+  
+  // Apply technical level filtering if specified
+  if (technicalLevelRange) {
+    filteredResults = filteredResults.filter(item => {
+      if (!item.metadata?.technicalLevel) return false;
+      
+      // Parse technical level value - safely handle both string and number types
+      let techLevel: number;
+      if (typeof item.metadata.technicalLevel === 'string') {
+        techLevel = parseInt(item.metadata.technicalLevel, 10);
+      } else if (typeof item.metadata.technicalLevel === 'number') {
+        techLevel = item.metadata.technicalLevel;
+      } else {
+        return false;
+      }
+      
+      // Check against range
+      return !isNaN(techLevel) && 
+        techLevel >= technicalLevelRange.min && 
+        techLevel <= technicalLevelRange.max;
+    });
+  }
+  
+  // Apply entity filters if specified
+  if (entityFilters && Object.keys(entityFilters).length > 0) {
+    filteredResults = filteredResults.filter(item => {
+      if (!item.metadata?.entities) return false;
+      
+      // Parse entities JSON string
+      try {
+        const entitiesStr = item.metadata.entities as string;
+        const entities = typeof entitiesStr === 'string' ? 
+          JSON.parse(entitiesStr) : entitiesStr;
+        
+        // Check each entity type filter
+        return Object.entries(entityFilters).every(([entityType, requiredEntities]) => {
+          if (!entities[entityType] || !Array.isArray(entities[entityType])) return false;
+          
+          // At least one required entity must exist in the document
+          return requiredEntities.some(requiredEntity => 
+            entities[entityType].some((entity: any) => {
+              if (typeof entity === 'string') return entity === requiredEntity;
+              if (typeof entity === 'object' && entity.name) return entity.name === requiredEntity;
+              return false;
+            })
+          );
+        });
+      } catch (e) {
+        return false; // Failed to parse entities
+      }
+    });
+  }
+  
+  // Limit to requested number of results
+  const limitedResults = filteredResults.slice(0, limit);
+  
+  // Build facets if requested
+  let facets;
+  if (includeFacets) {
+    // Build category hierarchy with counts
+    const categories = buildCategoryHierarchyWithCounts(filteredResults);
+    
+    // Get entity distribution
+    const entities = getAllEntitiesFromDocuments(filteredResults);
+    
+    // Get technical level distribution
+    const technicalLevels = getTechnicalLevelDistribution(filteredResults);
+    
+    facets = { categories, entities, technicalLevels };
+  }
+  
+  // Create response with properly implemented Symbol.iterator for backwards compatibility
+  const response: HybridSearchResponse = {
+    results: limitedResults,
+    facets,
+    *[Symbol.iterator]() {
+      for (const result of this.results) {
+        yield result;
+      }
+    }
+  };
+  
+  return response;
+}
+
+// Helper function to perform the actual search (using the existing implementation)
+async function performSearchImplementation(
+  query: string, 
+  limit: number,
+  includeDeprecated: boolean,
+  onlyAuthoritative: boolean,
+  priorityInfoType?: string
+): Promise<Array<VectorStoreItem & { score: number; vectorScore: number; bm25Score: number }>> {
+  // Generate embedding for the query
+  const embedding = await embedText(query);
+  
+  // Get all vector store items
+  let availableItems = getAllVectorStoreItems();
+  
+  // Apply filters for deprecated/authoritative docs
+  if (!includeDeprecated) {
+    availableItems = availableItems.filter(item => 
+      item.metadata?.isDeprecated !== 'true'
+    );
+  }
+  
+  if (onlyAuthoritative) {
+    availableItems = availableItems.filter(item => 
+      item.metadata?.isAuthoritative === 'true'
+    );
+  }
+  
+  // Calculate vector similarity for all items
+  const vectorResults = availableItems.map(item => ({
+    ...item,
+    vectorScore: calculateVectorSimilarity(embedding, item.embedding),
+    score: 0, // Will be updated with final score
+    bm25Score: 0 // Initialize bm25Score
+  }));
+  
+  // Calculate BM25 scores
+  const queryTokens = tokenizeText(query);
+  const documentsForBM25 = availableItems.map(item => ({
+    id: item.id || item.metadata?.source || '',
+    text: item.text
+  }));
+  
+  const bm25Results = computeBM25Scores(queryTokens, documentsForBM25);
+  
+  // Map BM25 scores to vector results
+  const resultMap = new Map<string, typeof vectorResults[0]>();
+  
+  // First, index all vector results by ID
+  vectorResults.forEach(item => {
+    const id = item.id || item.metadata?.source || '';
+    if (id) resultMap.set(id, item);
+  });
+  
+  // Then, add BM25 scores to the indexed items
+  bm25Results.forEach(bm25Item => {
+    const vectorItem = resultMap.get(bm25Item.item.id);
+    if (vectorItem) {
+      vectorItem.bm25Score = bm25Item.score;
+    }
+  });
+  
+  // Calculate hybrid scores and add metadata boosts
+  const results = [...resultMap.values()].map(item => {
+    // Default BM25 score to 0 if not calculated
+    const bm25Score = item.bm25Score || 0;
+    
+    // Calculate metadata boost
+    const metadataBoost = calculateMetadataBoost(item, query, undefined);
+    
+    // Hybrid score is weighted combination of vector and BM25
+    const hybridScore = (0.7 * item.vectorScore) + (0.3 * bm25Score);
+    
+    // Final score includes metadata boost
+    const finalScore = hybridScore * (1 + metadataBoost.totalBoost);
+    
+    return {
+      ...item,
+      bm25Score,
+      vectorScore: item.vectorScore,
+      metadata: {
+        ...item.metadata,
+        matchesCategory: metadataBoost.matchesCategory,
+        categoryBoost: metadataBoost.categoryBoost,
+        technicalLevelMatch: metadataBoost.technicalLevelMatch
+      },
+      score: finalScore
+    };
+  });
+  
+  // Sort results by score
+  results.sort((a, b) => b.score - a.score);
+  
+  return results;
+}
+
+/**
+ * Perform multiple search variants and return the best results
+ * This is used as a fallback if the primary search returns no results
+ * 
+ * @param query User query text
+ * @returns Best search results from various search variants
+ */
+export async function fallbackSearch(
+  query: string
+): Promise<(VectorStoreItem & { score: number })[]> {
+  console.log('Performing fallback search with multiple variants');
+  
+  // Try different search configurations
+  const searchVariants = [
+    // Base search without restrictions
+    hybridSearch(query, { limit: 5 }),
+    
+    // Include deprecated documents (as they may still be relevant)
+    hybridSearch(query, { includeDeprecated: true, limit: 5 }),
+    
+    // Only authoritative documents but with a higher limit
+    hybridSearch(query, { onlyAuthoritative: true, limit: 8 })
+  ];
+  
+  // Wait for all search variants to complete
+  const variantResults = await Promise.all(searchVariants);
+  
+  // Combine all results
+  const combinedResults: (VectorStoreItem & { score: number })[] = [];
+  const includedIds = new Set<string>();
+  
+  // Process each result set in priority order
+  for (const resultSet of variantResults) {
+    for (const doc of resultSet.results) {
+      const docId = doc.metadata?.source || doc.id;
+      
+      // Only include each document once
+      if (docId && !includedIds.has(docId)) {
+        includedIds.add(docId);
+        combinedResults.push(doc);
+      }
+    }
+  }
+  
+  // Sort by score and return top 5
+  return combinedResults
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
 } 

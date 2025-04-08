@@ -1,112 +1,112 @@
 {
-  "totalDocuments": 1458,
-  "averageDocumentLength": 708.2921810699588,
-  "uniqueTerms": 16659,
+  "totalDocuments": 1460,
+  "averageDocumentLength": 707.8383561643835,
+  "uniqueTerms": 16677,
   "termFrequencyStats": {
     "min": 1,
-    "max": 18138,
-    "avg": 61.98991536106609
+    "max": 18143,
+    "avg": 61.96821970378365
   },
   "mostCommonTerms": [
     {
       "term": "your",
-      "count": 1380,
-      "percentage": 94.65020576131687
+      "count": 1381,
+      "percentage": 94.58904109589041
     },
     {
       "term": "hourly",
-      "count": 1372,
-      "percentage": 94.10150891632372
+      "count": 1373,
+      "percentage": 94.04109589041096
     },
     {
       "term": "you",
-      "count": 1365,
-      "percentage": 93.62139917695474
+      "count": 1366,
+      "percentage": 93.56164383561644
     },
     {
       "term": "hiring",
-      "count": 1358,
-      "percentage": 93.14128943758574
+      "count": 1360,
+      "percentage": 93.15068493150685
     },
     {
       "term": "workstream",
-      "count": 1356,
-      "percentage": 93.00411522633745
+      "count": 1358,
+      "percentage": 93.01369863013699
     },
     {
       "term": "payroll",
-      "count": 1342,
-      "percentage": 92.04389574759945
+      "count": 1344,
+      "percentage": 92.05479452054794
     },
     {
       "term": "how",
       "count": 1276,
-      "percentage": 87.51714677640604
+      "percentage": 87.3972602739726
     },
     {
       "term": "help",
-      "count": 1273,
-      "percentage": 87.31138545953361
+      "count": 1274,
+      "percentage": 87.26027397260275
     },
     {
       "term": "our",
-      "count": 1259,
-      "percentage": 86.35116598079561
+      "count": 1261,
+      "percentage": 86.36986301369863
     },
     {
       "term": "resources",
       "count": 1247,
-      "percentage": 85.5281207133059
+      "percentage": 85.41095890410959
     },
     {
       "term": "free",
       "count": 1246,
-      "percentage": 85.45953360768176
+      "percentage": 85.34246575342466
     },
     {
       "term": "hr",
-      "count": 1239,
-      "percentage": 84.97942386831275
+      "count": 1241,
+      "percentage": 85
     },
     {
       "term": "franchise",
       "count": 1222,
-      "percentage": 83.81344307270233
+      "percentage": 83.6986301369863
     },
     {
       "term": "get",
-      "count": 1217,
-      "percentage": 83.47050754458162
+      "count": 1218,
+      "percentage": 83.42465753424658
     },
     {
       "term": "experience",
       "count": 1210,
-      "percentage": 82.99039780521262
+      "percentage": 82.87671232876713
+    },
+    {
+      "term": "hire",
+      "count": 1206,
+      "percentage": 82.6027397260274
     },
     {
       "term": "current",
       "count": 1206,
-      "percentage": 82.71604938271605
-    },
-    {
-      "term": "hire",
-      "count": 1205,
-      "percentage": 82.6474622770919
+      "percentage": 82.6027397260274
     },
     {
       "term": "email",
-      "count": 1194,
-      "percentage": 81.89300411522635
+      "count": 1196,
+      "percentage": 81.91780821917808
+    },
+    {
+      "term": "applicant",
+      "count": 1193,
+      "percentage": 81.71232876712328
     },
     {
       "term": "stay",
       "count": 1192,
-      "percentage": 81.75582990397805
-    },
-    {
-      "term": "applicant",
-      "count": 1191,
-      "percentage": 81.6872427983539
+      "percentage": 81.64383561643835
     }
   ]
 }

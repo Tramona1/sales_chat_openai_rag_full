@@ -1,45 +1,32 @@
 /**
- * Re-ranking Module
+ * Reranking Module for Smart Query Routing
  *
- * This module provides LLM-based re-ranking functionality for search results,
- * improving result relevance by using AI to judge the quality of each result
- * in relation to the user's query.
+ * This module applies LLM-based reranking to improve search result ordering.
  */
-import { EnhancedRetrievalResult } from './enhancedRetrieval';
+import { HybridSearchResult } from './hybridSearch';
 /**
- * Configuration options for re-ranking
+ * Reranking configuration options
  */
-export interface RerankingOptions {
-    returnTopN: number;
-    model: string;
-    parallelBatching: boolean;
-    timeoutMs: number;
-    batchSize: number;
-    debug: boolean;
+export interface RerankOptions {
+    model?: string;
+    timeoutMs?: number;
+    includeExplanations?: boolean;
 }
 /**
- * Default re-ranking options
+ * Result from the reranking process
  */
-export declare const DEFAULT_RERANKING_OPTIONS: RerankingOptions;
-/**
- * Result from re-ranking
- */
-export interface RerankingResult {
-    originalResult: EnhancedRetrievalResult;
-    rerankScore: number;
-    finalScore: number;
+export interface RerankResult {
+    original: HybridSearchResult;
+    relevanceScore: number;
+    explanation?: string;
 }
 /**
- * Re-rank search results using LLM relevance judgments
+ * Reranks search results based on relevance to the query
  *
- * This function takes the results from hybrid search and uses an LLM to
- * evaluate how relevant each document is to the original query.
+ * @param query The original user query
+ * @param results The search results to rerank
+ * @param topK Number of top results to return
+ * @param options Optional reranking configuration
+ * @returns Reranked results (topK of them)
  */
-export declare function rerankResults(query: string, results: EnhancedRetrievalResult[], options?: Partial<RerankingOptions>): Promise<RerankingResult[]>;
-/**
- * Enhanced version of reranking that provides explanation for each score
- * Useful for debugging and understanding why results were ranked as they were
- */
-export declare function rerankResultsWithExplanations(query: string, results: EnhancedRetrievalResult[], options?: Partial<RerankingOptions>): Promise<(RerankingResult & {
-    explanation: string;
-})[]>;
+export declare function rerank(query: string, results: any[], topK?: number, options?: RerankOptions): Promise<any[]>;

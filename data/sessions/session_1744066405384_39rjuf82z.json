@@ -1,0 +1,32 @@
+{
+  "sessionType": "general",
+  "title": "Hello",
+  "salesNotes": "",
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "Welcome to the Workstream Knowledge Assistant! Ask questions about our HR, Payroll, and Hiring platform for the hourly workforce.",
+      "timestamp": "2025-04-07T22:53:20.887Z"
+    },
+    {
+      "role": "user",
+      "content": "hello",
+      "timestamp": "2025-04-07T22:53:23.247Z"
+    }
+  ],
+  "keywords": [
+    "welcome",
+    "workstream",
+    "knowledge",
+    "assistant",
+    "questions",
+    "about",
+    "payroll",
+    "hiring",
+    "platform",
+    "hourly"
+  ],
+  "id": "session_1744066405384_39rjuf82z",
+  "createdAt": "2025-04-07T22:53:25.384Z",
+  "updatedAt": "2025-04-07T22:53:25.384Z"
+}

@@ -2,8 +2,10 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import fs from 'fs';
 import path from 'path';
 import { embedText } from '@/utils/openaiClient';
-import { addToVectorStore, VectorStoreItem } from '@/utils/vectorStore';
+import { VectorStoreItem } from '@/utils/vectorStore';
 import { splitIntoChunks } from '@/utils/documentProcessing';
+import { addToPendingDocuments } from '@/utils/adminWorkflow';
+import { DocumentCategoryType } from '@/utils/documentCategories';
 
 export default async function handler(
   req: NextApiRequest,
@@ -32,28 +34,39 @@ export default async function handler(
     // Process the text with source information
     const chunks = splitIntoChunks(text, 500, source);
     
-    // Process chunks
-    let processedCount = 0;
-    for (const chunk of chunks) {
-      if (chunk.text.trim()) {
-        const embedding = await embedText(chunk.text);
-        const item: VectorStoreItem = {
-          embedding, 
-          text: chunk.text,
-          metadata: {
-            source,
-            // Include the additional metadata from the chunking process
-            ...(chunk.metadata || {})
-          }
-        };
-        addToVectorStore(item);
-        processedCount++;
-      }
+    // Add to pending documents instead of directly to vector store
+    if (chunks.length > 0) {
+      // Create embedding for the first chunk to help with similarity search later
+      const embedding = await embedText(chunks[0].text);
+      
+      // Add to pending documents - with correct parameter format
+      await addToPendingDocuments(
+        text,
+        {
+          source: source,
+          title: source,
+          contentType: 'text/plain',
+          primaryCategory: DocumentCategoryType.GENERAL,
+          secondaryCategories: [],
+          confidenceScore: 0.8,
+          summary: text.substring(0, 200) + (text.length > 200 ? '...' : ''),
+          keyTopics: [],
+          technicalLevel: 5,
+          entities: [],
+          keywords: [],
+          qualityFlags: [],
+          approved: false,
+          routingPriority: 5
+        },
+        embedding
+      );
+      
+      return res.status(200).json({ 
+        message: `Successfully processed text and created ${chunks.length} chunks. Content will be available after admin approval.` 
+      });
+    } else {
+      return res.status(400).json({ message: 'No valid content chunks could be created from the text' });
     }
-
-    return res.status(200).json({ 
-      message: `Successfully processed text and created ${processedCount} chunks. You can now ask questions about this content!` 
-    });
   } catch (error) {
     console.error('Error processing text:', error);
     return res.status(500).json({

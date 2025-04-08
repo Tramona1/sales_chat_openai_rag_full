@@ -70,7 +70,7 @@ async function embedText(text) {
         return response.data[0].embedding;
     }
     catch (error) {
-        (0, errorHandling_1.logError)(error, 'embedText');
+        (0, errorHandling_1.logError)('Error generating embedding', error);
         // In case of error, return a zero vector as fallback
         // This should be handled by the calling function
         console.error('Error generating embedding:', error);
@@ -121,37 +121,69 @@ async function generateChatCompletion(systemPrompt, userPrompt, model = modelCon
     }
 }
 /**
- * Generate a structured response with JSON output
+ * Generate a structured response from OpenAI API
  */
 async function generateStructuredResponse(systemPrompt, userPrompt, responseSchema, model = modelConfig_1.AI_SETTINGS.defaultModel) {
+    var _a, _b, _c, _d, _e;
     try {
-        // Append schema information to system prompt
-        const schemaPrompt = `${systemPrompt}
-    
-Return your response in the following JSON format:
-${JSON.stringify(responseSchema, null, 2)}
-
-Your response MUST be a valid JSON object with no additional text, explanations, or formatting.`;
-        // Generate completion with JSON mode enabled if the model supports it
-        const response = await generateChatCompletion(schemaPrompt, userPrompt, model, true);
-        try {
-            // Try to parse JSON response
-            return JSON.parse(response);
+        // Check if model supports JSON mode
+        const supportsJsonMode = model.includes("gpt-4-turbo") ||
+            model.includes("gpt-4-0125") ||
+            model.includes("gpt-3.5-turbo-0125");
+        if (supportsJsonMode) {
+            // Use JSON mode for models that support it
+            const response = await exports.openai.chat.completions.create({
+                model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                response_format: { type: "json_object" },
+                temperature: 0.2,
+                max_tokens: 4000
+            });
+            const content = ((_b = (_a = response.choices[0]) === null || _a === void 0 ? void 0 : _a.message) === null || _b === void 0 ? void 0 : _b.content) || "{}";
+            return JSON.parse(content);
         }
-        catch (jsonError) {
-            // If JSON parsing fails, try to extract JSON from the response
-            // This can happen with models that don't support jsonMode
-            const jsonMatch = response.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                return JSON.parse(jsonMatch[0]);
+        else {
+            // For models that don't support JSON mode
+            const enhancedSystemPrompt = `${systemPrompt}\n\nYou must respond with a valid JSON object that follows this schema:\n${JSON.stringify(responseSchema, null, 2)}\n\nDo not include any text before or after the JSON. Only respond with the JSON object.`;
+            const response = await exports.openai.chat.completions.create({
+                model,
+                messages: [
+                    { role: "system", content: enhancedSystemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: 0.2,
+                max_tokens: 4000
+            });
+            const content = ((_d = (_c = response.choices[0]) === null || _c === void 0 ? void 0 : _c.message) === null || _d === void 0 ? void 0 : _d.content) || "{}";
+            // Extract JSON from the response - handle potential extra text
+            try {
+                // Try parsing directly
+                return JSON.parse(content);
             }
-            console.error('Failed to parse JSON response:', jsonError);
-            return null;
+            catch (e) {
+                // If direct parsing fails, try to extract JSON from the text
+                const jsonMatch = content.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    return JSON.parse(jsonMatch[0]);
+                }
+                else {
+                    throw new Error("Failed to extract valid JSON from response");
+                }
+            }
         }
     }
     catch (error) {
-        console.error('Error generating structured response:', error);
-        return null;
+        if (((_e = error === null || error === void 0 ? void 0 : error.message) === null || _e === void 0 ? void 0 : _e.includes('json_object')) &&
+            model !== modelConfig_1.AI_SETTINGS.fallbackModel) {
+            console.log("Attempting with fallback model...");
+            // Try again with fallback model
+            return generateStructuredResponse(systemPrompt, userPrompt, responseSchema, modelConfig_1.AI_SETTINGS.fallbackModel);
+        }
+        console.error("Error generating structured response:", error);
+        throw error;
     }
 }
 /**
@@ -174,7 +206,7 @@ async function batchProcessPrompts(systemPrompt, userPrompts, model = modelConfi
         return await Promise.race([apiPromise, timeoutPromise]);
     }
     catch (error) {
-        (0, errorHandling_1.logError)(error, 'batchProcessPrompts');
+        (0, errorHandling_1.logError)('Error in batch processing prompts', error);
         // Return empty results on error
         return userPrompts.map(() => "");
     }

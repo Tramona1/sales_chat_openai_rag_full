@@ -42,10 +42,10 @@ async function semanticQueryExpansion(query, options = {}) {
     // Try to get cached result if caching is enabled
     if (config.enableCaching) {
         const cacheKey = `semantic_expansion:${query}`;
-        const cachedResult = await (0, caching_1.getCachedResult)(cacheKey);
-        if (cachedResult) {
+        const cachedResult = (0, caching_1.getFromCache)(cacheKey);
+        if (cachedResult && Array.isArray(cachedResult)) {
             if (config.debug) {
-                console.log(`Cache hit for semantic expansion of query: "${query}"`);
+                console.log('Using cached semantic expansion results for query:', query);
             }
             return cachedResult;
         }
@@ -90,7 +90,7 @@ Return as a JSON array of strings.`;
                 // Cache the result if caching is enabled
                 if (config.enableCaching && validTerms.length > 0) {
                     const cacheKey = `semantic_expansion:${query}`;
-                    await (0, caching_1.cacheResult)(cacheKey, validTerms, config.cacheTtlSeconds);
+                    await (0, caching_1.cacheWithExpiry)(cacheKey, validTerms, config.cacheTtlSeconds);
                 }
                 return validTerms;
             }
@@ -117,17 +117,17 @@ Return as a JSON array of strings.`;
             // Cache the result if caching is enabled
             if (config.enableCaching && terms.length > 0) {
                 const cacheKey = `semantic_expansion:${query}`;
-                await (0, caching_1.cacheResult)(cacheKey, terms, config.cacheTtlSeconds);
+                await (0, caching_1.cacheWithExpiry)(cacheKey, terms, config.cacheTtlSeconds);
             }
             return terms;
         }
         catch (fallbackError) {
-            (0, errorHandling_1.logError)(fallbackError, 'semanticQueryExpansion:fallback');
+            (0, errorHandling_1.logError)('semanticQueryExpansion:fallback', fallbackError);
             return []; // Return empty array if all methods fail
         }
     }
     catch (error) {
-        (0, errorHandling_1.logError)(error, 'semanticQueryExpansion');
+        (0, errorHandling_1.logError)('semanticQueryExpansion', error);
         return []; // Return empty array on error
     }
     finally {
@@ -149,7 +149,7 @@ function keywordQueryExpansion(query, options = {}) {
     // Try to get cached result if caching is enabled
     if (config.enableCaching) {
         const cacheKey = `keyword_expansion:${query}`;
-        const cachedResult = (0, caching_1.getCachedResult)(cacheKey);
+        const cachedResult = (0, caching_1.getFromCache)(cacheKey);
         if (cachedResult && Array.isArray(cachedResult)) {
             if (config.debug) {
                 console.log(`Cache hit for keyword expansion of query: "${query}"`);
@@ -232,7 +232,7 @@ function keywordQueryExpansion(query, options = {}) {
         // Cache the result if caching is enabled
         if (config.enableCaching && uniqueTerms.length > 0) {
             const cacheKey = `keyword_expansion:${query}`;
-            (0, caching_1.cacheResult)(cacheKey, uniqueTerms, config.cacheTtlSeconds);
+            (0, caching_1.cacheWithExpiry)(cacheKey, uniqueTerms, config.cacheTtlSeconds);
         }
         if (config.debug) {
             const duration = Date.now() - startTime;
@@ -241,7 +241,7 @@ function keywordQueryExpansion(query, options = {}) {
         return uniqueTerms;
     }
     catch (error) {
-        (0, errorHandling_1.logError)(error, 'keywordQueryExpansion');
+        (0, errorHandling_1.logError)('keywordQueryExpansion', error);
         return []; // Return empty array on error
     }
 }
@@ -252,7 +252,7 @@ async function analyzeQuery(query) {
     try {
         // Try to get cached result
         const cacheKey = `query_analysis:${query}`;
-        const cachedResult = await (0, caching_1.getCachedResult)(cacheKey);
+        const cachedResult = (0, caching_1.getFromCache)(cacheKey);
         if (cachedResult) {
             return cachedResult;
         }
@@ -274,11 +274,11 @@ Please analyze this query and return a JSON object with technicalLevel (number 1
             complexity: (result === null || result === void 0 ? void 0 : result.complexity) || 1
         };
         // Cache the result
-        await (0, caching_1.cacheResult)(cacheKey, analysis, 86400); // 24 hours TTL
+        await (0, caching_1.cacheWithExpiry)(cacheKey, analysis, 86400); // 24 hours TTL
         return analysis;
     }
     catch (error) {
-        (0, errorHandling_1.logError)(error, 'analyzeQuery');
+        (0, errorHandling_1.logError)('analyzeQuery', error);
         return {
             technicalLevel: 1,
             domainContext: 'general',
@@ -301,15 +301,12 @@ async function expandQuery(query, options = {}) {
         // Try to get cached full expansion result
         if (config.enableCaching) {
             const cacheKey = `full_expansion:${query}:${config.useSemanticExpansion}:${config.useKeywordExpansion}:${config.maxExpandedTerms}`;
-            const cachedResult = await (0, caching_1.getCachedResult)(cacheKey);
+            const cachedResult = (0, caching_1.getFromCache)(cacheKey);
             if (cachedResult) {
                 if (config.debug) {
-                    console.log(`Cache hit for full expansion of query: "${query}"`);
+                    console.log('Using cached query expansion results for query:', query);
                 }
-                return {
-                    ...cachedResult,
-                    processingTimeMs: 0 // Cached result has no processing time
-                };
+                return cachedResult;
             }
         }
         // Get query analysis to determine expansion strategy
@@ -399,12 +396,12 @@ async function expandQuery(query, options = {}) {
         // Cache the result
         if (config.enableCaching && addedTerms.length > 0) {
             const cacheKey = `full_expansion:${query}:${config.useSemanticExpansion}:${config.useKeywordExpansion}:${config.maxExpandedTerms}`;
-            await (0, caching_1.cacheResult)(cacheKey, result, config.cacheTtlSeconds);
+            await (0, caching_1.cacheWithExpiry)(cacheKey, result, config.cacheTtlSeconds);
         }
         return result;
     }
     catch (error) {
-        (0, errorHandling_1.logError)(error, 'expandQuery');
+        (0, errorHandling_1.logError)('expandQuery', error);
         const processingTime = Date.now() - startTime;
         // Return original query on error
         return {

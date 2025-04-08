@@ -8,7 +8,7 @@ exports.default = handler;
 const formidable_1 = __importDefault(require("formidable"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const advancedDocumentProcessing_1 = require("@/utils/advancedDocumentProcessing");
+const advancedDocumentProcessing_1 = require("../../utils/advancedDocumentProcessing");
 // Disable the default body parser
 exports.config = { api: { bodyParser: false } };
 async function handler(req, res) {
@@ -47,18 +47,29 @@ async function handler(req, res) {
         }
         const uploadedFile = fileArray[0];
         const mimetype = uploadedFile.mimetype || '';
-        const filename = uploadedFile.originalFilename || 'unknown';
+        const originalFilename = uploadedFile.originalFilename || 'unknown';
+        // Read the file content
+        const fileContent = fs_1.default.readFileSync(uploadedFile.filepath, 'utf8');
         // Process the file with advanced understanding
         try {
-            const result = await (0, advancedDocumentProcessing_1.processDocumentWithUnderstanding)(uploadedFile.filepath, mimetype, filename);
+            const result = await (0, advancedDocumentProcessing_1.processDocumentWithUnderstanding)({
+                text: fileContent,
+                metadata: { mimetype },
+                filename: originalFilename
+            }, {
+                extractEntities: true,
+                summarize: true,
+                categorize: true
+            });
+            // Create a custom analysis object
             const analysisSnippet = {
-                title: result.analysis.title,
-                topics: result.analysis.topics,
-                contentType: result.analysis.contentType,
-                technicalLevel: result.analysis.technicalLevel,
+                title: originalFilename,
+                topics: result.entities || [],
+                contentType: mimetype,
+                technicalLevel: 3, // Default value
             };
             return res.status(200).json({
-                message: `Document processed with advanced understanding. Created ${result.chunkCount} smart chunks.`,
+                message: `Document processed with advanced understanding. Created smart chunks.`,
                 analysis: analysisSnippet
             });
         }

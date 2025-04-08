@@ -1,229 +1,180 @@
 "use strict";
 /**
- * Re-ranking Module
+ * Reranking Module for Smart Query Routing
  *
- * This module provides LLM-based re-ranking functionality for search results,
- * improving result relevance by using AI to judge the quality of each result
- * in relation to the user's query.
+ * This module applies LLM-based reranking to improve search result ordering.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_RERANKING_OPTIONS = void 0;
-exports.rerankResults = rerankResults;
-exports.rerankResultsWithExplanations = rerankResultsWithExplanations;
+exports.rerank = rerank;
 const openaiClient_1 = require("./openaiClient");
 const errorHandling_1 = require("./errorHandling");
 /**
- * Default re-ranking options
- */
-exports.DEFAULT_RERANKING_OPTIONS = {
-    returnTopN: 5,
-    model: 'gpt-3.5-turbo',
-    parallelBatching: true,
-    timeoutMs: 10000,
-    batchSize: 5,
-    debug: false
-};
-/**
- * Re-rank search results using LLM relevance judgments
+ * Reranks search results based on relevance to the query
  *
- * This function takes the results from hybrid search and uses an LLM to
- * evaluate how relevant each document is to the original query.
+ * @param query The original user query
+ * @param results The search results to rerank
+ * @param topK Number of top results to return
+ * @param options Optional reranking configuration
+ * @returns Reranked results (topK of them)
  */
-async function rerankResults(query, results, options = {}) {
-    // Apply default options
-    const config = { ...exports.DEFAULT_RERANKING_OPTIONS, ...options };
-    if (config.debug) {
-        console.log(`Re-ranking ${results.length} results for query: "${query}"`);
-    }
-    // Early return if no results
-    if (!results || results.length === 0) {
-        return [];
+async function rerank(query, results, topK = results.length, options = {}) {
+    // No need to rerank if we have 0 or 1 results
+    if (results.length <= 1) {
+        return results;
     }
     try {
-        // Split results into batches to avoid context limits
-        const batches = [];
-        for (let i = 0; i < results.length; i += config.batchSize) {
-            batches.push(results.slice(i, i + config.batchSize));
-        }
-        if (config.debug) {
-            console.log(`Created ${batches.length} batches for re-ranking`);
-        }
-        // Process each batch either in parallel or sequentially
-        let rerankedResults = [];
-        if (config.parallelBatching) {
-            // Process batches in parallel with timeout protection
-            const batchPromises = batches.map((batch, idx) => processReRankingBatch(query, batch, idx, config));
-            // Wait for all batches with timeout
-            const batchesWithTimeout = await Promise.all(batchPromises.map(promise => Promise.race([
-                promise,
-                new Promise((resolve) => setTimeout(() => resolve([]), config.timeoutMs))
-            ])));
-            // Flatten batch results
-            rerankedResults = batchesWithTimeout.flat();
-        }
-        else {
-            // Process batches sequentially
-            for (let i = 0; i < batches.length; i++) {
-                const batchResults = await processReRankingBatch(query, batches[i], i, config);
-                rerankedResults = [...rerankedResults, ...batchResults];
+        // Convert results to HybridSearchResult format if needed
+        const hybridResults = results.map((result) => {
+            // If it's already a HybridSearchResult, return it as is
+            if (result.metadata && result.bm25Score !== undefined && result.vectorScore !== undefined) {
+                return result;
             }
-        }
-        // Sort by final score (descending) and limit to top N
-        const sortedResults = rerankedResults
-            .sort((a, b) => b.finalScore - a.finalScore)
-            .slice(0, config.returnTopN);
-        if (config.debug) {
-            console.log(`Re-ranking complete. Returning top ${sortedResults.length} results`);
-            sortedResults.forEach((result, i) => {
-                console.log(`[${i + 1}] Final score: ${result.finalScore.toFixed(3)} (BM25: ${result.originalResult.bm25Score.toFixed(3)}, Vector: ${result.originalResult.vectorScore.toFixed(3)}, Rerank: ${result.rerankScore.toFixed(3)})`);
-            });
-        }
-        return sortedResults;
-    }
-    catch (error) {
-        (0, errorHandling_1.logError)(error, 'rerankResults');
-        // Fall back to original results on error
-        const fallbackResults = results.map(result => ({
-            originalResult: result,
-            rerankScore: result.combinedScore * 10, // Scale up to 0-10 range
-            finalScore: result.combinedScore
-        }));
-        return fallbackResults
-            .sort((a, b) => b.finalScore - a.finalScore)
-            .slice(0, config.returnTopN);
-    }
-}
-/**
- * Process a batch of results for re-ranking
- */
-async function processReRankingBatch(query, batch, batchIndex, config) {
-    try {
-        // Create a system prompt that explains how to judge relevance
-        const systemPrompt = `You are a document relevance judge. Your task is to evaluate how relevant each document is to the given query on a scale of 0-10, where:
-- 10: Perfect match that directly and completely answers the query with specific details
-- 7-9: Highly relevant with most key information related to the query
-- 4-6: Somewhat relevant but lacks specific details or only partially addresses the query
-- 1-3: Only tangentially related to the query
-- 0: Not relevant at all
-
-Focus on how well the document answers the specific information need in the query.
-Return a JSON object with your numerical scores in this format:
-{"scores": [number, number, ...]}`;
-        // Create a user prompt with the query and documents to score
-        const userPrompt = `Query: ${query}
-
-${batch.map((result, i) => `DOCUMENT ${batchIndex * config.batchSize + i + 1}:
-${result.item.text.substring(0, 600)}${result.item.text.length > 600 ? '...' : ''}`).join('\n\n')}
-
-Provide a relevance score from 0-10 for each document based on how well it answers the query.`;
-        // Generate scores using the LLM
-        const response = await (0, openaiClient_1.generateStructuredResponse)(systemPrompt, userPrompt, { scores: [] }, config.model);
-        // Extract scores from the response
-        const scores = (response === null || response === void 0 ? void 0 : response.scores) || [];
-        if (config.debug) {
-            console.log(`Batch ${batchIndex + 1} re-ranking scores:`, scores);
-        }
-        // Map scores to results
-        return batch.map((result, idx) => {
-            const rerankScore = scores[idx] !== undefined ? scores[idx] : 5; // Default to middle score if missing
-            // Calculate final score - weighted combination of original score and rerank score
-            // Original score is typically 0-1, rerank score is 0-10, so normalize
-            const vectorWeight = 0.3;
-            const bm25Weight = 0.2;
-            const rerankWeight = 0.5; // Higher weight for LLM judgment
-            const finalScore = (vectorWeight * result.vectorScore) +
-                (bm25Weight * result.bm25Score) +
-                (rerankWeight * (rerankScore / 10));
+            // Otherwise, create a compatible structure
             return {
-                originalResult: result,
-                rerankScore,
-                finalScore
+                item: {
+                    ...result.item,
+                    // Add required VectorStoreItem fields
+                    embedding: result.item.embedding || [], // Empty array if not present
+                    id: result.item.id || `result-${Math.random().toString(36).substring(2, 9)}`
+                },
+                score: result.score,
+                bm25Score: result.bm25Score || 0,
+                vectorScore: result.vectorScore || 0,
+                metadata: {
+                    matchesCategory: true,
+                    categoryBoost: 0,
+                    technicalLevelMatch: 1
+                }
             };
         });
+        // Default options
+        const model = options.model || 'gpt-3.5-turbo';
+        const timeoutMs = options.timeoutMs || 10000;
+        console.log(`[Reranking] Reranking ${hybridResults.length} results with model: ${model}`);
+        // Create prompt for the reranker
+        const systemPrompt = `
+      You are a Search Result Evaluator. Your task is to rank search results by relevance to the query.
+      Assign a score from 0-10 for each result where:
+      - 10: Perfect match that directly and comprehensively answers the query
+      - 7-9: Highly relevant with most information needed
+      - 4-6: Moderately relevant with partial information
+      - 1-3: Slightly relevant but missing key information
+      - 0: Completely irrelevant
+      
+      Focus on semantic relevance, factual accuracy, and information completeness.
+      
+      IMPORTANT: You must respond with a valid JSON array of objects, where each object has resultId and score properties.
+    `;
+        // Prepare results for evaluation
+        const formattedResults = hybridResults.map((result, i) => {
+            // Truncate content to a reasonable length for evaluation
+            const content = result.item.text.length > 500
+                ? result.item.text.substring(0, 500) + '...'
+                : result.item.text;
+            return `[${i + 1}] ${content}`;
+        }).join('\n\n');
+        // User prompt with query and results
+        const userPrompt = `
+      Query: "${query}"
+      
+      Search Results:
+      ${formattedResults}
+      
+      Evaluate the relevance of each search result to the query. Return a JSON array where each item has:
+      - resultId: The result number (1, 2, etc.)
+      - score: A relevance score from 0-10
+      ${options.includeExplanations ? '- explanation: Brief justification for the score' : ''}
+      
+      Format your response as a JSON array ONLY, with no additional text. Example:
+      [{"resultId": 1, "score": 7.5}, {"resultId": 2, "score": 4.2}]
+    `;
+        // Set up timeout
+        const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => resolve(null), timeoutMs);
+        });
+        // Request reranking with timeout
+        const rerankerPromise = (0, openaiClient_1.generateStructuredResponse)(systemPrompt, userPrompt, {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    resultId: { type: 'integer' },
+                    score: { type: 'number' },
+                    explanation: { type: 'string' }
+                },
+                required: ['resultId', 'score']
+            }
+        }, model);
+        // Race between reranker and timeout
+        const rerankerResponse = await Promise.race([rerankerPromise, timeoutPromise]);
+        // Handle timeout
+        if (!rerankerResponse) {
+            console.log(`[Reranking] Timed out after ${timeoutMs}ms, using original order`);
+            return hybridResults.slice(0, topK);
+        }
+        // Ensure rerankerResponse is an array before mapping
+        let responseArray = rerankerResponse;
+        if (!Array.isArray(rerankerResponse)) {
+            console.log(`[Reranking] Response is not an array, attempting to parse. Got: ${typeof rerankerResponse}`);
+            // If response is an object with a property that contains an array, extract it
+            if (typeof rerankerResponse === 'object' && rerankerResponse !== null) {
+                for (const key in rerankerResponse) {
+                    if (Array.isArray(rerankerResponse[key])) {
+                        responseArray = rerankerResponse[key];
+                        console.log(`[Reranking] Found array in response under key: ${key}`);
+                        break;
+                    }
+                }
+            }
+            // If we still don't have an array, fall back to original order
+            if (!Array.isArray(responseArray)) {
+                // Try to parse as JSON if it's a string
+                if (typeof rerankerResponse === 'string') {
+                    try {
+                        const parsed = JSON.parse(rerankerResponse);
+                        if (Array.isArray(parsed)) {
+                            responseArray = parsed;
+                            console.log('[Reranking] Successfully parsed string as JSON array');
+                        }
+                    }
+                    catch (e) {
+                        console.log('[Reranking] Failed to parse string as JSON');
+                    }
+                }
+                // If still not an array, use original order
+                if (!Array.isArray(responseArray)) {
+                    console.log('[Reranking] Could not convert response to array, using original order');
+                    return hybridResults.slice(0, topK);
+                }
+            }
+        }
+        // Parse and map reranking results
+        const rerankedResults = responseArray
+            .map((item) => {
+            // Use 0-based index to access results array
+            const resultIndex = Math.max(0, (parseInt(item.resultId, 10) || 1) - 1);
+            // Ensure index is valid
+            const resultItem = resultIndex < hybridResults.length
+                ? hybridResults[resultIndex]
+                : hybridResults[0];
+            return {
+                original: resultItem,
+                relevanceScore: item.score || 0,
+                explanation: item.explanation
+            };
+        })
+            // Sort by relevance score in descending order
+            .sort((a, b) => b.relevanceScore - a.relevanceScore);
+        console.log(`[Reranking] Successfully reranked results`);
+        // Return the top K results in reranked order
+        return rerankedResults
+            .slice(0, topK)
+            .map((item) => item.original);
     }
     catch (error) {
-        (0, errorHandling_1.logError)(error, `processReRankingBatch_${batchIndex}`);
-        // Fallback - use original scores
-        return batch.map(result => ({
-            originalResult: result,
-            rerankScore: result.combinedScore * 10, // Scale up to 0-10 range
-            finalScore: result.combinedScore
-        }));
-    }
-}
-/**
- * Enhanced version of reranking that provides explanation for each score
- * Useful for debugging and understanding why results were ranked as they were
- */
-async function rerankResultsWithExplanations(query, results, options = {}) {
-    const config = { ...exports.DEFAULT_RERANKING_OPTIONS, ...options };
-    // Process just the top result for detailed analysis
-    const topResult = results.length > 0 ? results[0] : null;
-    if (!topResult) {
-        return [];
-    }
-    try {
-        // Get the text of the top result for the LLM to evaluate
-        const documentText = topResult.item.text.substring(0, 800);
-        // Create a system prompt for explaining relevance (without requiring JSON)
-        const systemPrompt = `You are a document relevance judge. 
-Your task is to evaluate how relevant a document is to a user query on a scale of 0-10.
-Provide your evaluation in the following format:
-Score: [NUMBER]/10
-Explanation: [YOUR EXPLANATION]
-
-Be specific about why the document is or isn't relevant to the query.`;
-        // Create a detailed user prompt
-        const userPrompt = `Query: "${query}"
-
-Document:
-${documentText}
-
-Evaluate the relevance of this document to the query. Score it from 0-10 and explain your reasoning in 1-2 sentences.`;
-        // Generate response without requiring JSON format
-        const response = await (0, openaiClient_1.generateChatCompletion)(systemPrompt, userPrompt, config.model, false // Don't use JSON mode
-        );
-        // Parse the response to extract score and explanation
-        const scoreRegex = /Score:\s*(\d+(?:\.\d+)?)\s*\/\s*10/i;
-        const explanationRegex = /Explanation:\s*(.*?)(?:\n|$)/is;
-        const scoreMatch = response.match(scoreRegex);
-        const explanationMatch = response.match(explanationRegex);
-        const score = scoreMatch ? parseFloat(scoreMatch[1]) : 5;
-        const explanation = explanationMatch ? explanationMatch[1].trim() : response;
-        // Return the result with explanation
-        return [{
-                originalResult: topResult,
-                rerankScore: score,
-                finalScore: (0.5 * (score / 10)) + (0.5 * topResult.combinedScore), // Weighted combination
-                explanation: explanation || "No explanation provided"
-            }];
-    }
-    catch (error) {
-        console.error('Error in rerankResultsWithExplanations:', error);
-        // Try with fallback model if main model fails
-        try {
-            const fallbackModel = config.model === 'gpt-4' ? 'gpt-3.5-turbo' : 'gpt-3.5-turbo';
-            const fallbackSystemPrompt = `You are evaluating document relevance. Rate the document's relevance to the query from 0-10 and explain why.`;
-            const fallbackUserPrompt = `Query: ${query}\n\nDocument: ${topResult.item.text.substring(0, 400)}`;
-            const fallbackResponse = await (0, openaiClient_1.generateChatCompletion)(fallbackSystemPrompt, fallbackUserPrompt, fallbackModel, false);
-            // Extract a score if possible
-            const scoreMatch = fallbackResponse.match(/(\d+(?:\.\d+)?)\s*\/\s*10/);
-            const score = scoreMatch ? parseFloat(scoreMatch[1]) : 5;
-            return [{
-                    originalResult: topResult,
-                    rerankScore: score,
-                    finalScore: topResult.combinedScore,
-                    explanation: fallbackResponse
-                }];
-        }
-        catch (fallbackError) {
-            // Final fallback with default values
-            return [{
-                    originalResult: topResult,
-                    rerankScore: 5,
-                    finalScore: topResult.combinedScore,
-                    explanation: "Unable to generate explanation due to an error."
-                }];
-        }
+        // Log error and fall back to original ranking
+        (0, errorHandling_1.logError)('[Reranking] Error during reranking', String(error));
+        console.log('[Reranking] Falling back to original ranking due to error');
+        return results.slice(0, topK);
     }
 }
