@@ -26,6 +26,7 @@ import {
   getAllCategories 
 } from './documentCategories';
 import { VectorStoreItem } from './vectorStore';
+import { parseEntities } from './metadataUtils';
 
 // Define a default BASE_CATEGORY_HIERARCHY if the import fails
 export const DEFAULT_CATEGORY_HIERARCHY: CategoryHierarchy[] = [
@@ -379,83 +380,48 @@ export function getAllEntitiesFromDocuments(
   documents.forEach(doc => {
     if (!doc.metadata?.entities) return;
     
-    // Entities might be stored as a JSON string or already as an object
-    let entities: any;
+    // Use our parseEntities utility function to handle different formats
+    const parsedEntities = parseEntities(doc.metadata.entities);
     
-    if (typeof doc.metadata.entities === 'string') {
-      try {
-        entities = JSON.parse(doc.metadata.entities);
-      } catch (e) {
-        // If parsing fails, skip this document
-        return;
+    // Process all entities by their type
+    parsedEntities.forEach(entity => {
+      if (!entity || !entity.name || !entity.type) return;
+      
+      const entityName = entity.name;
+      const type = entity.type.toLowerCase();
+      
+      // Map entity types to our collection categories
+      if (type === 'person') {
+        const count = entityTypes.people.get(entityName) || 0;
+        entityTypes.people.set(entityName, count + entity.mentions || count + 1);
+      } else if (type === 'organization' || type === 'company') {
+        const count = entityTypes.companies.get(entityName) || 0;
+        entityTypes.companies.set(entityName, count + entity.mentions || count + 1);
+      } else if (type === 'product') {
+        const count = entityTypes.products.get(entityName) || 0;
+        entityTypes.products.set(entityName, count + entity.mentions || count + 1);
+      } else if (type === 'feature') {
+        const count = entityTypes.features.get(entityName) || 0;
+        entityTypes.features.set(entityName, count + entity.mentions || count + 1);
       }
-    } else {
-      entities = doc.metadata.entities;
-    }
-    
-    // Process people entities
-    if (entities && entities.people && Array.isArray(entities.people)) {
-      entities.people.forEach((person: any) => {
-        if (typeof person === 'string') {
-          const count = entityTypes.people.get(person) || 0;
-          entityTypes.people.set(person, count + 1);
-        } else if (person && typeof person === 'object' && person.name) {
-          const count = entityTypes.people.get(person.name) || 0;
-          entityTypes.people.set(person.name, count + 1);
-        }
-      });
-    }
-    
-    // Process company entities
-    if (entities && entities.companies && Array.isArray(entities.companies)) {
-      entities.companies.forEach((company: any) => {
-        if (typeof company === 'string') {
-          const count = entityTypes.companies.get(company) || 0;
-          entityTypes.companies.set(company, count + 1);
-        } else if (company && typeof company === 'object' && company.name) {
-          const count = entityTypes.companies.get(company.name) || 0;
-          entityTypes.companies.set(company.name, count + 1);
-        }
-      });
-    }
-    
-    // Process product entities
-    if (entities && entities.products && Array.isArray(entities.products)) {
-      entities.products.forEach((product: any) => {
-        if (typeof product === 'string') {
-          const count = entityTypes.products.get(product) || 0;
-          entityTypes.products.set(product, count + 1);
-        } else if (product && typeof product === 'object' && product.name) {
-          const count = entityTypes.products.get(product.name) || 0;
-          entityTypes.products.set(product.name, count + 1);
-        }
-      });
-    }
-    
-    // Process feature entities
-    if (entities && entities.features && Array.isArray(entities.features)) {
-      entities.features.forEach((feature: any) => {
-        if (typeof feature === 'string') {
-          const count = entityTypes.features.get(feature) || 0;
-          entityTypes.features.set(feature, count + 1);
-        } else if (feature && typeof feature === 'object' && feature.name) {
-          const count = entityTypes.features.get(feature.name) || 0;
-          entityTypes.features.set(feature.name, count + 1);
-        }
-      });
-    }
+    });
   });
   
-  // Convert maps to arrays and sort by count
-  const result: Record<string, { name: string, count: number }[]> = {};
-  
-  for (const [type, countMap] of Object.entries(entityTypes)) {
-    result[type] = Array.from(countMap.entries())
+  // Convert maps to sorted arrays
+  return {
+    people: [...entityTypes.people.entries()]
       .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count);
-  }
-  
-  return result;
+      .sort((a, b) => b.count - a.count),
+    companies: [...entityTypes.companies.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count),
+    products: [...entityTypes.products.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count),
+    features: [...entityTypes.features.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+  };
 }
 
 /**

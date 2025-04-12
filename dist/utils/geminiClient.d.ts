@@ -19,3 +19,30 @@ export declare function generateStructuredGeminiResponse(systemPrompt: string, u
  * @returns Generated text response
  */
 export declare function generateGeminiChatCompletion(systemPrompt: string, userPrompt: string): Promise<string>;
+/**
+ * Extract document context using Gemini to understand the document content
+ * @param documentText The text content of the document to analyze
+ * @param metadata Optional existing metadata to enhance the analysis
+ * @returns Structured document context including summary, topics, and more
+ */
+export declare function extractDocumentContext(documentText: string, metadata?: Record<string, any>): Promise<{
+    summary: string;
+    mainTopics: string[];
+    entities: string[];
+    documentType: string;
+    technicalLevel: number;
+    audienceType: string[];
+}>;
+/**
+ * Generate context for a text chunk based on its content and optional document context
+ * @param chunkText The text content of the chunk
+ * @param documentContext Optional higher-level document context to inform analysis
+ * @returns Structured chunk context including key points and characteristics
+ */
+export declare function generateChunkContext(chunkText: string, documentContext?: any): Promise<{
+    description: string;
+    keyPoints: string[];
+    isDefinition: boolean;
+    containsExample: boolean;
+    relatedTopics: string[];
+}>;

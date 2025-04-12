@@ -10,9 +10,23 @@ export interface ModelSettings {
   defaultModel: string;      // Default model to use for most operations
   fallbackModel: string;     // Fallback model if the default is unavailable
   embeddingModel: string;    // Model to use for text embeddings
+  embeddingDimension: number; // Dimension of embedding vectors
   maxTokens: number;         // Maximum tokens to generate in responses
   temperature: number;       // Default temperature for generation
   systemPrompt: string;      // Default system prompt for RAG queries
+  
+  // New fields for Gemini integration
+  contextGenerationModel: {
+    provider: 'gemini' | 'openai';
+    model: string;
+    temperature: number;
+    maxTokens: number;
+  };
+  rerankerModel: {
+    provider: 'gemini' | 'openai';
+    model: string;
+    temperature: number;
+  };
 }
 
 /**
@@ -20,13 +34,16 @@ export interface ModelSettings {
  */
 export const AI_SETTINGS: ModelSettings = {
   // Default model for standard operations
-  defaultModel: process.env.DEFAULT_LLM_MODEL || 'gpt-4',
+  defaultModel: process.env.DEFAULT_LLM_MODEL || 'gemini-2.0-flash',
   
   // Fallback model when primary is unavailable or for less critical operations
   fallbackModel: process.env.FALLBACK_LLM_MODEL || 'gpt-3.5-turbo-1106',
   
-  // Embedding model for vector operations
-  embeddingModel: process.env.EMBEDDING_MODEL || 'text-embedding-ada-002',
+  // Embedding model for vector operations - MIGRATED TO GEMINI
+  embeddingModel: 'text-embedding-004',
+  
+  // Embedding dimension - 768 for Gemini text-embedding-004
+  embeddingDimension: 768,
   
   // Default max tokens for generation
   maxTokens: 1000,
@@ -39,7 +56,22 @@ export const AI_SETTINGS: ModelSettings = {
 Answer the question based ONLY on the context provided. 
 If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
 Do not make up or infer information that is not in the context.
-Provide concise, accurate responses with all relevant details from the context.`
+Provide concise, accurate responses with all relevant details from the context.`,
+
+  // Updated contextual generation model settings for multi-modal RAG
+  contextGenerationModel: {
+    provider: 'gemini',
+    model: 'gemini-2.0-flash', // Fast model for context generation
+    temperature: 0.2,
+    maxTokens: 1024
+  },
+  
+  // Updated reranker model settings for visual content awareness
+  rerankerModel: {
+    provider: 'gemini',
+    model: 'gemini-2.0-flash', // Use Flash model since Pro is not available
+    temperature: 0.1
+  }
 };
 
 /**
@@ -96,4 +128,99 @@ export function getSystemPromptForQuery(query: string): string {
   }
   
   return SYSTEM_PROMPTS.standard;
-} 
+}
+
+/**
+ * Get model configuration for a specific task
+ * @param config Model settings
+ * @param task The task to get the model for
+ * @returns Model provider, name and settings
+ */
+export function getModelForTask(
+  config: ModelSettings = AI_SETTINGS,
+  task: 'chat' | 'embedding' | 'context' | 'reranking'
+): { provider: string; model: string; settings: any } {
+  switch (task) {
+    case 'chat':
+      // Check the model name to determine the correct provider
+      const modelName = config.defaultModel.toLowerCase();
+      if (modelName.includes('gemini')) {
+        return {
+          provider: 'gemini',
+          model: config.defaultModel,
+          settings: {
+            temperature: config.temperature,
+            maxTokens: config.maxTokens
+          }
+        };
+      } else {
+        // Assume OpenAI for models like gpt-x
+        return {
+          provider: 'openai',
+          model: config.defaultModel,
+          settings: {
+            temperature: config.temperature,
+            maxTokens: config.maxTokens
+          }
+        };
+      }
+    case 'embedding':
+      return {
+        provider: 'gemini', // UPDATED: Always use Gemini for embeddings
+        model: config.embeddingModel,
+        settings: {
+          dimensions: config.embeddingDimension || 768
+        }
+      };
+    case 'context':
+      return {
+        provider: config.contextGenerationModel.provider,
+        model: config.contextGenerationModel.model,
+        settings: {
+          temperature: config.contextGenerationModel.temperature,
+          maxTokens: config.contextGenerationModel.maxTokens
+        }
+      };
+    case 'reranking':
+      return {
+        provider: config.rerankerModel.provider,
+        model: config.rerankerModel.model,
+        settings: {
+          temperature: config.rerankerModel.temperature
+        }
+      };
+    default:
+      // Default case also checks model name
+      const defaultModelName = config.defaultModel.toLowerCase();
+      if (defaultModelName.includes('gemini')) {
+        return {
+          provider: 'gemini',
+          model: config.defaultModel,
+          settings: {
+            temperature: config.temperature,
+            maxTokens: config.maxTokens
+          }
+        };
+      } else {
+        return {
+          provider: 'openai',
+          model: config.defaultModel,
+          settings: {
+            temperature: config.temperature,
+            maxTokens: config.maxTokens
+          }
+        };
+      }
+  }
+}
+
+// Create a default export object with all the named exports as properties
+const modelConfig = {
+  AI_SETTINGS,
+  SYSTEM_PROMPTS,
+  getSystemPromptForQuery,
+  getModelForTask
+};
+
+// Export as default
+export default modelConfig; 

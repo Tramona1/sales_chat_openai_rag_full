@@ -1,6 +1,13 @@
 import fs from 'fs';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse';
+import { extractDocumentContext, generateChunkContext } from './geminiClient';
+import { 
+  ContextualChunk as BaseContextualChunk, 
+  DocumentContext, 
+  SplitIntoChunksWithContextFn,
+  ChunkContext as BaseChunkContext 
+} from '../types/documentProcessing';
 
 export type SupportedMimeType = 
   | 'application/pdf'
@@ -472,4 +479,262 @@ function findLastSentence(text: string): string | null {
     return sentences[sentences.length - 1];
   }
   return null;
+}
+
+/**
+ * Split text into chunks with enhanced contextual information
+ * 
+ * This advanced chunking method extracts contextual information about each chunk
+ * to improve retrieval accuracy and answer generation quality.
+ * 
+ * @param text The text to split into chunks
+ * @param chunkSize Size of each chunk
+ * @param source Source identifier for the document
+ * @param generateContext Whether to generate context for each chunk
+ * @param existingContext Optional existing document context to use
+ * @returns Array of chunks with contextual metadata
+ */
+export const splitIntoChunksWithContext: SplitIntoChunksWithContextFn = async (
+  text,
+  chunkSize = 500,
+  source = 'unknown',
+  generateContext = true,
+  existingContext
+) => {
+  // First, generate chunks using the standard method as a base
+  const baseChunks = splitIntoChunks(text, chunkSize, source);
+  
+  // If context generation is disabled, return the base chunks
+  if (!generateContext) {
+    return baseChunks as BaseContextualChunk[];
+  }
+  
+  // Extract document-level context if not already provided
+  let documentContext: DocumentContext;
+  try {
+    if (existingContext) {
+      documentContext = existingContext as DocumentContext;
+      console.log('Using provided document context');
+    } else {
+      console.log('Extracting document context...');
+      documentContext = await extractDocumentContext(text);
+      console.log('Document context extracted successfully');
+    }
+  } catch (error) {
+    console.error('Error extracting document context:', error);
+    // If document context extraction fails, return base chunks
+    return baseChunks as BaseContextualChunk[];
+  }
+  
+  // Process each chunk to add contextual information
+  const enhancedChunks: BaseContextualChunk[] = [];
+  console.log(`Processing ${baseChunks.length} chunks for contextual enhancement...`);
+  
+  // Process chunks in batches to avoid overwhelming the API
+  const batchSize = 5;
+  for (let i = 0; i < baseChunks.length; i += batchSize) {
+    const batch = baseChunks.slice(i, i + batchSize);
+    const batchPromises = batch.map(async (chunk) => {
+      try {
+        // Skip empty chunks
+        if (!chunk.text.trim()) {
+          return {
+            text: chunk.text,
+            metadata: chunk.metadata
+          } as BaseContextualChunk;
+        }
+        
+        // Generate context for this chunk
+        const chunkContext = await generateChunkContext(chunk.text, documentContext);
+        
+        // Create enhanced chunk with context
+        return {
+          text: chunk.text,
+          metadata: {
+            ...(chunk.metadata || {}),
+            source,
+            context: chunkContext
+          }
+        } as BaseContextualChunk;
+      } catch (error) {
+        console.error(`Error generating context for chunk: ${error}`);
+        // If chunk context generation fails, return the base chunk
+        return {
+          text: chunk.text,
+          metadata: chunk.metadata
+        } as BaseContextualChunk;
+      }
+    });
+    
+    // Wait for all chunks in this batch to be processed
+    const processBatchResults = await Promise.all(batchPromises);
+    enhancedChunks.push(...processBatchResults);
+    
+    console.log(`Processed batch ${Math.ceil(i / batchSize) + 1}/${Math.ceil(baseChunks.length / batchSize)}`);
+  }
+  
+  console.log(`Enhanced ${enhancedChunks.length} chunks with contextual information`);
+  return enhancedChunks;
+};
+
+/**
+ * Prepare text for embedding by adding contextual information
+ * @param chunk Chunk with text and metadata
+ * @returns Enhanced text string to be embedded
+ */
+export function prepareTextForEmbedding(chunk: BaseContextualChunk): string {
+  // Convert to our extended type
+  const extendedChunk = asExtendedChunk(chunk);
+  
+  // Start with original text
+  const originalText = extendedChunk.text;
+  const contextParts: string[] = [];
+  
+  // Add source if available
+  if (extendedChunk.metadata?.source) {
+    contextParts.push(`Source: ${extendedChunk.metadata.source}`);
+  }
+  
+  // --- DOCUMENT CONTEXT ---
+  if (extendedChunk.metadata?.context) {
+    // Convert to our extended context type
+    const extendedContext = asExtendedContext(extendedChunk.metadata.context);
+    
+    if (extendedContext.document) {
+      const docContext = extendedContext.document;
+      
+      // Add document summary
+      if (docContext.summary) {
+        contextParts.push(`Document summary: ${docContext.summary}`);
+      }
+      
+      // Add document topics
+      if (docContext.mainTopics && docContext.mainTopics.length > 0) {
+        contextParts.push(`Document topics: ${docContext.mainTopics.join(', ')}`);
+      }
+      
+      // Add document type and technical level
+      if (docContext.documentType) {
+        let docTypeInfo = `Document type: ${docContext.documentType}`;
+        if (docContext.technicalLevel !== undefined) {
+          const techLevelTerms = ['non-technical', 'basic', 'intermediate', 'advanced'];
+          const techLevel = techLevelTerms[Math.min(docContext.technicalLevel, 3)];
+          docTypeInfo += `, ${techLevel} level`;
+        }
+        contextParts.push(docTypeInfo);
+      }
+      
+      // Add audience information
+      if (docContext.audienceType && docContext.audienceType.length > 0) {
+        contextParts.push(`Audience: ${docContext.audienceType.join(', ')}`);
+      }
+    }
+  }
+  
+  // --- CHUNK CONTEXT ---
+  if (extendedChunk.metadata?.context) {
+    const context = extendedChunk.metadata.context;
+    
+    // Add chunk description
+    if (context.description) {
+      contextParts.push(`Content: ${context.description}`);
+    }
+    
+    // Add key points
+    if (context.keyPoints && context.keyPoints.length > 0) {
+      contextParts.push(`Key points: ${context.keyPoints.join('; ')}`);
+    }
+    
+    // Add semantic markers for special content types
+    const contentMarkers = [];
+    if (context.isDefinition) {
+      contentMarkers.push('definition');
+    }
+    if (context.containsExample) {
+      contentMarkers.push('example');
+    }
+    if (contentMarkers.length > 0) {
+      contextParts.push(`Contains: ${contentMarkers.join(', ')}`);
+    }
+    
+    // Add related topics for better semantic search
+    if (context.relatedTopics && context.relatedTopics.length > 0) {
+      contextParts.push(`Related topics: ${context.relatedTopics.join(', ')}`);
+    }
+  }
+  
+  // --- VISUAL CONTENT ---
+  // Add visual content information if available
+  if (extendedChunk.metadata?.hasVisualContent && Array.isArray(extendedChunk.visualContent) && extendedChunk.visualContent.length > 0) {
+    const visualDescriptions = extendedChunk.visualContent.map((visual: {
+      type: string;
+      description?: string;
+      detectedText?: string;
+      extractedText?: string;
+    }) => {
+      let desc = `${visual.type}`;
+      if (visual.description) {
+        desc += `: ${visual.description.substring(0, 100)}`;
+      }
+      if (visual.detectedText) {
+        const truncatedText = visual.detectedText.length > 50 
+          ? visual.detectedText.substring(0, 50) + '...' 
+          : visual.detectedText;
+        desc += ` [Text: ${truncatedText}]`;
+      }
+      return desc;
+    });
+    
+    contextParts.push(`Visual content: ${visualDescriptions.join(' | ')}`);
+  }
+  
+  // Add structured info type if available
+  if (extendedChunk.metadata?.isStructured && extendedChunk.metadata?.infoType) {
+    contextParts.push(`Content type: ${extendedChunk.metadata.infoType.replace(/_/g, ' ')}`);
+  }
+  
+  // If we have contextual parts, format them as a structured context prefix
+  if (contextParts.length > 0) {
+    // Group context by categories to make it more readable and useful for embedding
+    return `[CONTEXT: ${contextParts.join(' | ')}] ${originalText}`;
+  }
+  
+  // If no context is available, return the original text
+  return originalText;
+}
+
+// Extend the ChunkContext interface to add the document property
+export interface ChunkContext extends BaseChunkContext {
+  document?: {
+    summary?: string;
+    mainTopics?: string[];
+    documentType?: string;
+    technicalLevel?: number;
+    audienceType?: string[];
+  };
+}
+
+// Extend the ContextualChunk interface to add visual content support
+export interface ContextualChunk extends BaseContextualChunk {
+  visualContent?: Array<{
+    type: string;
+    description: string;
+    extractedText?: string;
+    detectedText?: string;
+    path?: string;
+    position?: any;
+  }>;
+  metadata?: BaseContextualChunk['metadata'] & {
+    hasVisualContent?: boolean;
+  };
+}
+
+// Type assertion function to ensure we're using our extended interfaces
+function asExtendedChunk(chunk: BaseContextualChunk): ContextualChunk {
+  return chunk as ContextualChunk;
+}
+
+// Type assertion function to ensure we're using our extended context interface
+function asExtendedContext(context: BaseChunkContext): ChunkContext {
+  return context as ChunkContext;
 } 

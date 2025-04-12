@@ -4,6 +4,11 @@
  *
  * This script rebuilds the corpus statistics for the BM25 search algorithm
  * with an emphasis on better handling company-specific information queries.
+ *
+ * IMPORTANT: This script uses the prepared text field (with contextual information)
+ * rather than the originalText field to ensure consistency between vector search
+ * and BM25 search. This ensures that keyword search and vector search operate
+ * over the same contextually-enhanced representation.
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -32,6 +37,8 @@ function tokenizeText(text) {
  */
 async function rebuildCorpusStats() {
     console.log('Rebuilding corpus statistics for BM25 search...');
+    console.log('Using the prepared text field with contextual information (same as what was embedded)');
+    console.log('This ensures consistency between vector search and BM25 search, with both operating over the same enhanced representation.');
     try {
         // Create corpus stats directory if it doesn't exist
         if (!fs_1.default.existsSync(CORPUS_STATS_PATH)) {
@@ -57,10 +64,13 @@ async function rebuildCorpusStats() {
             if (index % 100 === 0) {
                 console.log(`Processing item ${index + 1}/${documentCount}...`);
             }
-            // Ensure item has text
+            // CRITICAL: Use the 'text' field that was prepared with context (same as what was embedded)
+            // This is the key to consistency between vector search and BM25 search
             const text = item.text || '';
-            if (!text)
+            if (!text) {
+                console.warn(`Item at index ${index} has no text field. Skipping.`);
                 return;
+            }
             // Tokenize document
             const tokens = tokenizeText(text);
             // Record unique tokens in this document for document frequency
@@ -80,6 +90,22 @@ async function rebuildCorpusStats() {
                     const categoryToken = item.metadata.category.toString().toLowerCase();
                     termFrequencies[categoryToken] = (termFrequencies[categoryToken] || 0) + 5;
                     documentFrequencies[categoryToken] = (documentFrequencies[categoryToken] || 0) + 1;
+                }
+                // Add document type as a term if available
+                if (item.metadata.documentType) {
+                    const docTypeToken = item.metadata.documentType.toString().toLowerCase();
+                    termFrequencies[docTypeToken] = (termFrequencies[docTypeToken] || 0) + 4;
+                    documentFrequencies[docTypeToken] = (documentFrequencies[docTypeToken] || 0) + 1;
+                }
+                // Add primary topics as terms if available
+                if (item.metadata.primaryTopics) {
+                    const topics = item.metadata.primaryTopics.toString().toLowerCase().split(/,\s*/);
+                    topics.forEach(topic => {
+                        if (topic.length > 0) {
+                            termFrequencies[topic] = (termFrequencies[topic] || 0) + 3;
+                            documentFrequencies[topic] = (documentFrequencies[topic] || 0) + 1;
+                        }
+                    });
                 }
                 // Add source domain as terms
                 if (item.metadata.source) {

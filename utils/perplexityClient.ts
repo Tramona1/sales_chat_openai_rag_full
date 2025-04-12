@@ -6,21 +6,27 @@
  */
 
 import axios from 'axios';
-import { logError } from './errorHandling';
+import { logError } from './logger';
 import { cacheWithExpiry, getFromCache, logPerplexityUsage } from './perplexityUtils';
+import { createServiceClient } from './supabaseClient';
 
-// API constants
-const API_KEY = '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';
+// API constants - Load from environment variables
+const API_KEY = process.env.PERPLEXITY_API_KEY || '';
 const API_URL = 'https://api.perplexity.ai/chat/completions';
 
 // Cache settings
-const COMPANY_INFO_CACHE_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours
-const RATE_LIMIT_WINDOW = 60 * 60 * 1000; // 1 hour
-const MAX_CALLS_PER_WINDOW = 10; // Maximum API calls per window
+const CACHE_HOURS = parseInt(process.env.PERPLEXITY_CACHE_HOURS || '24', 10);
+const COMPANY_INFO_CACHE_TIMEOUT = CACHE_HOURS * 60 * 60 * 1000; // Convert hours to milliseconds
+const SUPABASE_CACHE_TABLE = 'company_information_cache';
 
-// Rate limiting state
-let apiCallsInWindow = 0;
-let windowStartTime = Date.now();
+// Feature flag check functions
+function isPerplexityEnabled(): boolean {
+  return process.env.USE_PERPLEXITY === 'true';
+}
+
+function isCompanyResearchOnly(): boolean {
+  return process.env.PERPLEXITY_COMPANY_RESEARCH_ONLY === 'true';
+}
 
 // Type definitions for better type safety
 export interface CompanyInformation {
@@ -35,23 +41,193 @@ export interface CompanyInformation {
   isRateLimited: boolean;
 }
 
-export interface CompanyIdentity {
+// Type definitions for Supabase cache
+interface CompanyCache {
+  id: string; // company name (URL encoded)
+  data: CompanyInformation;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+}
+
+/**
+ * Verify if a company exists and get the correct company name
+ * 
+ * @param companyName Name of the company to verify
+ * @returns Verification result with company details
+ */
+export async function verifyCompanyIdentity(
+  companyName: string
+): Promise<{
   exists: boolean;
   fullName?: string;
   description?: string;
   industry?: string;
   isRateLimited: boolean;
-}
+}> {
+  try {
+    // Check if Perplexity is enabled
+    if (!isPerplexityEnabled()) {
+      logError('Perplexity API is disabled by configuration', new Error('USE_PERPLEXITY is not set to true'));
+      return { 
+        exists: false, 
+        isRateLimited: true,
+        description: 'Perplexity API is disabled. Please enable it in the configuration.'
+      };
+    }
 
-// Reset rate limit counter
-function checkAndResetRateLimit() {
-  const now = Date.now();
-  if (now - windowStartTime > RATE_LIMIT_WINDOW) {
-    apiCallsInWindow = 0;
-    windowStartTime = now;
-    return true;
+    // First check if we have a valid API key
+    if (!API_KEY) {
+      logError('Perplexity API key is missing', new Error('PERPLEXITY_API_KEY environment variable is not set'));
+      return { 
+        exists: false, 
+        isRateLimited: true,
+        description: 'API key configuration error. Please contact support.'
+      };
+    }
+
+    // Generate cache key
+    const cacheKey = `company_verify_${encodeURIComponent(companyName.toLowerCase().trim())}`;
+    
+    // Try to get from in-memory cache first
+    const cachedData = getFromCache(cacheKey);
+    if (cachedData) {
+      logPerplexityUsage('verifyCompanyIdentity.cacheHit', { companyName });
+      return cachedData as {
+        exists: boolean;
+        fullName?: string;
+        description?: string;
+        industry?: string;
+        isRateLimited: boolean;
+      };
+    }
+    
+    // Try to get from Supabase cache
+    const supabase = createServiceClient();
+    const { data: supabaseCache, error: supabaseError } = await supabase
+      .from(SUPABASE_CACHE_TABLE)
+      .select('*')
+      .eq('id', cacheKey)
+      .single();
+    
+    if (!supabaseError && supabaseCache && new Date(supabaseCache.expires_at) > new Date()) {
+      // Cache the data in memory too
+      cacheWithExpiry(cacheKey, supabaseCache.data, 
+        new Date(supabaseCache.expires_at).getTime() - Date.now());
+      
+      logPerplexityUsage('verifyCompanyIdentity.supabaseCacheHit', { companyName });
+      return supabaseCache.data as {
+        exists: boolean;
+        fullName?: string;
+        description?: string;
+        industry?: string;
+        isRateLimited: boolean;
+      };
+    }
+
+    // Create a verification prompt
+    const prompt = `Verify if the company "${companyName}" exists. If it does, provide this exact information in a concise format:
+1. The full and correct company name
+2. A one-sentence description
+3. Industry/sector
+
+If the company doesn't exist or is not a real business, respond with "Company not found."
+Keep your response brief and factual.`;
+
+    // Prepare API request - using 'low' search mode to minimize costs
+    const response = await axios.post(
+      API_URL,
+      {
+        model: "sonar",
+        messages: [
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 200,
+        search_context_size: "low"
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    // Track API usage
+    logPerplexityUsage('verifyCompanyIdentity.apiCall', { 
+      companyName,
+      promptTokens: response.data.usage?.prompt_tokens,
+      completionTokens: response.data.usage?.completion_tokens
+    });
+    
+    // Extract company verification information
+    const responseContent = response.data.choices[0].message.content;
+    
+    // Check if company was found
+    const notFoundPattern = /company not found|couldn't find|unable to find|no specific information|not enough information/i;
+    if (notFoundPattern.test(responseContent)) {
+      const result = {
+        exists: false,
+        isRateLimited: false
+      };
+      
+      // Cache the result
+      cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
+      
+      // Store in Supabase cache
+      const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
+      await supabase
+        .from(SUPABASE_CACHE_TABLE)
+        .upsert({
+          id: cacheKey,
+          data: result,
+          expires_at: expiresAt.toISOString()
+        }, { onConflict: 'id' });
+      
+      return result;
+    }
+    
+    // Extract structured data (simple regex extraction)
+    const nameMatch = responseContent.match(/^(.+?)(?:is|:|\n)/i);
+    const descriptionMatch = responseContent.match(/description:?\s*([^\.]+)/i) || 
+      responseContent.match(/(\b[A-Z][^\.]+?\.)/);
+    const industryMatch = responseContent.match(/industry:?\s*([^\.]+)/i) || 
+      responseContent.match(/sector:?\s*([^\.]+)/i);
+    
+    // Construct result
+    const result = {
+      exists: true,
+      fullName: nameMatch?.[1]?.trim() || companyName,
+      description: descriptionMatch?.[1]?.trim(),
+      industry: industryMatch?.[1]?.trim(),
+      isRateLimited: false
+    };
+    
+    // Cache the result
+    cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
+    
+    // Store in Supabase cache
+    const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
+    await supabase
+      .from(SUPABASE_CACHE_TABLE)
+      .upsert({
+        id: cacheKey,
+        data: result,
+        expires_at: expiresAt.toISOString()
+      }, { onConflict: 'id' });
+    
+    return result;
+    
+  } catch (error) {
+    logError('Error verifying company identity', error);
+    
+    // Return an error result
+    return {
+      exists: false,
+      isRateLimited: false,
+      description: 'Error verifying company. Please try again later.'
+    };
   }
-  return apiCallsInWindow < MAX_CALLS_PER_WINDOW;
 }
 
 /**
@@ -72,36 +248,68 @@ export async function getCompanyInformation(
   } = {}
 ): Promise<CompanyInformation> {
   try {
-    const cacheKey = `company_info_${companyName.toLowerCase().trim().replace(/\s+/g, '_')}`;
-    
-    // Check cache first unless force refresh is requested
-    if (!options.forceRefresh) {
-      const cachedInfo = getFromCache<CompanyInformation>(cacheKey);
-      if (cachedInfo) {
-        logPerplexityUsage('getCompanyInformation.cache', { companyName, fromCache: true });
-        return {
-          ...cachedInfo,
-          isRateLimited: false
-        };
-      }
-    }
-    
-    // Check rate limiting
-    if (!checkAndResetRateLimit()) {
-      logPerplexityUsage('getCompanyInformation.rateLimit', { 
-        companyName, 
-        apiCallsInWindow,
-        windowStartTime
-      });
-      
-      return {
-        companyInfo: `Rate limit reached. Unable to fetch fresh information about ${companyName} at this time.`,
+    // Check if Perplexity is enabled
+    if (!isPerplexityEnabled()) {
+      logError('Perplexity API is disabled by configuration', new Error('USE_PERPLEXITY is not set to true'));
+      return { 
+        companyInfo: 'Perplexity API is disabled. Please enable it in the configuration.',
         citations: [],
         lastUpdated: new Date(),
         isRateLimited: true
       };
     }
+
+    // Check if we should only allow company research
+    if (isCompanyResearchOnly() && !companyName.trim()) {
+      return {
+        companyInfo: 'Company name is required for research.',
+        citations: [],
+        lastUpdated: new Date(),
+        isRateLimited: false
+      };
+    }
+
+    // First check if we have a valid API key
+    if (!API_KEY) {
+      logError('Perplexity API key is missing', new Error('PERPLEXITY_API_KEY environment variable is not set'));
+      return { 
+        companyInfo: 'API key configuration error. Please contact support.',
+        citations: [],
+        lastUpdated: new Date(),
+        isRateLimited: true
+      };
+    }
+
+    // Generate cache key
+    const cacheKey = `company_info_${encodeURIComponent(companyName.toLowerCase().trim())}`;
     
+    // Skip cache if forceRefresh is true
+    if (!options.forceRefresh) {
+      // Try to get from in-memory cache first
+      const cachedData = getFromCache(cacheKey);
+      if (cachedData) {
+        logPerplexityUsage('getCompanyInformation.cacheHit', { companyName });
+        return cachedData as CompanyInformation;
+      }
+      
+      // Try to get from Supabase cache
+      const supabase = createServiceClient();
+      const { data: supabaseCache, error: supabaseError } = await supabase
+        .from(SUPABASE_CACHE_TABLE)
+        .select('*')
+        .eq('id', cacheKey)
+        .single();
+      
+      if (!supabaseError && supabaseCache && new Date(supabaseCache.expires_at) > new Date()) {
+        // Cache the data in memory too
+        cacheWithExpiry(cacheKey, supabaseCache.data, 
+          new Date(supabaseCache.expires_at).getTime() - Date.now());
+        
+        logPerplexityUsage('getCompanyInformation.supabaseCacheHit', { companyName });
+        return supabaseCache.data as CompanyInformation;
+      }
+    }
+
     // Create a comprehensive prompt to get company information
     const prompt = `I need a comprehensive business profile about the company "${companyName}". Please include:
 1. What they do and what industry they're in
@@ -133,12 +341,10 @@ Format the information in clear sections and be factual. If you can't find relia
       }
     );
     
-    // Increment API call counter
-    apiCallsInWindow++;
+    // Track API usage
     logPerplexityUsage('getCompanyInformation.apiCall', { 
       companyName, 
       searchMode,
-      apiCallsInWindow,
       promptTokens: response.data.usage?.prompt_tokens,
       completionTokens: response.data.usage?.completion_tokens
     });
@@ -155,13 +361,14 @@ Format the information in clear sections and be factual. If you can't find relia
     const websiteMatch = companyInfo.match(/website:?\s*([^\.]+)/i) || companyInfo.match(/URL:?\s*([^\.]+)/i);
     const foundedMatch = companyInfo.match(/founded:?\s*([^\.]+)/i) || companyInfo.match(/established:?\s*([^\.]+)/i);
     
+    // Construct result object
     const result: CompanyInformation = {
       companyInfo,
-      industry: industryMatch ? industryMatch[1].trim() : undefined,
-      size: sizeMatch ? sizeMatch[1].trim() : undefined,
-      location: locationMatch ? locationMatch[1].trim() : undefined,
-      website: websiteMatch ? websiteMatch[1].trim() : undefined,
-      founded: foundedMatch ? foundedMatch[1].trim() : undefined,
+      industry: industryMatch?.[1]?.trim(),
+      size: sizeMatch?.[1]?.trim(),
+      location: locationMatch?.[1]?.trim(),
+      website: websiteMatch?.[1]?.trim(),
+      founded: foundedMatch?.[1]?.trim(),
       citations,
       lastUpdated: new Date(),
       isRateLimited: false
@@ -170,131 +377,27 @@ Format the information in clear sections and be factual. If you can't find relia
     // Cache the result
     cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
     
-    return result;
-  } catch (error) {
-    logPerplexityUsage('getCompanyInformation.error', { companyName }, error);
+    // Store in Supabase cache
+    const supabase = createServiceClient();
+    const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
+    await supabase
+      .from(SUPABASE_CACHE_TABLE)
+      .upsert({
+        id: cacheKey,
+        data: result,
+        expires_at: expiresAt.toISOString()
+      }, { onConflict: 'id' });
     
+    return result;
+    
+  } catch (error) {
+    logError('Error fetching company information', error);
+    
+    // Return a minimal result with the error
     return {
-      companyInfo: `Unable to fetch information about ${companyName}. Please try again later.`,
+      companyInfo: `Error: Unable to fetch information about ${companyName}. Please try again later.`,
       citations: [],
       lastUpdated: new Date(),
-      isRateLimited: false
-    };
-  }
-}
-
-/**
- * Verify if a company exists and get basic identification
- * 
- * This provides a lighter-weight API call to confirm company identity
- * before fetching full details.
- * 
- * @param companyName Name to verify
- * @returns Company verification object
- */
-export async function verifyCompanyIdentity(
-  companyName: string
-): Promise<CompanyIdentity> {
-  try {
-    const cacheKey = `company_verify_${companyName.toLowerCase().trim().replace(/\s+/g, '_')}`;
-    
-    // Check cache first
-    const cachedInfo = getFromCache<CompanyIdentity>(cacheKey);
-    if (cachedInfo) {
-      logPerplexityUsage('verifyCompanyIdentity.cache', { companyName, fromCache: true });
-      return {
-        ...cachedInfo,
-        isRateLimited: false
-      };
-    }
-    
-    // Check rate limiting
-    if (!checkAndResetRateLimit()) {
-      logPerplexityUsage('verifyCompanyIdentity.rateLimit', { 
-        companyName, 
-        apiCallsInWindow,
-        windowStartTime
-      });
-      
-      return {
-        exists: false,
-        isRateLimited: true
-      };
-    }
-    
-    // Create a focused prompt just to verify existence and basic info
-    const prompt = `I need to verify if a company named "${companyName}" exists. If it does, provide only:
-1. The company's full official name
-2. A one-sentence description of what they do
-3. Their primary industry
-Do not provide any other information. If you can't find specific information about this company, respond with "Company not found" or if you find multiple distinct companies with this name, list the top 2-3 options.`;
-
-    // Prepare API request - using 'low' search mode to minimize costs
-    const response = await axios.post(
-      API_URL,
-      {
-        model: "sonar",
-        messages: [
-          { role: "user", content: prompt }
-        ],
-        max_tokens: 200,
-        search_context_size: "low"
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    // Increment API call counter
-    apiCallsInWindow++;
-    logPerplexityUsage('verifyCompanyIdentity.apiCall', { 
-      companyName,
-      apiCallsInWindow,
-      promptTokens: response.data.usage?.prompt_tokens,
-      completionTokens: response.data.usage?.completion_tokens
-    });
-    
-    // Extract company verification information
-    const responseContent = response.data.choices[0].message.content;
-    
-    // Check if company was found
-    const notFoundPattern = /company not found|couldn't find|unable to find|no specific information|not enough information/i;
-    if (notFoundPattern.test(responseContent)) {
-      const result: CompanyIdentity = {
-        exists: false,
-        isRateLimited: false
-      };
-      cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
-      return result;
-    }
-    
-    // Extract structured data (simple regex extraction)
-    const nameMatch = responseContent.match(/^(.+?)(?:is|:|\n)/i);
-    const descriptionMatch = responseContent.match(/description:?\s*([^\.]+)/i) || 
-                           responseContent.match(/(\b[A-Z][^\.]+?\.)/);
-    const industryMatch = responseContent.match(/industry:?\s*([^\.]+)/i) || 
-                         responseContent.match(/sector:?\s*([^\.]+)/i);
-    
-    const result: CompanyIdentity = {
-      exists: true,
-      fullName: nameMatch ? nameMatch[1].trim() : companyName,
-      description: descriptionMatch ? descriptionMatch[1].trim() : undefined,
-      industry: industryMatch ? industryMatch[1].trim() : undefined,
-      isRateLimited: false
-    };
-    
-    // Cache the result
-    cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
-    
-    return result;
-  } catch (error) {
-    logPerplexityUsage('verifyCompanyIdentity.error', { companyName }, error);
-    
-    return {
-      exists: false,
       isRateLimited: false
     };
   }

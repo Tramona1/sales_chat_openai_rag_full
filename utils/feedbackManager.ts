@@ -6,7 +6,7 @@
  */
 
 import axios from 'axios';
-import { logError } from './errorHandling';
+import { logError } from './logger';
 
 // Helper function to get the base URL
 const getBaseUrl = () => {

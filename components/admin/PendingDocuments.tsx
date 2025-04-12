@@ -13,6 +13,7 @@ import Alert from '../ui/Alert';
 import DataGrid from '../ui/DataGrid';
 import TextField from '../ui/TextField';
 import { DocumentCategory, QualityFlag } from '../../types/metadata';
+import { parseEntities } from '../../utils/metadataUtils';
 
 // Interface for value formatter params
 interface GridValueFormatterParams {
@@ -607,17 +608,16 @@ const MetadataViewer = ({ document }: { document: PendingDocument }) => {
     entities,
   } = document.metadata;
   
-  // Parse entities from JSON string if needed
-  let parsedEntities: any = {};
-  try {
-    if (typeof entities === 'string') {
-      parsedEntities = JSON.parse(entities);
-    } else if (entities) {
-      parsedEntities = entities;
-    }
-  } catch (e) {
-    console.error('Error parsing entities', e);
-  }
+  // Use our utility function to parse entities
+  const parsedEntities = parseEntities(entities);
+  
+  // Group entities by type for display
+  const groupedEntities = {
+    people: parsedEntities.filter(e => e.type?.toLowerCase() === 'person'),
+    companies: parsedEntities.filter(e => e.type?.toLowerCase() === 'organization'),
+    products: parsedEntities.filter(e => e.type?.toLowerCase() === 'product'),
+    features: parsedEntities.filter(e => e.type?.toLowerCase() === 'feature')
+  };
   
   return (
     <div className="bg-white rounded-lg shadow overflow-hidden">
@@ -628,47 +628,37 @@ const MetadataViewer = ({ document }: { document: PendingDocument }) => {
         </p>
       </div>
       
-      <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Primary metadata */}
-        <div className="space-y-3">
+      <div className="p-4 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-500">Document Summary</label>
+          <p className="mt-1 text-sm text-gray-900">{summary || 'No summary available'}</p>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-500">Primary Category</label>
-            <span className="mt-1 text-sm text-gray-900 bg-blue-50 px-2 py-1 rounded inline-block">
-              {primaryCategory || 'Uncategorized'}
-            </span>
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-500">Technical Level</label>
-            <div className="mt-1 flex items-center">
-              <div className="relative w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                <div
-                  className="absolute h-full bg-blue-600"
-                  style={{ width: `${(technicalLevel || 1) * 10}%` }}
-                ></div>
-              </div>
-              <span className="ml-2 text-sm text-gray-700">
-                {technicalLevel || 1}/10
+            <div className="mt-1">
+              <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                {primaryCategory || 'Uncategorized'}
               </span>
             </div>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-500">Summary</label>
-            <p className="mt-1 text-sm text-gray-900 bg-gray-50 p-2 rounded">
-              {summary || document.contentPreview}
-            </p>
+            <label className="block text-sm font-medium text-gray-500">Technical Level</label>
+            <div className="mt-1">
+              <span className="text-sm bg-purple-100 text-purple-800 px-2 py-1 rounded">
+                Level {technicalLevel || '?'} / 10
+              </span>
+            </div>
           </div>
-        </div>
-        
-        {/* Category hierarchy */}
-        <div className="space-y-3">
+          
           <div>
             <label className="block text-sm font-medium text-gray-500">Secondary Categories</label>
             <div className="mt-1 flex flex-wrap gap-1">
               {secondaryCategories.length > 0 ? (
                 secondaryCategories.map((cat) => (
-                  <span key={cat} className="text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded">
+                  <span key={cat} className="text-xs bg-blue-50 text-blue-800 px-2 py-1 rounded">
                     {cat}
                   </span>
                 ))
@@ -681,9 +671,9 @@ const MetadataViewer = ({ document }: { document: PendingDocument }) => {
           <div>
             <label className="block text-sm font-medium text-gray-500">Industry Categories</label>
             <div className="mt-1 flex flex-wrap gap-1">
-              {industryCategories.length > 0 ? (
+              {industryCategories && industryCategories.length > 0 ? (
                 industryCategories.map((cat) => (
-                  <span key={cat} className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded">
+                  <span key={cat} className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded">
                     {cat}
                   </span>
                 ))
@@ -696,7 +686,7 @@ const MetadataViewer = ({ document }: { document: PendingDocument }) => {
           <div>
             <label className="block text-sm font-medium text-gray-500">Function Categories</label>
             <div className="mt-1 flex flex-wrap gap-1">
-              {functionCategories.length > 0 ? (
+              {functionCategories && functionCategories.length > 0 ? (
                 functionCategories.map((cat) => (
                   <span key={cat} className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
                     {cat}
@@ -734,10 +724,10 @@ const MetadataViewer = ({ document }: { document: PendingDocument }) => {
             <div>
               <label className="block text-xs font-medium text-gray-400">People</label>
               <ul className="mt-1 text-xs text-gray-900">
-                {parsedEntities.people && parsedEntities.people.length > 0 ? (
-                  parsedEntities.people.map((person: any, idx: number) => (
+                {groupedEntities.people.length > 0 ? (
+                  groupedEntities.people.map((person, idx) => (
                     <li key={idx} className="bg-red-50 px-2 py-1 mb-1 rounded">
-                      {typeof person === 'string' ? person : person.name}
+                      {person.name} {person.mentions > 1 && <span className="text-gray-500 text-xs">({person.mentions})</span>}
                     </li>
                   ))
                 ) : (
@@ -750,10 +740,10 @@ const MetadataViewer = ({ document }: { document: PendingDocument }) => {
             <div>
               <label className="block text-xs font-medium text-gray-400">Companies</label>
               <ul className="mt-1 text-xs text-gray-900">
-                {parsedEntities.companies && parsedEntities.companies.length > 0 ? (
-                  parsedEntities.companies.map((company: any, idx: number) => (
+                {groupedEntities.companies.length > 0 ? (
+                  groupedEntities.companies.map((company, idx) => (
                     <li key={idx} className="bg-blue-50 px-2 py-1 mb-1 rounded">
-                      {typeof company === 'string' ? company : company.name}
+                      {company.name} {company.mentions > 1 && <span className="text-gray-500 text-xs">({company.mentions})</span>}
                     </li>
                   ))
                 ) : (
@@ -766,10 +756,10 @@ const MetadataViewer = ({ document }: { document: PendingDocument }) => {
             <div>
               <label className="block text-xs font-medium text-gray-400">Products</label>
               <ul className="mt-1 text-xs text-gray-900">
-                {parsedEntities.products && parsedEntities.products.length > 0 ? (
-                  parsedEntities.products.map((product: any, idx: number) => (
+                {groupedEntities.products.length > 0 ? (
+                  groupedEntities.products.map((product, idx) => (
                     <li key={idx} className="bg-green-50 px-2 py-1 mb-1 rounded">
-                      {typeof product === 'string' ? product : product.name}
+                      {product.name} {product.mentions > 1 && <span className="text-gray-500 text-xs">({product.mentions})</span>}
                     </li>
                   ))
                 ) : (

@@ -1,18 +1,28 @@
+/**
+ * Error handling utilities
+ * 
+ * This module provides utilities for handling errors in a consistent way.
+ */
+
 import { OpenAI } from 'openai';
-import { getConfig } from './config';
 
-// Get the config
-const config = getConfig();
-
-// Browser-compatible logging configuration
-const LOG_LEVEL = {
+// Simple configuration based on environment variables
+// This avoids the dependency on the config module which is causing issues
+const LOG_LEVEL_MAP = {
   debug: 0,
   info: 1,
   warn: 2,
   error: 3
 };
 
-const currentLevel = LOG_LEVEL[config.logging?.level || 'info'];
+type LogLevel = keyof typeof LOG_LEVEL_MAP;
+
+// Get log level from environment or default to 'info'
+const configuredLogLevel = (process.env.LOG_LEVEL || 'info').toLowerCase() as LogLevel;
+const currentLevel = LOG_LEVEL_MAP[configuredLogLevel in LOG_LEVEL_MAP ? configuredLogLevel : 'info'];
+
+// Error levels
+export const LOG_LEVEL = LOG_LEVEL_MAP;
 
 // Custom error classes for better error identification
 export class DocumentProcessingError extends Error {
@@ -78,8 +88,8 @@ export function handleError(error: unknown, context: string): Error {
     return handleOpenAIError(error);
   }
   
-  if (error instanceof DocumentProcessingError || 
-      error instanceof AIModelError || 
+  if (error instanceof DocumentProcessingError ||
+      error instanceof AIModelError ||
       error instanceof VectorStoreError ||
       error instanceof NetworkError ||
       error instanceof QueryProcessingError) {
@@ -110,9 +120,7 @@ export async function safeExecute<T>(
   }
 }
 
-/**
- * Standard API error response format
- */
+// API error response interface
 export interface ApiErrorResponse {
   error: {
     message: string;
@@ -197,15 +205,13 @@ export function formatValidationError(message: string, fieldErrors?: Record<stri
 /**
  * Log error in browser-compatible way
  */
-export function logError(message: string, error?: any, level: keyof typeof LOG_LEVEL = 'error') {
-  // Skip logging if level is below the configured level
-  if (LOG_LEVEL[level] < currentLevel) {
+export function logError(message: string, error?: any, level: keyof typeof LOG_LEVEL_MAP = 'error') {
+  if (LOG_LEVEL_MAP[level] < currentLevel) {
     return;
   }
-
+  
   // In browser - use console for logging
   console.error(`[${level.toUpperCase()}] ${message}`, error);
-  
   // No file system operations in this browser-compatible version
 }
 
@@ -213,7 +219,7 @@ export function logError(message: string, error?: any, level: keyof typeof LOG_L
  * Log warning in browser-compatible way
  */
 export function logWarning(message: string, data?: any) {
-  if (currentLevel <= LOG_LEVEL.warn) {
+  if (currentLevel <= LOG_LEVEL_MAP.warn) {
     console.warn(`[WARN] ${message}`, data);
   }
 }
@@ -222,7 +228,7 @@ export function logWarning(message: string, data?: any) {
  * Log info in browser-compatible way
  */
 export function logInfo(message: string, data?: any) {
-  if (currentLevel <= LOG_LEVEL.info) {
+  if (currentLevel <= LOG_LEVEL_MAP.info) {
     console.info(`[INFO] ${message}`, data);
   }
 }
@@ -231,7 +237,7 @@ export function logInfo(message: string, data?: any) {
  * Log debug in browser-compatible way
  */
 export function logDebug(message: string, data?: any) {
-  if (currentLevel <= LOG_LEVEL.debug) {
+  if (currentLevel <= LOG_LEVEL_MAP.debug) {
     console.debug(`[DEBUG] ${message}`, data);
   }
 }

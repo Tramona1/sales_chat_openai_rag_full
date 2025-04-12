@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { standardizeApiErrorResponse } from '../../../utils/errorHandling';
-import { getAllVectorStoreItems, VectorStoreItem } from '../../../utils/vectorStore';
+import { logInfo, logError } from '../../../utils/logger';
+import { supabaseAdmin } from '../../../utils/supabaseClient';
 
 // Extended metadata interface that includes common date fields
 interface ExtendedMetadata {
@@ -24,125 +25,89 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const contentType = req.query.contentType as string | undefined;
     const recentlyApproved = req.query.recentlyApproved === 'true';
     
-    // Get documents from vector store
-    console.log('Fetching vector store items...');
-    const vectorStoreItems = getAllVectorStoreItems();
-    console.log(`Retrieved ${vectorStoreItems.length} vector store items`);
+    logInfo('Fetching documents from Supabase');
     
-    // Sort items by lastUpdated date (newest first) or any available date field
-    console.log('Sorting items by recency...');
-    const sortedItems = [...vectorStoreItems].sort((a, b) => {
-      // Get timestamp from item metadata, trying different common date fields
-      const getTimestamp = (item: VectorStoreItem): number => {
-        if (!item.metadata) return 0;
-        
-        // Cast to our extended metadata type
-        const meta = item.metadata as ExtendedMetadata;
-        
-        // Try different date fields in order of preference
-        const dateField = meta.lastUpdated || meta.timestamp || meta.createdAt;
-        
-        if (dateField) {
-          try {
-            return new Date(dateField).getTime();
-          } catch (e) {
-            return 0;
-          }
-        }
-        
-        return 0;
-      };
-      
-      const timestampA = getTimestamp(a);
-      const timestampB = getTimestamp(b);
-      
-      // Sort newest first
-      return timestampB - timestampA;
-    });
+    // Build the query
+    let query = supabaseAdmin
+      .from('documents')
+      .select(`
+        id,
+        title,
+        source_url,
+        mime_type,
+        created_at,
+        updated_at,
+        metadata,
+        document_chunks (
+          id,
+          chunk_index,
+          content,
+          metadata
+        )
+      `);
     
-    // If we have a search term, filter the items before limiting
-    let filteredItems = sortedItems;
+    // Apply search term filter if provided
     if (searchTerm) {
-      console.log(`Searching for "${searchTerm}" in ${sortedItems.length} documents`);
-      filteredItems = sortedItems.filter(item => {
-        // Search in text content
-        const textMatch = item.text && item.text.toLowerCase().includes(searchTerm);
-        
-        // Search in source
-        const sourceMatch = item.metadata?.source && 
-          (item.metadata.source as string).toLowerCase().includes(searchTerm);
-        
-        // Search in other metadata fields that might contain relevant information
-        const metadataMatch = item.metadata && Object.entries(item.metadata).some(([key, value]) => {
-          // Skip source since we already checked it
-          if (key === 'source') return false;
-          
-          // Check if the value is a string and contains the search term
-          return typeof value === 'string' && value.toLowerCase().includes(searchTerm);
-        });
-        
-        return textMatch || sourceMatch || metadataMatch;
-      });
-      console.log(`Found ${filteredItems.length} matching documents`);
+      logInfo(`Filtering by search term: ${searchTerm}`);
+      query = query.or(`title.ilike.%${searchTerm}%,source_url.ilike.%${searchTerm}%,document_chunks.content.ilike.%${searchTerm}%`);
     }
     
-    // Filter by content type if specified
+    // Apply content type filter if provided
     if (contentType && contentType !== 'all') {
-      filteredItems = filteredItems.filter(item => {
-        // Safely check if contentType exists in metadata
-        const itemContentType = item.metadata && (item.metadata as any).contentType;
-        return itemContentType === contentType;
-      });
-      console.log(`Filtered to ${filteredItems.length} documents with content type: ${contentType}`);
+      logInfo(`Filtering by content type: ${contentType}`);
+      query = query.eq('mime_type', contentType);
     }
     
-    // Filter recently approved items if requested
+    // Apply recently approved filter if requested
     if (recentlyApproved) {
+      logInfo('Filtering recently approved documents');
       const oneDayAgo = new Date();
       oneDayAgo.setDate(oneDayAgo.getDate() - 1);
-      
-      filteredItems = filteredItems.filter(item => {
-        const approvalDate = item.metadata?.approvedAt 
-          ? new Date(item.metadata.approvedAt) 
-          : item.metadata?.lastUpdated 
-            ? new Date(item.metadata.lastUpdated)
-            : null;
-        
-        return approvalDate && approvalDate > oneDayAgo;
-      });
-      console.log(`Filtered to ${filteredItems.length} recently approved documents`);
+      query = query.gt('updated_at', oneDayAgo.toISOString());
     }
     
-    // Get the total count before applying the limit
-    const totalFilteredCount = filteredItems.length;
+    // Execute the query
+    const { data: documentsData, error: documentsError, count } = await query
+      .order('updated_at', { ascending: false })
+      .limit(limit);
     
-    // Apply the limit
-    const limitedItems = filteredItems.slice(0, limit);
+    if (documentsError) {
+      throw documentsError;
+    }
     
-    // Transform items to the format expected by the UI
-    console.log(`Processing ${limitedItems.length} items for UI display`);
-    const documents = limitedItems.map((item: VectorStoreItem) => ({
-      id: item.metadata?.source || `doc-${Math.random().toString(36).substring(7)}`,
-      source: item.metadata?.source || 'Unknown Source',
-      text: item.text || '',
-      metadata: {
-        ...item.metadata,
-        // Ensure source is always available
-        source: item.metadata?.source || 'Unknown Source',
-      }
-    }));
+    logInfo(`Retrieved ${documentsData?.length || 0} documents from Supabase`);
     
-    console.log(`Returning ${documents.length} documents to client (total available: ${totalFilteredCount})`);
+    // Format documents for the UI
+    const documents = documentsData?.map(doc => {
+      // Get a sample of the document content from its chunks
+      const firstChunk = doc.document_chunks && doc.document_chunks.length > 0 
+        ? doc.document_chunks[0].content 
+        : '';
+      
+      return {
+        id: doc.id,
+        source: doc.title || doc.source_url || 'Unknown Source',
+        text: firstChunk,
+        metadata: {
+          ...doc.metadata,
+          source: doc.title || doc.source_url || 'Unknown Source',
+          mimeType: doc.mime_type,
+          createdAt: doc.created_at,
+          updatedAt: doc.updated_at,
+          chunkCount: doc.document_chunks?.length || 0
+        }
+      };
+    }) || [];
     
     // Return the documents
+    logInfo(`Returning ${documents.length} documents to client`);
     return res.status(200).json({
       documents,
-      total: totalFilteredCount,
+      total: count || documents.length,
       limit
     });
   } catch (error) {
-    console.error('Error fetching documents:', error);
-    const errorResponse = standardizeApiErrorResponse(error);
-    return res.status(500).json(errorResponse);
+    logError('Error fetching documents:', error);
+    return res.status(500).json(standardizeApiErrorResponse(error));
   }
-} 
+}

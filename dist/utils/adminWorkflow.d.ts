@@ -10,6 +10,12 @@ interface StoredPendingDocument {
     metadata: PendingDocumentMetadata;
     text: string;
     embedding?: number[];
+    chunks?: Array<{
+        text: string;
+        embedding?: number[];
+        metadata?: any;
+    }>;
+    hasContextualChunks: boolean;
     submittedAt: string;
 }
 interface ApprovalDecision {
@@ -17,14 +23,33 @@ interface ApprovalDecision {
     reviewerComments?: string;
     reviewedBy?: string;
 }
+interface ContextualChunk {
+    text: string;
+    metadata?: {
+        isStructured?: boolean;
+        infoType?: string;
+        context?: {
+            description?: string;
+            keyPoints?: string[];
+            isDefinition?: boolean;
+            containsExample?: boolean;
+            relatedTopics?: string[];
+        };
+    };
+}
 /**
  * Get all pending documents
  */
 export declare function getPendingDocuments(): Promise<StoredPendingDocument[]>;
 /**
  * Add a document to the pending queue
+ * @param text The document text
+ * @param metadata Document metadata
+ * @param embedding Optional document embedding
+ * @param contextualChunks Optional array of contextual chunks
+ * @returns Document ID
  */
-export declare function addToPendingDocuments(text: string, metadata: EnhancedMetadata, embedding?: number[]): Promise<string>;
+export declare function addToPendingDocuments(text: string, metadata: EnhancedMetadata, embedding?: number[] | null, contextualChunks?: ContextualChunk[] | null): Promise<string>;
 /**
  * Get a specific pending document by ID
  */

@@ -1,231 +1,358 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { analyzeQuery, getRetrievalParameters } from '@/utils/queryAnalysis';
-import { performHybridSearch } from '@/utils/hybridSearch';
-import { expandQuery } from '@/utils/queryExpansion';
-import { rerank } from '@/utils/reranking';
-import { generateAnswer } from '@/utils/answerGenerator';
-import { logError, standardizeApiErrorResponse } from '@/utils/errorHandling';
+import { analyzeQuery, getRetrievalParameters } from '../../utils/queryAnalysis';
+import { standardizeApiErrorResponse } from '../../utils/errorHandling';
+import { logError, logInfo, logDebug, logWarning } from '../../utils/logger';
+import * as modelConfig from '../../utils/modelConfig';
+// TEMPORARY FIX: Hardcode feature flags instead of importing
+// import { isFeatureEnabled } from '../../utils/featureFlags';
+import { recordMetric } from '../../utils/performanceMonitoring';
+import { MultiModalVectorStoreItem } from '../../types/vectorStore';
+import { testSupabaseConnection } from '../../utils/supabaseClient';
 
-// Simple logger that works without external dependencies
-const logger = {
-  info: (message: string, ...args: any[]) => console.log(`[INFO] ${message}`, ...args),
-  debug: (message: string, ...args: any[]) => console.log(`[DEBUG] ${message}`, ...args),
-  error: (message: string, ...args: any[]) => console.error(`[ERROR] ${message}`, ...args)
+// TEMPORARY FIX: Hardcode feature flags
+const FEATURE_FLAGS = {
+  contextualReranking: true,
+  contextualEmbeddings: true,
+  multiModalSearch: true
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Only allow POST requests
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed', message: 'Only POST requests are allowed' });
-  }
+// Define a type for the modules we'll import dynamically
+interface DynamicModules {
+  hybridSearch: any;
+  fallbackSearch: any;
+  rerank: any;
+  analyzeQuery: any;
+  generateAnswer: any;
+  performMultiModalSearch?: any;
+  performVectorSearch?: any;
+  performBM25Search?: any;
+  [key: string]: any;
+}
 
-  logger.info('Query API: Request received');
+// Import at runtime to avoid TypeScript import resolution issues
+async function importModules(): Promise<DynamicModules> {
+  try {
+    // Check if Supabase is configured and connected
+    const isSupabaseConnected = await testSupabaseConnection();
+    
+    if (!isSupabaseConnected) {
+      logError('Supabase is not connected, some features may not work correctly');
+    }
+    
+    // Import the modules we need
+    const { hybridSearch, fallbackSearch } = await import('../../utils/hybridSearch');
+    const { rerank } = await import('../../utils/reranking');
+    const { analyzeQuery } = await import('../../utils/queryAnalysis');
+    const { generateAnswer } = await import('../../utils/answerGeneration');
+    
+    // Import Supabase-specific modules if available
+    let supabaseModules: Partial<DynamicModules> = {};
+    if (isSupabaseConnected) {
+      try {
+        const { performMultiModalSearch } = await import('../../utils/multiModalProcessing');
+        const { performVectorSearch } = await import('../../utils/vectorSearch');
+        const { performBM25Search } = await import('../../utils/bm25Search');
+        
+        supabaseModules = {
+          performMultiModalSearch,
+          performVectorSearch,
+          performBM25Search
+        };
+      } catch (importError) {
+        logError('Error importing Supabase-specific modules:', importError);
+      }
+    }
+    
+    return {
+      hybridSearch,
+      fallbackSearch,
+      rerank,
+      analyzeQuery,
+      generateAnswer,
+      ...supabaseModules
+    };
+  } catch (error) {
+    console.error('Error importing modules:', error);
+    throw error;
+  }
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const startTime = Date.now();
+  
+  // Only allow POST method
+  if (req.method !== 'POST') {
+    recordMetric('api', 'query', Date.now() - startTime, false, { error: 'Method not allowed' });
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
   
   try {
-    const { query, conversationId, messages, options = {}, context = '' } = req.body;
+    // Verify Supabase connection
+    const isSupabaseConnected = await testSupabaseConnection();
+    if (!isSupabaseConnected) {
+      logWarning('Supabase connection failed, falling back to local data if available');
+    } else {
+      logInfo('Supabase connected successfully');
+    }
     
+    // Load modules dynamically
+    const modules = await importModules();
+    
+    // Extract query parameters
+    const { 
+      query, 
+      limit = 5, 
+      useContextualRetrieval = true,
+      includeSourceDocuments = false,
+      includeSourceCitations = true,
+      conversationHistory = '',
+      searchMode = 'hybrid',
+      includeVisualContent = false,
+      visualTypes = [] 
+    } = req.body;
+    
+    // Validate query
     if (!query || typeof query !== 'string') {
-      return res.status(400).json({
-        error: 'Bad Request', 
-        message: 'Query parameter is required and must be a string'
+      recordMetric('api', 'query', Date.now() - startTime, false, { error: 'Invalid query' });
+      return res.status(400).json({ error: 'Query is required and must be a string' });
+    }
+    
+    // Track query timing
+    const retrievalStartTime = Date.now();
+    
+    // Analyze query and determine the best search strategy
+    const queryAnalysis = await modules.analyzeQuery(query);
+    
+    // Check if contextual retrieval is enabled by feature flags
+    // TEMPORARY FIX: Use hardcoded flags instead of isFeatureEnabled
+    const contextualRetrievalEnabled = FEATURE_FLAGS.contextualReranking && 
+                                       FEATURE_FLAGS.contextualEmbeddings &&
+                                       useContextualRetrieval;
+    
+    // Flag to check if we should use multi-modal search
+    // TEMPORARY FIX: Use hardcoded flags instead of isFeatureEnabled
+    const useMultiModal = includeVisualContent && 
+                          FEATURE_FLAGS.multiModalSearch && 
+                          'performMultiModalSearch' in modules;
+    
+    let searchResults;
+    let searchError = null;
+    
+    logInfo(`Performing ${searchMode} search for query: "${query}"`);
+    
+    // Choose search strategy based on inputs and feature flags
+    try {
+      if (useMultiModal) {
+        // Use multi-modal search if visual content is requested
+        if (!modules.performMultiModalSearch) {
+          throw new Error('Multi-modal search requested but not available');
+        }
+        
+        searchResults = await modules.performMultiModalSearch(query, {
+          limit: Math.max(limit * 3, 15), // Retrieve more than needed for reranking
+          includeVisualContent,
+          visualTypes: visualTypes as any[]
+        });
+      } else if (searchMode === 'hybrid') {
+        // Use hybrid search as default
+        searchResults = await modules.hybridSearch(query, { 
+          limit: Math.max(limit * 3, 15) // Retrieve more than needed for reranking
+        });
+      } else if (searchMode === 'vector' && modules.performVectorSearch) {
+        // Use vector search if specified
+        searchResults = await modules.performVectorSearch(query, Math.max(limit * 3, 15));
+      } else if (searchMode === 'bm25' && modules.performBM25Search) {
+        // Use BM25 search if specified
+        searchResults = await modules.performBM25Search(query, Math.max(limit * 3, 15));
+      } else {
+        // Default to hybrid search
+        searchResults = await modules.hybridSearch(query, { 
+          limit: Math.max(limit * 3, 15)
+        });
+      }
+    } catch (error) {
+      // Log search error
+      const errorMessage = error instanceof Error ? error.message : 'Unknown search error';
+      logError(`Search error (${searchMode} mode):`, error);
+      searchError = error instanceof Error ? error : new Error(errorMessage);
+      
+      // Try fallback search if primary search fails
+      try {
+        logInfo('Attempting fallback keyword search');
+        searchResults = await modules.fallbackSearch(query);
+      } catch (fallbackError) {
+        logError('Fallback search also failed:', fallbackError);
+        // Continue with empty results - we'll handle this below
+      }
+    }
+    
+    const retrievalDuration = Date.now() - retrievalStartTime;
+    
+    // If no results, return early
+    if (!searchResults || (Array.isArray(searchResults) ? searchResults.length === 0 : Object.keys(searchResults).length === 0)) {
+      recordMetric('api', 'query', Date.now() - startTime, false, { 
+        error: searchError ? searchError.message : 'No results found',
+        retrievalDuration 
+      });
+      return res.status(404).json({ 
+        error: 'No results found for query', 
+        query, 
+        timings: { retrievalMs: retrievalDuration }
       });
     }
     
-    logger.info(`Query API: Processing query: "${query}" for conversation: ${conversationId}`);
+    // Rerank results if contextual retrieval is enabled
+    const rerankStartTime = Date.now();
+    let rerankedResults;
     
-    // Get chat history for context (from messages or conversationId)
-    const chatHistory = messages || [];
-    logger.info(`Query API: Using chat history with ${chatHistory.length} messages`);
+    if (contextualRetrievalEnabled) {
+      // Use contextual information in reranking
+      rerankedResults = await modules.rerank(query, Array.isArray(searchResults) ? searchResults : Object.values(searchResults), limit, {
+        useContextualInfo: true,
+        includeExplanations: false
+      });
+    } else {
+      // Use standard reranking
+      rerankedResults = await modules.rerank(query, Array.isArray(searchResults) ? searchResults : Object.values(searchResults), limit);
+    }
     
-    // Step 1: Analyze the query to determine optimal retrieval strategy
-    logger.info('Query API: Analyzing query...');
-    const queryAnalysis = await analyzeQuery(query);
-    logger.info(`Query API: Query analysis complete. Primary category: ${queryAnalysis.primaryCategory}, Query type: ${queryAnalysis.queryType}`);
+    const rerankDuration = Date.now() - rerankStartTime;
     
-    // Step 2: Get optimized retrieval parameters based on analysis
-    const retrievalParams = getRetrievalParameters(queryAnalysis);
+    // Generate an answer from the results
+    const answerStartTime = Date.now();
     
-    // Step 3: Prepare the final search options by merging client options and
-    // retrieval parameters (client options take precedence)
-    const searchOptions = {
-      ...retrievalParams,
-      ...options,
-      // Metadata filtering
-      filter: {
-        ...options.filter,
-        // Apply category filter if not overridden by client
-        ...(options.filter?.categories ? {} : {
-          categories: retrievalParams.categoryFilter.categories,
-          strictCategoryMatch: retrievalParams.categoryFilter.strict
-        }),
-        // Apply technical level range if not overridden by client
-        ...(options.filter?.technicalLevel ? {} : {
-          technicalLevelMin: retrievalParams.technicalLevelRange.min,
-          technicalLevelMax: retrievalParams.technicalLevelRange.max
-        })
+    // Check if we have valid results before processing
+    if (!rerankedResults || !Array.isArray(rerankedResults) || rerankedResults.length === 0) {
+      logWarning('No reranked results available, returning empty response');
+      return res.status(404).json({ 
+        error: 'No results found after reranking', 
+        query, 
+        timings: { 
+          retrievalMs: retrievalDuration,
+          rerankingMs: rerankDuration
+        }
+      });
+    }
+    
+    // Process the search results for answer generation with better error handling
+    const searchContext = rerankedResults.map((result: any, index: number) => {
+      // Handle potentially malformed results by providing defaults
+      if (!result) {
+        logWarning(`Result at index ${index} is undefined or null, using default values`);
+        return {
+          text: 'No content available',
+          source: 'Unknown',
+          score: 0,
+          metadata: {}
+        };
       }
-    };
-    
-    console.log('[Query Routing] Analysis:', {
-      query,
-      primaryCategory: queryAnalysis.primaryCategory,
-      queryType: queryAnalysis.queryType, 
-      entities: queryAnalysis.entities.map(e => e.name),
-      hybridRatio: searchOptions.hybridRatio
+
+      // Extract the item safely
+      const item = result.item || result;
+      
+      if (!item) {
+        logWarning(`Item at index ${index} could not be extracted, using default values`);
+        return {
+          text: 'No content available',
+          source: 'Unknown',
+          score: result.score || 0,
+          metadata: {}
+        };
+      }
+
+      // Extract visual content if available and requested
+      let visualContent = null;
+      if (includeVisualContent && 
+          item.visualContent && 
+          Array.isArray(item.visualContent)) {
+        visualContent = item.visualContent.map((vc: any) => ({
+          type: vc.type || 'unknown',
+          description: vc.description || '',
+          text: vc.extractedText || ''
+        }));
+      }
+      
+      // Format the chunk for the answer generation with safe fallbacks
+      return {
+        text: item.text || item.content || 'No content available',
+        source: (item.metadata && item.metadata.source) || item.source || 'Unknown',
+        score: result.score || 0,
+        metadata: item.metadata || {},
+        visualContent
+      };
     });
     
-    // Check for company-specific terms for debugging
-    const companyTerms = ['workstream', 'company', 'pricing', 'product', 'feature', 'plan', 'customer'];
-    const containsCompanyTerms = companyTerms.some(term => query.toLowerCase().includes(term));
-    console.log(`DEBUG: Query contains company terms: ${containsCompanyTerms}`);
+    // Get system prompt for this query
+    const systemPrompt = modelConfig.getSystemPromptForQuery(query);
     
-    // Step 4: Expand query if needed
-    let processedQuery = query;
-    if (searchOptions.expandQuery) {
-      try {
-        const expandedResult = await expandQuery(query);
-        processedQuery = expandedResult.expandedQuery;
-        console.log(`DEBUG: Expanded query: "${processedQuery}"`);
-      } catch (err) {
-        console.error('Error expanding query, using original:', err);
+    // Generate the answer
+    const answer = await modules.generateAnswer(
+      query,
+      searchContext,
+      {
+        systemPrompt,
+        includeSourceCitations,
+        maxSourcesInAnswer: includeSourceDocuments ? limit : 3,
+        conversationHistory: conversationHistory || '',
       }
-    }
-    
-    // Step 5: Perform hybrid search with optimal parameters
-    console.log(`DEBUG: Performing hybrid search for "${processedQuery}" with hybridRatio ${searchOptions.hybridRatio}`);
-    const searchResults = await performHybridSearch(
-      processedQuery, 
-      searchOptions.limit || 10,
-      searchOptions.hybridRatio || 0.5,
-      searchOptions.filter
     );
     
-    console.log(`DEBUG: Hybrid search found ${searchResults.length} results`);
-    if (searchResults.length > 0) {
-      console.log(`DEBUG: Top result score: ${searchResults[0].score.toFixed(4)}`);
-      if (searchResults[0].item && searchResults[0].item.metadata) {
-        console.log(`DEBUG: Top result source: ${searchResults[0].item.metadata.source || 'Unknown'}`);
-        console.log(`DEBUG: Top result excerpt: ${searchResults[0].item.text.substring(0, 150)}...`);
-      }
-    } else {
-      console.log(`DEBUG: No results found. This may indicate an issue with the vector store or search parameters.`);
-    }
+    const answerDuration = Date.now() - answerStartTime;
+    const totalDuration = Date.now() - startTime;
     
-    // Step 6: Apply re-ranking if enabled
-    let finalResults = searchResults;
-    if (searchOptions.rerank) {
-      const rerankCount = searchOptions.rerankCount || 20;
-      try {
-        // Add required metadata field for reranking
-        const enhancedResults = searchResults.map(result => ({
-          ...result,
-          metadata: {
-            matchesCategory: true,
-            categoryBoost: 0,
-            technicalLevelMatch: 1,
-            ...(result.item.metadata || {})
-          }
-        }));
-        finalResults = await rerank(query, enhancedResults, rerankCount);
-        console.log(`DEBUG: Reranking applied, final results: ${finalResults.length}`);
-      } catch (error) {
-        console.error('Error during reranking, using original results:', error);
-      }
-    }
-    
-    // Step 7: Generate answer from search results
-    logger.info(`Query API: Found ${finalResults.length} relevant results for answer generation`);
-    logger.info('Query API: Generating answer...');
-    
-    const formattedResults = finalResults.map(result => ({
-      text: result.item.text,
-      source: result.item.metadata?.source || 'Unknown',
-      metadata: result.item.metadata,
-      relevanceScore: result.score
-    }));
-
-    // Prepare answer options
-    let answerOptions: {
-      includeSourceCitations: boolean;
-      maxSourcesInAnswer: number;
-      conversationHistory: any;
-      systemPrompt?: string;
-    } = { 
-      includeSourceCitations: true,
-      maxSourcesInAnswer: 5,
-      conversationHistory: context
-    };
-
-    // If company context is provided, add it to the system prompt
-    if (options.companyContext) {
-      // Construct a prompt that guides the model to use company information
-      const companyContext = options.companyContext;
-      
-      // Create a focused company context
-      const companyPrompt = `
-Company: ${companyContext.companyName || 'Unknown'}
-Industry: ${companyContext.industry || 'Unknown'}
-Size: ${companyContext.size || 'Unknown'}
-Location: ${companyContext.location || 'Unknown'}
-Details: ${companyContext.companyInfo.substring(0, 1500)}
-${companyContext.salesNotes ? `\nSales Rep Notes:\n${companyContext.salesNotes}` : ''}
-`;
-
-      // Add the company context to answer options
-      answerOptions.systemPrompt = `You are a sales assistant for Workstream, a hiring and onboarding platform. 
-Use the following information about the company the sales rep is talking to in order to provide relevant, 
-personalized answers about how Workstream can help them:
-
-${companyPrompt}
-
-When responding, connect Workstream's features to the company's specific industry, size, and potential challenges.
-Be conversational and helpful, suggesting specific Workstream features that would benefit this company based on 
-what you know about them. If you don't know something specific about the company, don't make it up.
-
-IMPORTANT: If sales rep notes are provided, consider them authoritative and incorporate that information into your responses.
-These notes may contain key insights from previous conversations with the company that should guide your recommendations.`;
-    }
-
-    const answer = await generateAnswer(query, formattedResults, answerOptions);
-    logger.info('Query API: Answer generated successfully');
+    // Record success metrics
+    recordMetric('api', 'query', totalDuration, true, {
+      queryLength: query.length,
+      resultCount: rerankedResults.length,
+      retrievalDuration,
+      rerankDuration,
+      answerDuration
+    });
     
     // Prepare the response
     const response = {
-      answer: answer,
-      sources: finalResults.map(result => ({
-        title: result.item.metadata?.title || result.item.metadata?.source || 'Unknown',
-        source: result.item.metadata?.source || 'Unknown',
-        relevance: result.score
-      })),
-      metadata: {
-        originalQuery: query,
-        processedQuery: processedQuery !== query ? processedQuery : undefined,
-        strategy: {
-          primaryCategory: queryAnalysis.primaryCategory,
-          queryType: queryAnalysis.queryType,
-          entityCount: queryAnalysis.entities.length,
-          hybridRatio: searchOptions.hybridRatio,
-          usedQueryExpansion: searchOptions.expandQuery,
-          usedReranking: searchOptions.rerank
-        }
+      answer,
+      query,
+      timings: {
+        totalMs: totalDuration,
+        retrievalMs: retrievalDuration,
+        rerankingMs: rerankDuration,
+        answerGenerationMs: answerDuration
       }
     };
     
-    return res.status(200).json(response);
-  } catch (error: any) {
-    logger.error('Query API: Error processing query', error);
-    
-    // Use standardized error response if available
-    let errorResponse;
-    try {
-      errorResponse = standardizeApiErrorResponse(error);
-    } catch (_) {
-      errorResponse = { 
-        error: 'Error processing query', 
-        message: error?.message || 'Unknown error' 
-      };
+    // Add source documents if requested
+    if (includeSourceDocuments) {
+      // Add source documents to the response
+      Object.assign(response, { 
+        sourceDocuments: rerankedResults.map((result: any) => {
+          const item = result.item || result;
+          return {
+            text: item.text || item.content || '',
+            source: item.metadata?.source || item.source || 'Unknown',
+            score: result.score,
+            metadata: item.metadata || {}
+          };
+        })
+      });
     }
     
-    return res.status(500).json(errorResponse);
+    return res.status(200).json(response);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error processing query';
+    
+    // Log the error
+    logError('Error processing query:', error);
+    
+    // Record error metrics
+    recordMetric('api', 'query', Date.now() - startTime, false, {
+      error: errorMessage
+    });
+    
+    // Return a standardized error response
+    return res.status(500).json({
+      error: 'Error processing your query',
+      message: errorMessage
+    });
   }
 } 

@@ -1,0 +1,20 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.VisualDocumentIcon = exports.LogoutIcon = exports.SettingsIcon = exports.ApprovalIcon = exports.ArticleIcon = exports.DashboardIcon = exports.MenuIcon = void 0;
+var MenuIcon_1 = require("./MenuIcon");
+Object.defineProperty(exports, "MenuIcon", { enumerable: true, get: function () { return __importDefault(MenuIcon_1).default; } });
+var DashboardIcon_1 = require("./DashboardIcon");
+Object.defineProperty(exports, "DashboardIcon", { enumerable: true, get: function () { return __importDefault(DashboardIcon_1).default; } });
+var ArticleIcon_1 = require("./ArticleIcon");
+Object.defineProperty(exports, "ArticleIcon", { enumerable: true, get: function () { return __importDefault(ArticleIcon_1).default; } });
+var ApprovalIcon_1 = require("./ApprovalIcon");
+Object.defineProperty(exports, "ApprovalIcon", { enumerable: true, get: function () { return __importDefault(ApprovalIcon_1).default; } });
+var SettingsIcon_1 = require("./SettingsIcon");
+Object.defineProperty(exports, "SettingsIcon", { enumerable: true, get: function () { return __importDefault(SettingsIcon_1).default; } });
+var LogoutIcon_1 = require("./LogoutIcon");
+Object.defineProperty(exports, "LogoutIcon", { enumerable: true, get: function () { return __importDefault(LogoutIcon_1).default; } });
+var VisualDocumentIcon_1 = require("./VisualDocumentIcon");
+Object.defineProperty(exports, "VisualDocumentIcon", { enumerable: true, get: function () { return __importDefault(VisualDocumentIcon_1).default; } });

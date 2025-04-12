@@ -14,7 +14,7 @@ import {
 } from './hybridSearch';
 import { rerank } from './reranking';
 import { expandQuery } from './queryExpansion';
-import { logError } from './errorHandling';
+import { logError } from './logger';
 
 // Interface for search options
 export interface RouterSearchOptions {
@@ -194,7 +194,7 @@ export function formatResults(results: HybridSearchResult[]): Array<{
   relevanceScore: number;
 }> {
   return results.map(result => ({
-    text: result.item.text,
+    text: result.item.text ?? '',
     source: result.item.metadata?.source || 'Unknown',
     metadata: {
       ...result.item.metadata,

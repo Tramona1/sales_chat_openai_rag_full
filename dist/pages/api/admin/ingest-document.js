@@ -2,12 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = handler;
 const geminiProcessor_1 = require("@/utils/geminiProcessor");
-const openaiClient_1 = require("@/utils/openaiClient");
+const embeddingClient_js_1 = require("@/utils/embeddingClient.js");
 const errorHandling_1 = require("@/utils/errorHandling");
 const adminWorkflow_1 = require("@/utils/adminWorkflow");
+const documentProcessing_js_1 = require("@/utils/documentProcessing.js");
 /**
  * API endpoint for ingesting documents with Gemini processing
  * This endpoint processes documents, analyzes them with Gemini, and adds them to the pending queue
+ * Enhanced with contextual chunking for improved document understanding
  */
 async function handler(req, res) {
     // Only allow POST requests
@@ -17,6 +19,7 @@ async function handler(req, res) {
     try {
         // Extract document text and metadata from request
         const { text, source, existingMetadata, useEnhancedLabeling = true, // Default to enhanced labeling 
+        useContextualChunking = true, // Added flag for contextual chunking
         retryCount = 0 // For handling Gemini processing retries
          } = req.body;
         if (!text || typeof text !== 'string') {
@@ -30,7 +33,8 @@ async function handler(req, res) {
             source,
             textLength: text.length,
             hasExistingMetadata: !!existingMetadata,
-            useEnhancedLabeling
+            useEnhancedLabeling,
+            useContextualChunking
         });
         // Check for potential content conflicts early
         const { hasConflicts, conflictingDocIds } = await (0, adminWorkflow_1.checkForContentConflicts)({ source, ...(existingMetadata || {}) }, text);
@@ -115,6 +119,7 @@ async function handler(req, res) {
                             source,
                             existingMetadata,
                             useEnhancedLabeling: true,
+                            useContextualChunking,
                             retryCount: retryCount + 1
                         })
                     });
@@ -142,10 +147,27 @@ async function handler(req, res) {
                 processingSuccess = false;
             }
         }
-        // Generate embedding for vector storage
-        const embedding = await (0, openaiClient_1.embedText)(text);
+        // Process document with contextual chunking if enabled
+        let chunks = [];
+        if (useContextualChunking) {
+            try {
+                // Use our new contextual chunking with the document metadata
+                (0, errorHandling_1.logInfo)('Applying contextual chunking to document', { source });
+                chunks = await (0, documentProcessing_js_1.splitIntoChunksWithContext)(text, 500, source, true, metadata);
+                (0, errorHandling_1.logInfo)(`Created ${chunks.length} contextual chunks`, { source });
+            }
+            catch (chunkingError) {
+                (0, errorHandling_1.logError)('Error in contextual chunking', chunkingError);
+                // Fall back to non-contextual processing
+                (0, errorHandling_1.logInfo)('Falling back to standard chunking', { source });
+                // We'll handle this in the addToPendingDocuments function
+            }
+        }
+        // Generate embedding for vector storage (if we haven't done contextual chunking)
+        const embedding = chunks.length === 0 ? await (0, embeddingClient_js_1.embedText)(text) : null;
         // Add to pending documents queue instead of vector store
-        const documentId = await (0, adminWorkflow_1.addToPendingDocuments)(text, metadata, embedding);
+        // Pass the chunks if we have them, otherwise null to use default processing
+        const documentId = await (0, adminWorkflow_1.addToPendingDocuments)(text, metadata, embedding, chunks.length > 0 ? chunks : null);
         // Return success with analysis summary and conflict information
         return res.status(200).json({
             success: true,
@@ -153,6 +175,8 @@ async function handler(req, res) {
             documentId,
             requiresApproval: true,
             useEnhancedLabeling,
+            useContextualChunking,
+            chunksCreated: chunks.length,
             processingSuccess,
             hasConflicts,
             conflictingDocIds: hasConflicts ? conflictingDocIds : [],

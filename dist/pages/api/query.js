@@ -1,208 +1,259 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = handler;
-const queryAnalysis_1 = require("@/utils/queryAnalysis");
-const hybridSearch_1 = require("@/utils/hybridSearch");
-const queryExpansion_1 = require("@/utils/queryExpansion");
-const reranking_1 = require("@/utils/reranking");
-const answerGenerator_1 = require("@/utils/answerGenerator");
-const errorHandling_1 = require("@/utils/errorHandling");
+const featureFlags_1 = require("../../utils/featureFlags");
+const performanceMonitoring_1 = require("../../utils/performanceMonitoring");
+const modelConfig_1 = require("../../utils/modelConfig");
 // Simple logger that works without external dependencies
 const logger = {
     info: (message, ...args) => console.log(`[INFO] ${message}`, ...args),
     debug: (message, ...args) => console.log(`[DEBUG] ${message}`, ...args),
     error: (message, ...args) => console.error(`[ERROR] ${message}`, ...args)
 };
-async function handler(req, res) {
-    var _a, _b;
-    // Only allow POST requests
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method Not Allowed', message: 'Only POST requests are allowed' });
-    }
-    logger.info('Query API: Request received');
+// Import at runtime to avoid TypeScript import resolution issues
+async function importModules() {
     try {
-        const { query, conversationId, messages, options = {}, context = '' } = req.body;
+        const { performVectorSearch } = await Promise.resolve().then(() => __importStar(require('../../utils/vectorSearch')));
+        const { performBM25Search } = await Promise.resolve().then(() => __importStar(require('../../utils/bm25Search')));
+        const { hybridSearch } = await Promise.resolve().then(() => __importStar(require('../../utils/hybridSearch')));
+        const { rerank } = await Promise.resolve().then(() => __importStar(require('../../utils/reranking')));
+        const { analyzeQuery } = await Promise.resolve().then(() => __importStar(require('../../utils/queryAnalysis')));
+        const { generateAnswer } = await Promise.resolve().then(() => __importStar(require('../../utils/answerGeneration')));
+        const { performMultiModalSearch } = await Promise.resolve().then(() => __importStar(require('../../utils/multiModalProcessing')));
+        return {
+            performVectorSearch,
+            performBM25Search,
+            hybridSearch,
+            rerank,
+            analyzeQuery,
+            generateAnswer,
+            performMultiModalSearch
+        };
+    }
+    catch (error) {
+        console.error('Error importing modules:', error);
+        throw error;
+    }
+}
+async function handler(req, res) {
+    const startTime = Date.now();
+    // Only allow POST method
+    if (req.method !== 'POST') {
+        (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, { error: 'Method not allowed' });
+        return res.status(405).json({ error: 'Method not allowed' });
+    }
+    try {
+        // Load modules dynamically
+        const modules = await importModules();
+        // Extract query parameters
+        const { query, limit = 5, useContextualRetrieval = true, includeSourceDocuments = false, includeSourceCitations = true, conversationHistory = '', searchMode = 'hybrid', includeVisualContent = false, visualTypes = [] } = req.body;
+        // Validate query
         if (!query || typeof query !== 'string') {
-            return res.status(400).json({
-                error: 'Bad Request',
-                message: 'Query parameter is required and must be a string'
+            (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, { error: 'Invalid query' });
+            return res.status(400).json({ error: 'Query is required and must be a string' });
+        }
+        // Track query timing
+        const retrievalStartTime = Date.now();
+        // Analyze query and determine the best search strategy
+        const queryAnalysis = await modules.analyzeQuery(query);
+        // Check if contextual retrieval is enabled by feature flags
+        const contextualRetrievalEnabled = (0, featureFlags_1.isFeatureEnabled)('contextualReranking') &&
+            (0, featureFlags_1.isFeatureEnabled)('contextualEmbeddings') &&
+            useContextualRetrieval;
+        // Flag to check if we should use multi-modal search
+        const useMultiModal = includeVisualContent && (0, featureFlags_1.isFeatureEnabled)('multiModalSearch');
+        let searchResults;
+        // Choose search strategy based on inputs and feature flags
+        if (useMultiModal) {
+            // Use multi-modal search if visual content is requested
+            searchResults = await modules.performMultiModalSearch(query, {
+                limit: Math.max(limit * 3, 15), // Retrieve more than needed for reranking
+                includeVisualContent,
+                visualTypes: visualTypes
             });
         }
-        logger.info(`Query API: Processing query: "${query}" for conversation: ${conversationId}`);
-        // Get chat history for context (from messages or conversationId)
-        const chatHistory = messages || [];
-        logger.info(`Query API: Using chat history with ${chatHistory.length} messages`);
-        // Step 1: Analyze the query to determine optimal retrieval strategy
-        logger.info('Query API: Analyzing query...');
-        const queryAnalysis = await (0, queryAnalysis_1.analyzeQuery)(query);
-        logger.info(`Query API: Query analysis complete. Primary category: ${queryAnalysis.primaryCategory}, Query type: ${queryAnalysis.queryType}`);
-        // Step 2: Get optimized retrieval parameters based on analysis
-        const retrievalParams = (0, queryAnalysis_1.getRetrievalParameters)(queryAnalysis);
-        // Step 3: Prepare the final search options by merging client options and
-        // retrieval parameters (client options take precedence)
-        const searchOptions = {
-            ...retrievalParams,
-            ...options,
-            // Metadata filtering
-            filter: {
-                ...options.filter,
-                // Apply category filter if not overridden by client
-                ...(((_a = options.filter) === null || _a === void 0 ? void 0 : _a.categories) ? {} : {
-                    categories: retrievalParams.categoryFilter.categories,
-                    strictCategoryMatch: retrievalParams.categoryFilter.strict
-                }),
-                // Apply technical level range if not overridden by client
-                ...(((_b = options.filter) === null || _b === void 0 ? void 0 : _b.technicalLevel) ? {} : {
-                    technicalLevelMin: retrievalParams.technicalLevelRange.min,
-                    technicalLevelMax: retrievalParams.technicalLevelRange.max
-                })
-            }
-        };
-        console.log('[Query Routing] Analysis:', {
-            query,
-            primaryCategory: queryAnalysis.primaryCategory,
-            queryType: queryAnalysis.queryType,
-            entities: queryAnalysis.entities.map(e => e.name),
-            hybridRatio: searchOptions.hybridRatio
-        });
-        // Check for company-specific terms for debugging
-        const companyTerms = ['workstream', 'company', 'pricing', 'product', 'feature', 'plan', 'customer'];
-        const containsCompanyTerms = companyTerms.some(term => query.toLowerCase().includes(term));
-        console.log(`DEBUG: Query contains company terms: ${containsCompanyTerms}`);
-        // Step 4: Expand query if needed
-        let processedQuery = query;
-        if (searchOptions.expandQuery) {
-            try {
-                const expandedResult = await (0, queryExpansion_1.expandQuery)(query);
-                processedQuery = expandedResult.expandedQuery;
-                console.log(`DEBUG: Expanded query: "${processedQuery}"`);
-            }
-            catch (err) {
-                console.error('Error expanding query, using original:', err);
-            }
+        else if (searchMode === 'hybrid') {
+            // Use hybrid search as default
+            searchResults = await modules.hybridSearch(query, {
+                limit: Math.max(limit * 3, 15) // Retrieve more than needed for reranking
+            });
         }
-        // Step 5: Perform hybrid search with optimal parameters
-        console.log(`DEBUG: Performing hybrid search for "${processedQuery}" with hybridRatio ${searchOptions.hybridRatio}`);
-        const searchResults = await (0, hybridSearch_1.performHybridSearch)(processedQuery, searchOptions.limit || 10, searchOptions.hybridRatio || 0.5, searchOptions.filter);
-        console.log(`DEBUG: Hybrid search found ${searchResults.length} results`);
-        if (searchResults.length > 0) {
-            console.log(`DEBUG: Top result score: ${searchResults[0].score.toFixed(4)}`);
-            if (searchResults[0].item && searchResults[0].item.metadata) {
-                console.log(`DEBUG: Top result source: ${searchResults[0].item.metadata.source || 'Unknown'}`);
-                console.log(`DEBUG: Top result excerpt: ${searchResults[0].item.text.substring(0, 150)}...`);
-            }
+        else if (searchMode === 'vector') {
+            // Use vector search if specified
+            searchResults = await modules.performVectorSearch(query, Math.max(limit * 3, 15));
+        }
+        else if (searchMode === 'bm25') {
+            // Use BM25 search if specified
+            searchResults = await modules.performBM25Search(query, Math.max(limit * 3, 15));
         }
         else {
-            console.log(`DEBUG: No results found. This may indicate an issue with the vector store or search parameters.`);
-        }
-        // Step 6: Apply re-ranking if enabled
-        let finalResults = searchResults;
-        if (searchOptions.rerank) {
-            const rerankCount = searchOptions.rerankCount || 20;
-            try {
-                // Add required metadata field for reranking
-                const enhancedResults = searchResults.map(result => ({
-                    ...result,
-                    metadata: {
-                        matchesCategory: true,
-                        categoryBoost: 0,
-                        technicalLevelMatch: 1,
-                        ...(result.item.metadata || {})
-                    }
-                }));
-                finalResults = await (0, reranking_1.rerank)(query, enhancedResults, rerankCount);
-                console.log(`DEBUG: Reranking applied, final results: ${finalResults.length}`);
-            }
-            catch (error) {
-                console.error('Error during reranking, using original results:', error);
-            }
-        }
-        // Step 7: Generate answer from search results
-        logger.info(`Query API: Found ${finalResults.length} relevant results for answer generation`);
-        logger.info('Query API: Generating answer...');
-        const formattedResults = finalResults.map(result => {
-            var _a;
-            return ({
-                text: result.item.text,
-                source: ((_a = result.item.metadata) === null || _a === void 0 ? void 0 : _a.source) || 'Unknown',
-                metadata: result.item.metadata,
-                relevanceScore: result.score
+            // Default to hybrid search
+            searchResults = await modules.hybridSearch(query, {
+                limit: Math.max(limit * 3, 15)
             });
-        });
-        // Prepare answer options
-        let answerOptions = {
-            includeSourceCitations: true,
-            maxSourcesInAnswer: 5,
-            conversationHistory: context
-        };
-        // If company context is provided, add it to the system prompt
-        if (options.companyContext) {
-            // Construct a prompt that guides the model to use company information
-            const companyContext = options.companyContext;
-            // Create a focused company context
-            const companyPrompt = `
-Company: ${companyContext.companyName || 'Unknown'}
-Industry: ${companyContext.industry || 'Unknown'}
-Size: ${companyContext.size || 'Unknown'}
-Location: ${companyContext.location || 'Unknown'}
-Details: ${companyContext.companyInfo.substring(0, 1500)}
-${companyContext.salesNotes ? `\nSales Rep Notes:\n${companyContext.salesNotes}` : ''}
-`;
-            // Add the company context to answer options
-            answerOptions.systemPrompt = `You are a sales assistant for Workstream, a hiring and onboarding platform. 
-Use the following information about the company the sales rep is talking to in order to provide relevant, 
-personalized answers about how Workstream can help them:
-
-${companyPrompt}
-
-When responding, connect Workstream's features to the company's specific industry, size, and potential challenges.
-Be conversational and helpful, suggesting specific Workstream features that would benefit this company based on 
-what you know about them. If you don't know something specific about the company, don't make it up.
-
-IMPORTANT: If sales rep notes are provided, consider them authoritative and incorporate that information into your responses.
-These notes may contain key insights from previous conversations with the company that should guide your recommendations.`;
         }
-        const answer = await (0, answerGenerator_1.generateAnswer)(query, formattedResults, answerOptions);
-        logger.info('Query API: Answer generated successfully');
+        const retrievalDuration = Date.now() - retrievalStartTime;
+        // If no results, return early
+        if (!searchResults || searchResults.length === 0) {
+            (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, {
+                error: 'No results found',
+                retrievalDuration
+            });
+            return res.status(404).json({
+                error: 'No results found for query',
+                query,
+                timings: { retrievalMs: retrievalDuration }
+            });
+        }
+        // Rerank results if contextual retrieval is enabled
+        const rerankStartTime = Date.now();
+        let rerankedResults;
+        if (contextualRetrievalEnabled) {
+            // Use contextual information in reranking
+            rerankedResults = await modules.rerank(query, searchResults, limit, {
+                useContextualInfo: true,
+                includeExplanations: false
+            });
+        }
+        else {
+            // Use standard reranking
+            rerankedResults = await modules.rerank(query, searchResults, limit);
+        }
+        const rerankDuration = Date.now() - rerankStartTime;
+        // Generate an answer from the results
+        const answerStartTime = Date.now();
+        // Process the search results for answer generation
+        const searchContext = rerankedResults.map((result) => {
+            var _a;
+            const item = result.item || result;
+            // Extract visual content if available and requested
+            let visualContent = null;
+            if (includeVisualContent && 'visualContent' in item && Array.isArray(item.visualContent)) {
+                visualContent = item.visualContent.map((vc) => ({
+                    type: vc.type,
+                    description: vc.description,
+                    text: vc.extractedText
+                }));
+            }
+            // Format the chunk for the answer generation
+            return {
+                text: item.text,
+                source: ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) || 'Unknown',
+                score: result.score,
+                metadata: item.metadata || {},
+                visualContent
+            };
+        });
+        // Get system prompt for this query
+        const systemPrompt = (0, modelConfig_1.getSystemPromptForQuery)(query);
+        // Generate the answer
+        const answer = await modules.generateAnswer(query, searchContext, {
+            systemPrompt,
+            includeSourceCitations,
+            maxSourcesInAnswer: includeSourceDocuments ? limit : 3,
+            conversationHistory: conversationHistory || '',
+            useContextualInformation: contextualRetrievalEnabled
+        });
+        const answerDuration = Date.now() - answerStartTime;
+        const totalDuration = Date.now() - startTime;
         // Prepare the response
-        const response = {
-            answer: answer,
-            sources: finalResults.map(result => {
-                var _a, _b, _c;
-                return ({
-                    title: ((_a = result.item.metadata) === null || _a === void 0 ? void 0 : _a.title) || ((_b = result.item.metadata) === null || _b === void 0 ? void 0 : _b.source) || 'Unknown',
-                    source: ((_c = result.item.metadata) === null || _c === void 0 ? void 0 : _c.source) || 'Unknown',
-                    relevance: result.score
-                });
-            }),
-            metadata: {
-                originalQuery: query,
-                processedQuery: processedQuery !== query ? processedQuery : undefined,
-                strategy: {
-                    primaryCategory: queryAnalysis.primaryCategory,
-                    queryType: queryAnalysis.queryType,
-                    entityCount: queryAnalysis.entities.length,
-                    hybridRatio: searchOptions.hybridRatio,
-                    usedQueryExpansion: searchOptions.expandQuery,
-                    usedReranking: searchOptions.rerank
-                }
+        let response = {
+            query,
+            answer,
+            timings: {
+                retrievalMs: retrievalDuration,
+                rerankMs: rerankDuration,
+                answerMs: answerDuration,
+                totalMs: totalDuration
             }
         };
+        // Include source documents if requested
+        if (includeSourceDocuments) {
+            response.sourceDocuments = rerankedResults.map((result) => {
+                const item = result.item || result;
+                // Create a simplified representation without embeddings to reduce payload size
+                const document = {
+                    text: item.text,
+                    metadata: item.metadata,
+                    score: result.score
+                };
+                // Include visual content if requested and available
+                if (includeVisualContent && 'visualContent' in item && Array.isArray(item.visualContent)) {
+                    // Only include necessary visual fields, omitting raw image data to reduce payload size
+                    document.visualContent = item.visualContent.map((vc) => ({
+                        type: vc.type,
+                        description: vc.description,
+                        extractedText: vc.extractedText,
+                        imageUrl: vc.imageUrl
+                    }));
+                }
+                return document;
+            });
+        }
+        // Include query analysis if available
+        if (queryAnalysis) {
+            response.queryAnalysis = {
+                intent: queryAnalysis.intent,
+                topics: queryAnalysis.topics,
+                entities: queryAnalysis.entities,
+                technicalLevel: queryAnalysis.technicalLevel
+            };
+        }
+        // Record successful query metric
+        (0, performanceMonitoring_1.recordMetric)('api', 'query', totalDuration, true, {
+            retrievalDuration,
+            rerankDuration,
+            answerDuration,
+            resultCount: rerankedResults.length,
+            characters: answer.length,
+            useContextual: contextualRetrievalEnabled,
+            useMultiModal
+        });
+        // Return the response
         return res.status(200).json(response);
     }
     catch (error) {
-        logger.error('Query API: Error processing query', error);
-        // Use standardized error response if available
-        let errorResponse;
-        try {
-            errorResponse = (0, errorHandling_1.standardizeApiErrorResponse)(error);
-        }
-        catch (_) {
-            errorResponse = {
-                error: 'Error processing query',
-                message: (error === null || error === void 0 ? void 0 : error.message) || 'Unknown error'
-            };
-        }
-        return res.status(500).json(errorResponse);
+        console.error('Error processing query:', error);
+        // Record failed query metric
+        (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, {
+            error: error.message
+        });
+        return res.status(500).json({
+            error: 'Error processing your query',
+            message: error.message
+        });
     }
 }

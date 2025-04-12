@@ -6,7 +6,7 @@
  */
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import { logError, logInfo } from './errorHandling';
+import { logError, logInfo } from './logger';
 import { DocumentCategoryType } from './documentCategories';
 
 // Initialize Gemini API client

@@ -32,6 +32,36 @@ export interface CorpusStatistics {
   mostCommonTerms?: Array<{ term: string, count: number, percentage: number }>;
 }
 
+// Re-export the tokenize function from tokenization
+export { tokenize } from './tokenization';
+
+// Function to get corpus statistics (either from cache or loading from disk)
+let cachedCorpusStats: CorpusStatistics | null = null;
+
+/**
+ * Get corpus statistics, loading them from disk if necessary
+ * @returns Corpus statistics for BM25 calculation
+ */
+export async function getCorpusStatistics(): Promise<CorpusStatistics> {
+  if (cachedCorpusStats) {
+    return cachedCorpusStats;
+  }
+  
+  try {
+    cachedCorpusStats = await loadCorpusStatistics();
+    return cachedCorpusStats;
+  } catch (error) {
+    console.error('Failed to load corpus statistics:', error);
+    // Return default empty statistics if loading fails
+    return {
+      totalDocuments: 0,
+      averageDocumentLength: 0,
+      documentFrequency: {},
+      documentLengths: {}
+    };
+  }
+}
+
 /**
  * Load corpus statistics from disk
  * These statistics are calculated by the calculate-corpus-stats script

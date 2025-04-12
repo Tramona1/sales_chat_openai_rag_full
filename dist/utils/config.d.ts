@@ -33,3 +33,9 @@ export declare function getConfig(): Config;
  * Reload the configuration (clears cache)
  */
 export declare function reloadConfig(): Config;
+export declare const appConfig: {
+    modelConfig: {
+        defaultModel: string;
+        temperature: number;
+    };
+};

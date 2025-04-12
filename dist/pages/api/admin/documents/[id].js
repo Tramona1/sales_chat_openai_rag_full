@@ -9,6 +9,9 @@ const vectorStore_1 = require("../../../../utils/vectorStore");
 const openaiClient_1 = require("../../../../utils/openaiClient");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+// Constants for batch processing
+const VECTOR_STORE_DIR = path_1.default.join(process.cwd(), 'data', 'vector_batches');
+const BATCH_INDEX_FILE = path_1.default.join(process.cwd(), 'data', 'batch_index.json');
 async function handler(req, res) {
     // Get document ID from the URL
     const { id } = req.query;
@@ -68,6 +71,7 @@ async function handleGetDocument(req, res, id) {
 }
 // Update a document
 async function handleUpdateDocument(req, res, id) {
+    var _a;
     const { text, metadata } = req.body;
     if (!text) {
         return res.status(400).json({
@@ -98,17 +102,21 @@ async function handleUpdateDocument(req, res, id) {
         if (needsNewEmbedding) {
             console.log('Text changed, generating new embeddings...');
             embedding = await (0, openaiClient_1.embedText)(text);
+            console.log('New embeddings generated');
         }
         // Update timestamp
         const now = new Date().toISOString();
+        // Track original batch ID
+        const batchId = (_a = existingDocument.metadata) === null || _a === void 0 ? void 0 : _a.batch;
         // Create updated document
         const updatedDocument = {
             text,
             embedding,
             metadata: {
                 ...metadata,
-                // Always preserve the source identifier
+                // Always preserve the source identifier and batch
                 source: id,
+                batch: batchId,
                 // Update timestamps
                 lastUpdated: now,
             }
@@ -118,11 +126,44 @@ async function handleUpdateDocument(req, res, id) {
         // Add the updated document to the vector store
         // This will also save changes to disk
         (0, vectorStore_1.addToVectorStore)(updatedDocument);
+        // Update batch files directly if needed
+        if (batchId && fs_1.default.existsSync(BATCH_INDEX_FILE)) {
+            try {
+                // Read the batch index
+                const indexData = JSON.parse(fs_1.default.readFileSync(BATCH_INDEX_FILE, 'utf-8'));
+                const activeBatches = indexData.activeBatches || [];
+                // If this batch exists, update it directly
+                if (activeBatches.includes(batchId)) {
+                    const batchFile = path_1.default.join(VECTOR_STORE_DIR, `batch_${batchId}.json`);
+                    if (fs_1.default.existsSync(batchFile)) {
+                        // Read the batch
+                        const batchItems = JSON.parse(fs_1.default.readFileSync(batchFile, 'utf-8'));
+                        // Remove the old document from the batch
+                        const filteredBatchItems = batchItems.filter((item) => { var _a; return ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) !== id; });
+                        // Add the updated document to the batch
+                        filteredBatchItems.push(updatedDocument);
+                        // Write the updated batch
+                        fs_1.default.writeFileSync(batchFile, JSON.stringify(filteredBatchItems, null, 2));
+                        console.log(`Updated document in batch ${batchId}`);
+                    }
+                }
+            }
+            catch (batchError) {
+                console.error('Error updating batch file during document update:', batchError);
+            }
+        }
+        // Also ensure the single file is updated as a backup
+        const singleStoreFile = path_1.default.join(process.cwd(), 'data', 'vectorStore.json');
+        fs_1.default.writeFileSync(singleStoreFile, JSON.stringify({
+            items: vectorStore_1.vectorStore,
+            lastUpdated: Date.now()
+        }, null, 2));
         console.log(`Document ${id} updated successfully`);
         return res.status(200).json({
             success: true,
             message: 'Document updated successfully',
-            id
+            id,
+            embeddingUpdated: needsNewEmbedding
         });
     }
     catch (error) {
@@ -138,6 +179,7 @@ async function handleUpdateDocument(req, res, id) {
 }
 // Delete a document
 async function handleDeleteDocument(req, res, id) {
+    var _a;
     console.log(`Deleting document with ID: ${id}`);
     // Find the document in the actual vector store
     const documentIndex = vectorStore_1.vectorStore.findIndex(item => { var _a; return ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) === id; });
@@ -150,9 +192,36 @@ async function handleDeleteDocument(req, res, id) {
         });
     }
     try {
+        // Get the document to track which batch it belongs to
+        const documentToDelete = vectorStore_1.vectorStore[documentIndex];
+        const batchId = (_a = documentToDelete.metadata) === null || _a === void 0 ? void 0 : _a.batch;
         // Remove the document from the vector store
         vectorStore_1.vectorStore.splice(documentIndex, 1);
-        // Save the updated vector store
+        // Update the batches if applicable
+        if (batchId && fs_1.default.existsSync(BATCH_INDEX_FILE)) {
+            try {
+                // Read the batch index
+                const indexData = JSON.parse(fs_1.default.readFileSync(BATCH_INDEX_FILE, 'utf-8'));
+                const activeBatches = indexData.activeBatches || [];
+                // If this batch exists, update it
+                if (activeBatches.includes(batchId)) {
+                    const batchFile = path_1.default.join(VECTOR_STORE_DIR, `batch_${batchId}.json`);
+                    if (fs_1.default.existsSync(batchFile)) {
+                        // Read the batch, remove the document, write it back
+                        const batchItems = JSON.parse(fs_1.default.readFileSync(batchFile, 'utf-8'));
+                        const updatedBatchItems = batchItems.filter((item) => { var _a; return ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) !== id; });
+                        // Write the updated batch
+                        fs_1.default.writeFileSync(batchFile, JSON.stringify(updatedBatchItems, null, 2));
+                        console.log(`Updated batch ${batchId} after removing document ${id}`);
+                    }
+                }
+            }
+            catch (batchError) {
+                console.error('Error updating batch file during document deletion:', batchError);
+                // Continue with main deletion even if batch update fails
+            }
+        }
+        // Save the updated vector store to the single file as well (as backup)
         const singleStoreFile = path_1.default.join(process.cwd(), 'data', 'vectorStore.json');
         fs_1.default.writeFileSync(singleStoreFile, JSON.stringify({
             items: vectorStore_1.vectorStore,

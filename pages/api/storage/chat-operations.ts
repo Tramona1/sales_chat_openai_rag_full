@@ -1,13 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import fs from 'fs/promises';
-import path from 'path';
-import { logError } from '@/utils/errorHandling';
+import { logError, logInfo } from '@/utils/logger';
 import { CompanyInformation } from '@/utils/perplexityClient';
-
-// Storage paths
-const DATA_DIR = path.join(process.cwd(), 'data');
-const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
-const INDEX_FILE = path.join(DATA_DIR, 'session_index.json');
+import { createServiceClient } from '@/utils/supabaseClient';
 
 // Types
 interface StoredChatMessage {
@@ -42,101 +36,63 @@ interface SessionIndex {
   }[];
 }
 
-// Ensure storage directories exist
-async function ensureStorageExists(): Promise<void> {
-  try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    await fs.mkdir(SESSIONS_DIR, { recursive: true });
-    
-    // Create index file if it doesn't exist
-    try {
-      await fs.access(INDEX_FILE);
-    } catch {
-      // Index doesn't exist, create it
-      await fs.writeFile(INDEX_FILE, JSON.stringify({ sessions: [] }, null, 2));
-    }
-  } catch (error) {
-    logError('Failed to ensure storage directories exist', error);
-    throw new Error('Storage initialization failed');
-  }
-}
-
-// Get session index
-async function getSessionIndex(): Promise<SessionIndex> {
-  try {
-    await ensureStorageExists();
-    const data = await fs.readFile(INDEX_FILE, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    logError('Failed to read session index', error);
-    return { sessions: [] };
-  }
-}
-
-// Save session index
-async function saveSessionIndex(index: SessionIndex): Promise<void> {
-  try {
-    await ensureStorageExists();
-    await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
-  } catch (error) {
-    logError('Failed to save session index', error);
-    throw new Error('Failed to update session index');
-  }
-}
-
 // Save chat session
 async function saveChatSession(session: Omit<StoredChatSession, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> {
   try {
-    // Generate ID and timestamps
+    // Generate timestamps
     const now = new Date().toISOString();
-    const id = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // Create full session object
-    const fullSession: StoredChatSession = {
-      ...session,
-      id,
-      createdAt: now,
-      updatedAt: now
-    };
     
     // Check if this is a duplicate of a recent company session
     if (session.sessionType === 'company' && session.companyName) {
-      const index = await getSessionIndex();
+      const supabase = createServiceClient();
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       
       // Find recent session for same company
-      const recentSession = index.sessions.find(s => 
-        s.sessionType === 'company' &&
-        s.companyName?.toLowerCase() === session.companyName?.toLowerCase() && 
-        s.updatedAt > oneHourAgo
-      );
+      const { data: recentSessions, error: queryError } = await supabase
+        .from('chat_sessions')
+        .select('id')
+        .eq('session_type', 'company')
+        .eq('company_name', session.companyName)
+        .gt('updated_at', oneHourAgo)
+        .limit(1);
       
-      if (recentSession) {
+      if (queryError) {
+        logError('Error checking for recent company sessions', queryError);
+      } else if (recentSessions && recentSessions.length > 0) {
         // Return existing session ID instead of creating a new one
-        return recentSession.id;
+        return recentSessions[0].id;
       }
     }
     
-    // Save to file
-    await ensureStorageExists();
-    const sessionPath = path.join(SESSIONS_DIR, `${id}.json`);
-    await fs.writeFile(sessionPath, JSON.stringify(fullSession, null, 2));
+    // Create session data formatted for Supabase
+    const sessionData = {
+      session_type: session.sessionType,
+      company_name: session.companyName || null,
+      company_info: session.companyInfo || null,
+      title: session.title,
+      sales_notes: session.salesNotes || null,
+      messages: session.messages,
+      sales_rep_id: session.salesRepId || null,
+      sales_rep_name: session.salesRepName || null,
+      tags: session.tags || null,
+      keywords: session.keywords || null,
+    };
     
-    // Update index
-    const index = await getSessionIndex();
+    // Insert into Supabase
+    const supabase = createServiceClient();
+    const { data, error } = await supabase
+      .from('chat_sessions')
+      .insert(sessionData)
+      .select('id')
+      .single();
     
-    // Add to index
-    index.sessions.push({
-      id,
-      title: fullSession.title,
-      sessionType: fullSession.sessionType,
-      updatedAt: now,
-      companyName: fullSession.companyName
-    });
+    if (error) {
+      logError('Failed to save chat session to Supabase', error);
+      throw new Error('Failed to save chat session');
+    }
     
-    await saveSessionIndex(index);
-    
-    return id;
+    logInfo(`Chat session saved to Supabase with ID: ${data.id}`);
+    return data.id;
   } catch (error) {
     logError('Failed to save chat session', error);
     throw new Error('Failed to save chat session');
@@ -146,15 +102,40 @@ async function saveChatSession(session: Omit<StoredChatSession, 'id' | 'createdA
 // Get chat session by ID
 async function getChatSession(sessionId: string): Promise<StoredChatSession | null> {
   try {
-    const sessionPath = path.join(SESSIONS_DIR, `${sessionId}.json`);
+    const supabase = createServiceClient();
+    const { data, error } = await supabase
+      .from('chat_sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .single();
     
-    try {
-      const data = await fs.readFile(sessionPath, 'utf8');
-      return JSON.parse(data);
-    } catch (error) {
-      // Session not found
+    if (error) {
+      logError('Failed to get chat session from Supabase', error);
       return null;
     }
+    
+    if (!data) {
+      return null;
+    }
+    
+    // Transform from Supabase snake_case to camelCase
+    const session: StoredChatSession = {
+      id: data.id,
+      sessionType: data.session_type,
+      companyName: data.company_name || undefined,
+      companyInfo: data.company_info || undefined,
+      title: data.title,
+      salesNotes: data.sales_notes || undefined,
+      messages: data.messages,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+      salesRepId: data.sales_rep_id || undefined,
+      salesRepName: data.sales_rep_name || undefined,
+      tags: data.tags || undefined,
+      keywords: data.keywords || undefined
+    };
+    
+    return session;
   } catch (error) {
     logError('Failed to get chat session', error);
     return null;
@@ -167,36 +148,30 @@ async function updateChatSession(
   updates: Partial<Omit<StoredChatSession, 'id' | 'createdAt' | 'updatedAt'>>
 ): Promise<boolean> {
   try {
-    // Get current session
-    const session = await getChatSession(sessionId);
-    if (!session) {
+    // Transform updates to Supabase format (snake_case)
+    const updateData: any = {};
+    
+    if (updates.sessionType) updateData.session_type = updates.sessionType;
+    if (updates.companyName !== undefined) updateData.company_name = updates.companyName;
+    if (updates.companyInfo !== undefined) updateData.company_info = updates.companyInfo;
+    if (updates.title) updateData.title = updates.title;
+    if (updates.salesNotes !== undefined) updateData.sales_notes = updates.salesNotes;
+    if (updates.messages) updateData.messages = updates.messages;
+    if (updates.salesRepId !== undefined) updateData.sales_rep_id = updates.salesRepId;
+    if (updates.salesRepName !== undefined) updateData.sales_rep_name = updates.salesRepName;
+    if (updates.tags !== undefined) updateData.tags = updates.tags;
+    if (updates.keywords !== undefined) updateData.keywords = updates.keywords;
+    
+    // Update in Supabase
+    const supabase = createServiceClient();
+    const { error } = await supabase
+      .from('chat_sessions')
+      .update(updateData)
+      .eq('id', sessionId);
+    
+    if (error) {
+      logError('Failed to update chat session in Supabase', error);
       return false;
-    }
-    
-    // Update fields
-    const now = new Date().toISOString();
-    const updatedSession: StoredChatSession = {
-      ...session,
-      ...updates,
-      id: sessionId,
-      createdAt: session.createdAt,
-      updatedAt: now
-    };
-    
-    // Save to file
-    const sessionPath = path.join(SESSIONS_DIR, `${sessionId}.json`);
-    await fs.writeFile(sessionPath, JSON.stringify(updatedSession, null, 2));
-    
-    // Update index if title changed
-    if (updates.title) {
-      const index = await getSessionIndex();
-      const sessionIndex = index.sessions.findIndex(s => s.id === sessionId);
-      
-      if (sessionIndex !== -1) {
-        index.sessions[sessionIndex].title = updates.title;
-        index.sessions[sessionIndex].updatedAt = now;
-        await saveSessionIndex(index);
-      }
     }
     
     return true;
@@ -209,8 +184,25 @@ async function updateChatSession(
 // List all chat sessions
 async function listChatSessions(): Promise<SessionIndex['sessions']> {
   try {
-    const index = await getSessionIndex();
-    return index.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const supabase = createServiceClient();
+    const { data, error } = await supabase
+      .from('chat_sessions')
+      .select('id, title, session_type, updated_at, company_name')
+      .order('updated_at', { ascending: false });
+    
+    if (error) {
+      logError('Failed to list chat sessions from Supabase', error);
+      return [];
+    }
+    
+    // Transform from Supabase format to our format
+    return data.map(session => ({
+      id: session.id,
+      title: session.title,
+      sessionType: session.session_type,
+      updatedAt: session.updated_at,
+      companyName: session.company_name || undefined
+    }));
   } catch (error) {
     logError('Failed to list chat sessions', error);
     return [];
@@ -220,80 +212,133 @@ async function listChatSessions(): Promise<SessionIndex['sessions']> {
 // Get sessions by type
 async function getSessionsByType(sessionType: 'company' | 'general'): Promise<SessionIndex['sessions']> {
   try {
-    const index = await getSessionIndex();
-    return index.sessions
-      .filter(session => session.sessionType === sessionType)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const supabase = createServiceClient();
+    const { data, error } = await supabase
+      .from('chat_sessions')
+      .select('id, title, session_type, updated_at, company_name')
+      .eq('session_type', sessionType)
+      .order('updated_at', { ascending: false });
+    
+    if (error) {
+      logError('Failed to get sessions by type from Supabase', error);
+      return [];
+    }
+    
+    // Transform from Supabase format to our format
+    return data.map(session => ({
+      id: session.id,
+      title: session.title,
+      sessionType: session.session_type,
+      updatedAt: session.updated_at,
+      companyName: session.company_name || undefined
+    }));
   } catch (error) {
-    logError(`Failed to get ${sessionType} sessions`, error);
+    logError('Failed to get sessions by type', error);
     return [];
+  }
+}
+
+// Delete a chat session
+async function deleteChatSession(sessionId: string): Promise<boolean> {
+  try {
+    const supabase = createServiceClient();
+    const { error } = await supabase
+      .from('chat_sessions')
+      .delete()
+      .eq('id', sessionId);
+    
+    if (error) {
+      logError('Failed to delete chat session from Supabase', error);
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    logError('Failed to delete chat session', error);
+    return false;
   }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    await ensureStorageExists();
-
-    const { method, action } = req.query;
-
-    switch (method) {
-      case 'GET':
-        // Handle get requests
-        if (action === 'list') {
-          const { type } = req.query;
-          if (type === 'company' || type === 'general') {
-            const sessions = await getSessionsByType(type);
-            return res.status(200).json(sessions);
-          } else {
-            const sessions = await listChatSessions();
-            return res.status(200).json(sessions);
-          }
-        } else if (action === 'get' && req.query.id) {
-          const sessionId = req.query.id as string;
-          const session = await getChatSession(sessionId);
-          
-          if (!session) {
-            return res.status(404).json({ error: 'Session not found' });
-          }
-          
-          return res.status(200).json(session);
-        }
-        break;
+    // GET requests for retrieving sessions
+    if (req.method === 'GET') {
+      const { id, type } = req.query;
+      
+      // Get a specific session by ID
+      if (id && typeof id === 'string') {
+        const session = await getChatSession(id);
         
-      case 'POST':
-        // Handle post requests
-        if (action === 'save') {
-          if (!req.body) {
-            return res.status(400).json({ error: 'Missing session data' });
-          }
-          
-          const sessionId = await saveChatSession(req.body);
-          return res.status(200).json({ sessionId });
+        if (!session) {
+          return res.status(404).json({ error: 'Session not found' });
         }
-        break;
         
-      case 'PUT':
-        // Handle put requests
-        if (action === 'update' && req.query.id) {
-          if (!req.body) {
-            return res.status(400).json({ error: 'Missing update data' });
-          }
-          
-          const sessionId = req.query.id as string;
-          const success = await updateChatSession(sessionId, req.body);
-          
-          if (!success) {
-            return res.status(404).json({ error: 'Session not found' });
-          }
-          
-          return res.status(200).json({ success: true });
-        }
-        break;
+        return res.status(200).json(session);
+      }
+      
+      // Get sessions by type
+      if (type && (type === 'company' || type === 'general')) {
+        const sessions = await getSessionsByType(type);
+        return res.status(200).json({ sessions });
+      }
+      
+      // List all sessions
+      const sessions = await listChatSessions();
+      return res.status(200).json({ sessions });
     }
     
-    return res.status(400).json({ error: 'Invalid request' });
+    // POST request for creating new session
+    if (req.method === 'POST') {
+      const sessionData = req.body;
+      
+      // Validate required fields
+      if (!sessionData.title || !sessionData.sessionType || !sessionData.messages) {
+        return res.status(400).json({ error: 'Missing required fields: title, sessionType, or messages' });
+      }
+      
+      const id = await saveChatSession(sessionData);
+      return res.status(201).json({ id, success: true });
+    }
+    
+    // PUT request for updating session
+    if (req.method === 'PUT') {
+      const { id, ...updates } = req.body;
+      
+      if (!id) {
+        return res.status(400).json({ error: 'Missing session ID' });
+      }
+      
+      const success = await updateChatSession(id, updates);
+      
+      if (!success) {
+        return res.status(404).json({ error: 'Session not found or update failed' });
+      }
+      
+      return res.status(200).json({ success: true });
+    }
+    
+    // DELETE request for removing a session
+    if (req.method === 'DELETE') {
+      const { id } = req.query;
+      
+      if (!id || typeof id !== 'string') {
+        return res.status(400).json({ error: 'Missing session ID' });
+      }
+      
+      const success = await deleteChatSession(id);
+      
+      if (!success) {
+        return res.status(404).json({ error: 'Session not found or delete failed' });
+      }
+      
+      return res.status(200).json({ success: true });
+    }
+    
+    // Method not allowed
+    res.setHeader('Allow', ['GET', 'POST', 'PUT', 'DELETE']);
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
   } catch (error) {
-    logError('Chat storage API error', error);
+    logError('Error in chat operations API handler', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 } 

@@ -10,6 +10,7 @@ import { cosineSimilarity, VectorStoreItem, getSimilarItems } from './vectorStor
 import { tokenize } from './tokenization';
 import fs from 'fs/promises';
 import path from 'path';
+import { embedText } from './embeddingClient';
 
 // Re-export for easier importing
 export type { Document, VectorStoreItem };
@@ -140,19 +141,18 @@ export class EnhancedRetrieval {
    * Find similar documents using vector search
    */
   private async findSimilarItems(query: string, options: { minSimilarity: number, maxResults: number }): Promise<VectorSearchResult[]> {
-    // Implement a simplified version of vector search
-    // In a real implementation, this would use embedding API
-    
-    // This is a mock implementation as we can't directly call the existing function
     // Replace this with the actual embedding and vector search in production
-    const results = getSimilarItems(
-      // Mock embedding - in production, get this from OpenAI API
-      Array(1536).fill(0).map(() => Math.random() - 0.5), 
+    
+    // Generate embedding first
+    const queryEmbedding = await embedText(query); 
+    
+    const results = await getSimilarItems( // Added await
+      queryEmbedding, 
       options.maxResults,
-      query
+      { match_threshold: options.minSimilarity } // Pass options object
     );
     
-    return results.map(result => ({
+    return results.map((result: VectorStoreItem & { score: number }) => ({ // Added type
       item: result,
       score: result.score
     }));
@@ -201,7 +201,7 @@ export class EnhancedRetrieval {
     for (const result of vectorResults) {
       const document: Document = {
         id: result.item.metadata?.source || 'unknown',
-        text: result.item.text
+        text: result.item.text ?? '' // Added nullish coalescing
       };
       
       const bm25Score = calculateBM25Score(query, document, this.corpusStats);

@@ -9,12 +9,48 @@
  *
  * This information is used to optimize retrieval parameters and improve results.
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.analyzeQuery = analyzeQuery;
 exports.getRetrievalParameters = getRetrievalParameters;
-const errorHandling_1 = require("./errorHandling");
-const caching_1 = require("./caching");
-const llmProviders_1 = require("./llmProviders");
+exports.analyzeQueryForContext = analyzeQueryForContext;
+exports.isQueryAboutVisuals = isQueryAboutVisuals;
+exports.analyzeVisualQuery = analyzeVisualQuery;
+const performanceMonitoring_1 = require("./performanceMonitoring");
+const featureFlags_1 = require("./featureFlags");
+const generative_ai_1 = require("@google/generative-ai");
 // Cache timeout for query analysis (10 minutes)
 const QUERY_ANALYSIS_CACHE_TIMEOUT = 10 * 60 * 1000;
 /**
@@ -24,283 +60,525 @@ const QUERY_ANALYSIS_CACHE_TIMEOUT = 10 * 60 * 1000;
  * @returns Analysis result with entities, categories, and query type
  */
 async function analyzeQuery(query) {
+    const startTime = Date.now();
     try {
-        // Check cache first
-        const cacheKey = `query_analysis_${query.trim().toLowerCase()}`;
-        const cachedResult = (0, caching_1.getFromCache)(cacheKey);
-        if (cachedResult) {
-            return cachedResult;
+        // Use simple analysis if feature is disabled
+        if (!(0, featureFlags_1.isFeatureEnabled)('enhancedQueryAnalysis')) {
+            return performBasicAnalysis(query);
         }
-        // Analyze with LLM if not cached
-        const analysis = await analyzeLLM(query);
-        // Attach the original query to the analysis object
-        analysis.query = query;
-        // Cache result
-        (0, caching_1.cacheWithExpiry)(cacheKey, analysis, QUERY_ANALYSIS_CACHE_TIMEOUT);
-        return analysis;
-    }
-    catch (error) {
-        (0, errorHandling_1.logError)('Error analyzing query', { query, error });
-        // Return a default analysis if LLM fails
-        return {
-            categories: ['GENERAL'],
-            primaryCategory: 'GENERAL',
-            entities: [],
-            queryType: 'FACTUAL',
-            technicalLevel: 5,
-            estimatedResultCount: 10,
-            isTimeDependent: false,
-            query: query
-        };
-    }
-}
-/**
- * Uses LLM to analyze the query
- */
-async function analyzeLLM(query) {
-    var _a, _b;
-    const prompt = `
-    Analyze this query to help with retrieving the most relevant information:
+        // Get Gemini model
+        const model = getQueryAnalysisModel();
+        // Create the query analysis prompt
+        const prompt = `
+    Analyze the following query thoroughly to aid in optimizing information retrieval.
     
     QUERY: "${query}"
     
-    Respond with a JSON object that has these fields:
-    - categories: Array of categories this query relates to (PRODUCT, TECHNICAL, FEATURES, PRICING, COMPARISON, CUSTOMER_CASE, GENERAL)
-    - primaryCategory: The most relevant category
-    - entities: Array of entities mentioned (with name, type, and confidence from 0-1)
-    - queryType: One of FACTUAL, COMPARATIVE, PROCEDURAL, EXPLANATORY, DEFINITIONAL, EXPLORATORY
-    - technicalLevel: Number from 1-10 indicating technical complexity
-    - estimatedResultCount: Estimate of how many distinct pieces of information needed
-    - isTimeDependent: Boolean indicating if the answer may change over time
-  `;
-    const response = await llmProviders_1.openai.chat.completions.create({
-        model: "gpt-4-turbo-preview",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-    });
-    // Parse LLM response
-    let result;
-    try {
-        const content = ((_b = (_a = response.choices[0]) === null || _a === void 0 ? void 0 : _a.message) === null || _b === void 0 ? void 0 : _b.content) || "{}";
-        result = JSON.parse(content);
+    Respond with a JSON object containing the following attributes:
+    
+    1. intent: The primary intent of the query (one of: INFORMATIONAL, TECHNICAL, FEATURE_INQUIRY, COMPARISON, TROUBLESHOOTING, HOW_TO, DEFINITION, PRICING, COMPATIBILITY, OTHER)
+    2. topics: Array of main topics addressed in the query
+    3. entities: Array of entities mentioned, each with:
+       - name: Entity name
+       - type: Type of entity (PERSON, ORGANIZATION, PRODUCT, FEATURE, LOCATION, CONCEPT, TECHNICAL_TERM, OTHER)
+       - score: Confidence score between 0 and 1
+    4. technicalLevel: Rating from 0 (non-technical) to 3 (highly technical)
+    5. primaryCategory: Most relevant category for the query
+    6. keywords: Array of key terms for search expansion
+    7. isAmbiguous: Boolean indicating if the query is ambiguous and needs clarification
+    
+    Format as valid JSON without explanations or additional text.
+    `;
+        // Generate the analysis using Gemini
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
+        // Parse the response as JSON
+        let analysis;
+        try {
+            analysis = JSON.parse(responseText);
+        }
+        catch (error) {
+            console.error('Error parsing Gemini response as JSON:', error);
+            console.log('Raw response:', responseText);
+            throw new Error('Invalid response format from Gemini');
+        }
+        // Ensure valid intent or use default
+        const validIntents = [
+            'INFORMATIONAL', 'TECHNICAL', 'FEATURE_INQUIRY', 'COMPARISON',
+            'TROUBLESHOOTING', 'HOW_TO', 'DEFINITION', 'PRICING', 'COMPATIBILITY', 'OTHER'
+        ];
+        if (!analysis.intent || !validIntents.includes(analysis.intent)) {
+            analysis.intent = 'INFORMATIONAL';
+        }
+        // Ensure valid entities array
+        if (!analysis.entities || !Array.isArray(analysis.entities)) {
+            analysis.entities = [];
+        }
+        // Ensure valid topics array
+        if (!analysis.topics || !Array.isArray(analysis.topics)) {
+            analysis.topics = [];
+        }
+        // Ensure technical level is a number between 0-3
+        if (typeof analysis.technicalLevel !== 'number' ||
+            analysis.technicalLevel < 0 ||
+            analysis.technicalLevel > 3) {
+            analysis.technicalLevel = 1;
+        }
+        // Construct the complete analysis result
+        const fullAnalysis = {
+            originalQuery: query,
+            intent: analysis.intent,
+            topics: analysis.topics,
+            entities: analysis.entities,
+            technicalLevel: analysis.technicalLevel,
+            primaryCategory: analysis.primaryCategory,
+            secondaryCategories: analysis.secondaryCategories,
+            keywords: analysis.keywords,
+            queryType: analysis.queryType,
+            expandedQuery: analysis.expandedQuery,
+            isAmbiguous: analysis.isAmbiguous
+        };
+        // Record metrics for successful analysis
+        (0, performanceMonitoring_1.recordMetric)('queryAnalysis', 'gemini', Date.now() - startTime, true, {
+            intent: fullAnalysis.intent,
+            technicalLevel: fullAnalysis.technicalLevel,
+            entityCount: fullAnalysis.entities.length,
+            isAmbiguous: fullAnalysis.isAmbiguous
+        });
+        return fullAnalysis;
     }
     catch (error) {
-        throw new Error(`Failed to parse LLM response: ${error}`);
+        // Record the error
+        (0, performanceMonitoring_1.recordMetric)('queryAnalysis', 'gemini', Date.now() - startTime, false, {
+            error: error.message
+        });
+        // Fallback to basic analysis
+        console.error('Error performing query analysis with Gemini:', error);
+        return performBasicAnalysis(query);
     }
-    // Validate and normalize the output
+}
+/**
+ * Simple fallback analysis when Gemini is unavailable
+ *
+ * @param query The user query
+ * @returns Basic analysis
+ */
+function performBasicAnalysis(query) {
+    // Simple keyword-based categorization
+    const lowerQuery = query.toLowerCase();
+    // Detect intent based on keywords
+    let intent = 'INFORMATIONAL';
+    if (lowerQuery.includes('how to') || lowerQuery.includes('how do i')) {
+        intent = 'HOW_TO';
+    }
+    else if (lowerQuery.includes('vs') || lowerQuery.includes('compare') || lowerQuery.includes('difference')) {
+        intent = 'COMPARISON';
+    }
+    else if (lowerQuery.includes('error') || lowerQuery.includes('issue') || lowerQuery.includes('problem')) {
+        intent = 'TROUBLESHOOTING';
+    }
+    else if (lowerQuery.includes('what is') || lowerQuery.includes('definition') || lowerQuery.includes('define')) {
+        intent = 'DEFINITION';
+    }
+    else if (lowerQuery.includes('cost') || lowerQuery.includes('price') || lowerQuery.includes('pricing')) {
+        intent = 'PRICING';
+    }
+    else if (lowerQuery.includes('feature') || lowerQuery.includes('capability') || lowerQuery.includes('function')) {
+        intent = 'FEATURE_INQUIRY';
+    }
+    else if (lowerQuery.includes('compatible') || lowerQuery.includes('work with') || lowerQuery.includes('integration')) {
+        intent = 'COMPATIBILITY';
+    }
+    else if (lowerQuery.includes('code') || lowerQuery.includes('api') || lowerQuery.includes('implement')) {
+        intent = 'TECHNICAL';
+    }
+    // Extract basic entities (simple word-based approach)
+    const stopWords = ["a", "an", "the", "in", "on", "at", "for", "with", "by", "to", "of"];
+    const words = query.split(/\s+/).filter(word => word.length > 2 && !stopWords.includes(word.toLowerCase()));
+    // Extract potential entities (very simple)
+    const entities = words
+        .filter(word => word.length > 3 || word[0] === word[0].toUpperCase())
+        .map(word => ({
+        name: word,
+        type: word[0] === word[0].toUpperCase() ? 'CONCEPT' : 'OTHER',
+        score: 0.7
+    }));
+    // Estimate technical level
+    const technicalTerms = ['api', 'code', 'implementation', 'function', 'class', 'object', 'library', 'module', 'interface'];
+    const technicalScore = technicalTerms.filter(term => lowerQuery.includes(term)).length;
+    const technicalLevel = Math.min(3, Math.floor(technicalScore / 2));
     return {
-        categories: normalizeCategories(result.categories),
-        primaryCategory: normalizePrimaryCategory(result.primaryCategory),
-        entities: result.entities || [],
-        queryType: normalizeQueryType(result.queryType),
-        technicalLevel: Math.min(Math.max(result.technicalLevel || 5, 1), 10),
-        estimatedResultCount: Math.max(result.estimatedResultCount || 5, 1),
-        isTimeDependent: Boolean(result.isTimeDependent),
-        query: query // Add the original query
+        originalQuery: query,
+        intent,
+        topics: words.slice(0, 3), // Just use top few words as topics
+        entities,
+        technicalLevel,
+        primaryCategory: intent,
+        keywords: words,
+        isAmbiguous: query.length < 10 // Simple heuristic for ambiguity
     };
 }
 /**
- * Utility function to ensure categories are valid
- */
-function normalizeCategories(categories) {
-    const validCategories = [];
-    const allowedCategories = [
-        'PRODUCT', 'TECHNICAL', 'FEATURES', 'PRICING',
-        'COMPARISON', 'CUSTOMER_CASE', 'GENERAL'
-    ];
-    // Add valid categories
-    categories === null || categories === void 0 ? void 0 : categories.forEach(category => {
-        const normalized = category.toUpperCase();
-        if (allowedCategories.includes(normalized)) {
-            validCategories.push(normalized);
-        }
-    });
-    // Always include at least GENERAL if nothing valid
-    if (validCategories.length === 0) {
-        validCategories.push('GENERAL');
-    }
-    return validCategories;
-}
-/**
- * Utility function to ensure primary category is valid
- */
-function normalizePrimaryCategory(category) {
-    const normalized = category === null || category === void 0 ? void 0 : category.toUpperCase();
-    const allowedCategories = [
-        'PRODUCT', 'TECHNICAL', 'FEATURES', 'PRICING',
-        'COMPARISON', 'CUSTOMER_CASE', 'GENERAL'
-    ];
-    return allowedCategories.includes(normalized)
-        ? normalized
-        : 'GENERAL';
-}
-/**
- * Utility function to ensure query type is valid
- */
-function normalizeQueryType(type) {
-    const normalized = type === null || type === void 0 ? void 0 : type.toUpperCase();
-    const allowedTypes = [
-        'FACTUAL', 'COMPARATIVE', 'PROCEDURAL',
-        'EXPLANATORY', 'DEFINITIONAL', 'EXPLORATORY'
-    ];
-    return allowedTypes.includes(normalized)
-        ? normalized
-        : 'FACTUAL';
-}
-/**
- * Determines the optimal retrieval parameters based on query analysis
+ * Get optimized retrieval parameters based on query analysis
  *
- * @param analysis The query analysis result
- * @returns Optimization parameters for retrieval
+ * @param analysis The query analysis
+ * @returns Parameters for optimizing retrieval
  */
 function getRetrievalParameters(analysis) {
-    // ---- Improved query analysis section ----
-    // We need to determine the nature of the query more accurately
-    const query = analysis.query || '';
-    // 1. Pattern-based detection for different query types
-    // Company identification terms
-    const companyIdentifiers = /\b(our|we|us|workstream|company)\b/i;
-    // Question and information-seeking patterns
-    const questionPatterns = /\b(what|who|how|when|where|why|which|tell me about|explain|describe)\b/i;
-    // Product/service terminology pattern
-    const productTerms = /\b(product|service|feature|plan|pricing|tier|offering|platform|tool|solution)\b/i;
-    // People & organization pattern
-    const peopleTerms = /\b(team|employee|staff|founder|investor|partner|client|customer)\b/i;
-    // 2. Classify the query
-    const isCompanyQuery = companyIdentifiers.test(query);
-    const isQuestionQuery = questionPatterns.test(query);
-    const hasProductTerms = productTerms.test(query);
-    const hasPeopleTerms = peopleTerms.test(query);
-    // Calculate a "company-specificity" score from 0-1
-    // This is more nuanced than a binary yes/no
-    let companySpecificityScore = 0;
-    if (isCompanyQuery)
-        companySpecificityScore += 0.5;
-    if (hasProductTerms)
-        companySpecificityScore += 0.3;
-    if (hasPeopleTerms)
-        companySpecificityScore += 0.2;
-    // Clamp between 0-1
-    companySpecificityScore = Math.min(1, companySpecificityScore);
-    console.log(`Query analysis: company=${isCompanyQuery}, question=${isQuestionQuery}, product=${hasProductTerms}, people=${hasPeopleTerms}`);
-    console.log(`Company specificity score: ${companySpecificityScore.toFixed(2)}`);
-    // 3. Adjust hybrid ratio based on company specificity
-    // The more company-specific, the more we rely on keyword search (lower ratio)
-    let hybridRatio = 0.5 - (companySpecificityScore * 0.3);
-    // Further adjustment based on query type
-    if (analysis.queryType === 'FACTUAL' || analysis.queryType === 'DEFINITIONAL') {
-        // Factual queries benefit from more keyword matching
-        hybridRatio -= 0.1;
-    }
-    else if (analysis.queryType === 'COMPARATIVE' || analysis.queryType === 'EXPLORATORY') {
-        // Exploratory queries benefit from more vector similarity
-        hybridRatio += 0.1;
-    }
-    // Ensure the ratio stays within valid bounds
-    hybridRatio = Math.max(0.2, Math.min(0.8, hybridRatio));
-    // Log decisions for debugging
-    console.log(`Selected hybrid ratio: ${hybridRatio.toFixed(2)} (lower means more keyword influence)`);
-    // 4. Determine category filtering strategy based on query
-    // For company-specific queries, make sure to include GENERAL category 
-    // as it often contains company information
-    let categoryFilter = determineCategoryFilter(analysis);
-    // If this is likely a company query and GENERAL isn't already included, add it
-    if (companySpecificityScore > 0.3 &&
-        !categoryFilter.categories.includes('GENERAL')) {
-        categoryFilter.categories.push('GENERAL');
-        console.log('Added GENERAL category to search because query appears company-specific');
-    }
-    // 5. Determine result limit - increase for company queries to ensure we get relevant results
-    let resultLimit = estimateResultLimit(analysis);
-    if (companySpecificityScore > 0.5) {
-        // For strongly company-specific queries, ensure we get enough results
-        resultLimit = Math.max(resultLimit, 10);
-    }
-    return {
-        // Number of results to fetch
-        limit: resultLimit,
-        // Hybrid search parameters
-        hybridRatio: hybridRatio,
-        // Re-ranking parameters
-        rerank: true,
-        rerankCount: Math.min(50, analysis.estimatedResultCount * 5),
-        // Category boosting - use our enhanced logic
-        categoryFilter: categoryFilter,
-        // Technical level matching
-        technicalLevelRange: determineTechnicalLevelRange(analysis),
-        // Whether to use query expansion
-        // Enable for company queries to get related terms
-        expandQuery: companySpecificityScore > 0.5 || shouldExpandQuery(analysis),
+    // Base configuration
+    const params = {
+        hybridRatio: 0.5, // Default hybrid ratio (0.5 = balanced)
+        limit: 10, // Default number of results
+        rerank: true, // Always rerank by default
+        rerankCount: 10, // Number of results to rerank
+        expandQuery: false, // Default to not expanding queries
+        // Category filtering - start with empty filter
+        categoryFilter: {
+            categories: [],
+            strict: false
+        },
+        // Default to wide technical level range (0-3)
+        technicalLevelRange: {
+            min: 0,
+            max: 3
+        }
     };
-}
-/**
- * Estimates how many results to retrieve based on query characteristics
- */
-function estimateResultLimit(analysis) {
-    // Start with the estimated result count
-    let baseLimit = analysis.estimatedResultCount;
-    // Adjust based on query type
-    switch (analysis.queryType) {
-        case 'COMPARATIVE':
-        case 'EXPLORATORY':
-            baseLimit *= 2; // Need more diverse results
-            break;
-        case 'FACTUAL':
-        case 'DEFINITIONAL':
-            baseLimit = Math.max(baseLimit, 3); // Need fewer, more precise results
-            break;
-        default:
-        // Keep the default for other types
+    // Adjust hybrid ratio based on query type
+    if (analysis.intent === 'DEFINITION' || analysis.intent === 'INFORMATIONAL') {
+        // For definitions, slightly favor BM25 for exact term matching
+        params.hybridRatio = 0.4;
     }
-    // Ensure reasonable bounds
-    return Math.min(Math.max(baseLimit, 3), 25);
+    else if (analysis.intent === 'TECHNICAL' || analysis.intent === 'HOW_TO') {
+        // For technical queries, favor vector search for semantic understanding
+        params.hybridRatio = 0.7;
+    }
+    else if (analysis.intent === 'COMPARISON') {
+        // For comparisons, strongly favor vector search
+        params.hybridRatio = 0.8;
+    }
+    // Adjust result limits based on query complexity
+    if (analysis.technicalLevel >= 2) {
+        // For highly technical queries, we want more results to work with
+        params.limit = 15;
+        params.rerankCount = 15;
+    }
+    // Enable query expansion for potentially ambiguous queries
+    if (analysis.isAmbiguous || analysis.originalQuery.length < 15) {
+        params.expandQuery = true;
+    }
+    // Adjust technical level range based on the query's technical level
+    params.technicalLevelRange.min = Math.max(0, analysis.technicalLevel - 1);
+    params.technicalLevelRange.max = Math.min(3, analysis.technicalLevel + 1);
+    // If we have a primary category, use it for filtering
+    if (analysis.primaryCategory) {
+        params.categoryFilter.categories = [analysis.primaryCategory];
+        // Add secondary categories if available
+        if (analysis.secondaryCategories && analysis.secondaryCategories.length > 0) {
+            params.categoryFilter.categories = [
+                ...params.categoryFilter.categories,
+                ...analysis.secondaryCategories
+            ];
+        }
+    }
+    return params;
 }
 /**
- * Determines whether to filter or boost by category
+ * Get the Gemini API key
  */
-function determineCategoryFilter(analysis) {
-    // If we have a clear primary category, use it
-    if (analysis.primaryCategory !== 'GENERAL') {
+function getGeminiApiKey() {
+    const apiKey = process.env.GEMINI_API_KEY || '';
+    if (!apiKey) {
+        throw new Error('GEMINI_API_KEY is not set in environment variables');
+    }
+    return apiKey;
+}
+/**
+ * Get the Gemini model for query analysis
+ */
+function getQueryAnalysisModel() {
+    const apiKey = getGeminiApiKey();
+    const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
+    return genAI.getGenerativeModel({
+        model: 'gemini-2.0-pro',
+        generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 2048,
+        },
+        safetySettings: [
+            {
+                category: generative_ai_1.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            },
+            {
+                category: generative_ai_1.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            },
+            {
+                category: generative_ai_1.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            },
+            {
+                category: generative_ai_1.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            },
+        ],
+    });
+}
+/**
+ * Analyzes a query to determine visual focus, search terms, and other contextual information
+ *
+ * @param query The user query to analyze
+ * @returns Analysis of query context with visual focus detection
+ */
+async function analyzeQueryForContext(query) {
+    try {
+        const startTime = Date.now();
+        // Get enhanced visual analysis using our improved detection
+        const visualAnalysis = analyzeVisualQuery(query);
+        // Use the Gemini API for more detailed analysis
+        const prompt = `
+      Analyze the following query to understand the user's information needs:
+      
+      "${query}"
+      
+      Provide your analysis in JSON format with the following fields:
+      - searchTerms: An array of 2-5 key search terms extracted from the query
+      - topicCategories: An array of 1-3 likely topic categories this query belongs to
+      - technicalLevel: A number from 0-3 indicating technical complexity (0=non-technical, 3=highly technical)
+      - expectedAnswerType: One of ["factual", "conceptual", "procedural", "comparative"]
+      - entityFocus: An array of specific entities (products, companies, etc.) the user is asking about
+    `;
+        // Import the Gemini client helper
+        const { generateStructuredGeminiResponse } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
+        // Define the expected response schema
+        const responseSchema = {
+            searchTerms: [{ type: "string" }],
+            topicCategories: [{ type: "string" }],
+            technicalLevel: { type: "number" },
+            expectedAnswerType: { type: "string", enum: ["factual", "conceptual", "procedural", "comparative"] },
+            entityFocus: [{ type: "string" }]
+        };
+        // Generate the structured response
+        const analysis = await generateStructuredGeminiResponse("You are an expert in query analysis for a knowledge base system with visual content capabilities.", prompt, responseSchema);
+        // Record performance metrics
+        (0, performanceMonitoring_1.recordMetric)('queryContextAnalysis', 'gemini', Date.now() - startTime, true, {
+            visualFocus: visualAnalysis.isVisualQuery,
+            confidence: visualAnalysis.confidence,
+            visualTypes: visualAnalysis.visualTypes,
+            technicalLevel: analysis.technicalLevel,
+            answerType: analysis.expectedAnswerType
+        });
+        // Return the analysis with the enhanced visual focus determination
         return {
-            categories: [analysis.primaryCategory],
-            strict: false // Allow some flexibility
+            searchTerms: analysis.searchTerms || query.split(/\s+/).filter(t => t.length > 3),
+            topicCategories: analysis.topicCategories || [],
+            technicalLevel: analysis.technicalLevel !== undefined ? analysis.technicalLevel : 1,
+            expectedAnswerType: analysis.expectedAnswerType || 'factual',
+            entityFocus: analysis.entityFocus || [],
+            visualFocus: visualAnalysis.isVisualQuery,
+            visualTypes: visualAnalysis.visualTypes.length > 0 ? visualAnalysis.visualTypes : undefined
         };
     }
-    // Otherwise include all identified categories
-    return {
-        categories: analysis.categories,
-        strict: false
+    catch (error) {
+        console.error("Error analyzing query context:", error);
+        // Fallback to basic extraction with our enhanced visual detection
+        const visualAnalysis = analyzeVisualQuery(query);
+        return {
+            searchTerms: query.split(/\s+/).filter(t => t.length > 3),
+            topicCategories: [],
+            technicalLevel: 1,
+            expectedAnswerType: 'factual',
+            entityFocus: [],
+            visualFocus: visualAnalysis.isVisualQuery,
+            visualTypes: visualAnalysis.visualTypes.length > 0 ? visualAnalysis.visualTypes : undefined
+        };
+    }
+}
+/**
+ * Determines if a query is likely about visual content
+ *
+ * @param query - The search query to analyze
+ * @returns True if the query is likely about visual content
+ */
+function isQueryAboutVisuals(query) {
+    const visualTerms = [
+        // Basic visual terms
+        'chart', 'graph', 'table', 'diagram', 'image', 'picture', 'figure',
+        'plot', 'visualization', 'infographic', 'slide', 'presentation',
+        'show', 'display', 'visual', 'illustration',
+        // Enhanced visual terms
+        'dashboard', 'screenshot', 'photo', 'thumbnail', 'gallery',
+        'icon', 'logo', 'banner', 'mockup', 'wireframe', 'flowchart',
+        'histogram', 'heatmap', 'treemap', 'scatter plot', 'pie chart',
+        'bar chart', 'line chart', 'area chart', 'bubble chart', 'pictogram',
+        // Document or content format terms indicating visuals
+        'slide deck', 'deck', 'report', 'whitepaper', 'brochure', 'poster',
+        'handout', 'leaflet', 'flyer',
+        // AI-specific visual terms
+        'generated image', 'ai image', 'visual representation',
+        'data visualization', 'visual analysis', 'render',
+        'rendered output', 'visual model', 'image generation',
+        // File formats that imply visual content
+        'png', 'jpg', 'jpeg', 'svg', 'gif', 'pdf', 'ppt', 'slides',
+        'tiff', 'bmp', 'webp', 'image file', 'graphics file'
+    ];
+    const lowerQuery = query.toLowerCase();
+    // Check for direct references to visual elements
+    for (const term of visualTerms) {
+        // Match both whole words and partial word matches
+        if (lowerQuery.includes(' ' + term + ' ') ||
+            lowerQuery.includes(' ' + term + ',') ||
+            lowerQuery.includes(' ' + term + '.') ||
+            lowerQuery.includes(' ' + term + '?') ||
+            lowerQuery.includes(' ' + term + ':') ||
+            lowerQuery.startsWith(term + ' ') ||
+            lowerQuery.endsWith(' ' + term) ||
+            lowerQuery === term) {
+            return true;
+        }
+    }
+    // Check for queries asking to see something
+    const seeingPatterns = [
+        'show me', 'display', 'visualize', 'graph of', 'chart of',
+        'what does it look like', 'how does it appear', 'can i see',
+        'view the', 'visual of', 'picture of', 'image of', 'rendered',
+        'illustrated', 'visually explain', 'draw', 'plot', 'screenshot',
+        'what is shown', 'visually represent', 'demonstrate visually',
+        'can you show', 'please show', 'let me see', 'display a',
+        'what are the visuals', 'do you have images', 'are there pictures',
+        'how is it visualized', 'visual example'
+    ];
+    for (const pattern of seeingPatterns) {
+        if (lowerQuery.includes(pattern)) {
+            return true;
+        }
+    }
+    // Analyze for implicit visual intent
+    const implicitVisualPatterns = [
+        'color', 'shape', 'layout', 'design', 'appearance', 'looks like',
+        'visual pattern', 'trend line', 'data point', 'dashboard',
+        'compare visually', 'side by side', 'thumbnail', 'format',
+        'graphic', 'depiction', 'illustration', 'icon', 'logo',
+        'UI', 'interface', 'aesthetic', 'visually', 'sketch',
+        'outlook', 'resemble', 'visual representation', 'artistically'
+    ];
+    // Count how many implicit patterns match
+    let implicitMatchCount = 0;
+    for (const pattern of implicitVisualPatterns) {
+        if (lowerQuery.includes(pattern)) {
+            implicitMatchCount++;
+        }
+    }
+    // If multiple implicit patterns match, it's likely a visual query
+    if (implicitMatchCount >= 2) {
+        return true;
+    }
+    // Use more advanced regex patterns
+    const regexPatterns = [
+        /\b(show|display|see)\b.{1,30}\b(image|picture|chart|graph|diagram)\b/i,
+        /\b(what|how).{1,20}\b(look|appear|display|visualize)\b/i,
+        /\bvisual.{1,15}\b(example|representation|aid|format)\b/i
+    ];
+    for (const pattern of regexPatterns) {
+        if (pattern.test(lowerQuery)) {
+            return true;
+        }
+    }
+    return false;
+}
+/**
+ * Analyze a query to determine if it's requesting visual content
+ * and what specific type of visual content is being requested
+ *
+ * @param query - The search query to analyze
+ * @returns Analysis of the visual aspects of the query
+ */
+function analyzeVisualQuery(query) {
+    const lowerQuery = query.toLowerCase();
+    const isVisual = isQueryAboutVisuals(query);
+    // Visual type detection
+    const visualTypePatterns = {
+        'chart': [
+            /\b(chart|graph|plot)\b/i,
+            /\b(bar|line|pie|area|scatter|bubble|column)\s*(chart|graph|plot)\b/i,
+            /\b(histogram|heatmap|treemap)\b/i,
+            /\bdata\s*(visualization|viz)\b/i
+        ],
+        'table': [
+            /\b(table|matrix|grid)\b/i,
+            /\b(row|column)\s*(data|value|header)\b/i,
+            /\btabular\s*(data|format|representation)\b/i
+        ],
+        'diagram': [
+            /\b(diagram|flowchart|schematic|blueprint)\b/i,
+            /\b(process|workflow|architecture|system|network)\s*(diagram|map|chart)\b/i,
+            /\b(flow|relationship|concept|mind)\s*(map|diagram)\b/i
+        ],
+        'image': [
+            /\b(image|picture|photo|photograph|screenshot)\b/i,
+            /\bwhat\s*(does|do)\s*it\s*look\s*like\b/i,
+            /\b(png|jpg|jpeg|gif)\b/i
+        ],
+        'infographic': [
+            /\b(infographic|pictogram)\b/i,
+            /\bvisual\s*(summary|overview|explanation)\b/i,
+            /\bcombination\s*of\s*(text|data)\s*and\s*(images|graphics)\b/i
+        ],
+        'presentation': [
+            /\b(slide|deck|presentation|powerpoint|ppt)\b/i,
+            /\bslide\s*(deck|show|presentation)\b/i
+        ]
     };
-}
-/**
- * Determines the technical level range to match
- */
-function determineTechnicalLevelRange(analysis) {
-    // Default to match within +/- 3 of the query's technical level
-    let min = Math.max(1, analysis.technicalLevel - 3);
-    let max = Math.min(10, analysis.technicalLevel + 3);
-    // Widen the range for exploratory queries
-    if (analysis.queryType === 'EXPLORATORY') {
-        min = 1;
-        max = 10;
+    // Detect matching visual types
+    const matchedTypes = [];
+    let highestConfidence = 0;
+    for (const [type, patterns] of Object.entries(visualTypePatterns)) {
+        for (const pattern of patterns) {
+            if (pattern.test(lowerQuery)) {
+                if (!matchedTypes.includes(type)) {
+                    matchedTypes.push(type);
+                    // Calculate confidence based on pattern specificity
+                    const match = lowerQuery.match(pattern);
+                    if (match) {
+                        const confidence = match[0].length / lowerQuery.length;
+                        highestConfidence = Math.max(highestConfidence, confidence);
+                    }
+                }
+            }
+        }
     }
-    // Narrow the range for technical queries
-    if (analysis.primaryCategory === 'TECHNICAL') {
-        min = Math.max(min, analysis.technicalLevel - 1);
+    // Detect explicit vs. implicit
+    const explicitVisualTerms = [
+        'show', 'display', 'visualize', 'image', 'picture', 'photo',
+        'chart', 'graph', 'diagram', 'table', 'visual'
+    ];
+    let isExplicit = false;
+    for (const term of explicitVisualTerms) {
+        if (lowerQuery.includes(' ' + term + ' ') ||
+            lowerQuery.startsWith(term + ' ') ||
+            lowerQuery.endsWith(' ' + term) ||
+            lowerQuery === term) {
+            isExplicit = true;
+            break;
+        }
     }
-    return { min, max };
-}
-/**
- * Determines whether to use query expansion
- */
-function shouldExpandQuery(analysis) {
-    // Don't expand if we have specific entities and the query is factual
-    if (analysis.entities.length > 0 && analysis.queryType === 'FACTUAL') {
-        return false;
+    // If we detected it's a visual query but couldn't identify specific types,
+    // add a generic "image" type
+    if (isVisual && matchedTypes.length === 0) {
+        matchedTypes.push('image');
     }
-    // Expand for exploratory, comparative, or general queries
-    return analysis.queryType === 'EXPLORATORY' ||
-        analysis.queryType === 'COMPARATIVE' ||
-        analysis.primaryCategory === 'GENERAL';
+    // Set confidence based on various factors
+    let confidence = isVisual ? 0.6 : 0;
+    if (highestConfidence > 0) {
+        confidence = Math.max(confidence, 0.5 + (highestConfidence * 0.5));
+    }
+    if (isExplicit) {
+        confidence = Math.max(confidence, 0.8);
+    }
+    return {
+        isVisualQuery: isVisual,
+        visualTypes: matchedTypes,
+        confidence: confidence,
+        explicitVisualRequest: isExplicit
+    };
 }

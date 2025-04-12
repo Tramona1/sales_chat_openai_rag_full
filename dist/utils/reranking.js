@@ -4,10 +4,46 @@
  *
  * This module applies LLM-based reranking to improve search result ordering.
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.rerank = rerank;
+exports.rerankWithGemini = rerankWithGemini;
 const openaiClient_1 = require("./openaiClient");
+const geminiClient_1 = require("./geminiClient");
 const errorHandling_1 = require("./errorHandling");
+const modelConfig_1 = require("./modelConfig");
 /**
  * Reranks search results based on relevance to the query
  *
@@ -18,6 +54,7 @@ const errorHandling_1 = require("./errorHandling");
  * @returns Reranked results (topK of them)
  */
 async function rerank(query, results, topK = results.length, options = {}) {
+    var _a;
     // No need to rerank if we have 0 or 1 results
     if (results.length <= 1) {
         return results;
@@ -25,6 +62,7 @@ async function rerank(query, results, topK = results.length, options = {}) {
     try {
         // Convert results to HybridSearchResult format if needed
         const hybridResults = results.map((result) => {
+            var _a, _b;
             // If it's already a HybridSearchResult, return it as is
             if (result.metadata && result.bm25Score !== undefined && result.vectorScore !== undefined) {
                 return result;
@@ -43,15 +81,22 @@ async function rerank(query, results, topK = results.length, options = {}) {
                 metadata: {
                     matchesCategory: true,
                     categoryBoost: 0,
-                    technicalLevelMatch: 1
+                    technicalLevelMatch: 1,
+                    // Pass through any contextual information
+                    hasContextualMetadata: ((_a = result.item.metadata) === null || _a === void 0 ? void 0 : _a.isContextualChunk) || false,
+                    contextBoost: ((_b = result.item.metadata) === null || _b === void 0 ? void 0 : _b.isContextualChunk) ? 0.1 : 0
                 }
             };
         });
+        // Get model info from central configuration
+        const useContextualInfo = (_a = options.useContextualInfo) !== null && _a !== void 0 ? _a : true;
+        const modelConfig = (0, modelConfig_1.getModelForTask)(undefined, 'reranking');
         // Default options
-        const model = options.model || 'gpt-3.5-turbo';
+        const provider = options.provider || modelConfig.provider;
+        const model = options.model || modelConfig.model;
         const timeoutMs = options.timeoutMs || 10000;
-        console.log(`[Reranking] Reranking ${hybridResults.length} results with model: ${model}`);
-        // Create prompt for the reranker
+        console.log(`[Reranking] Reranking ${hybridResults.length} results with provider: ${provider}, model: ${model}`);
+        // Create prompt for the reranker with contextual awareness
         const systemPrompt = `
       You are a Search Result Evaluator. Your task is to rank search results by relevance to the query.
       Assign a score from 0-10 for each result where:
@@ -62,16 +107,47 @@ async function rerank(query, results, topK = results.length, options = {}) {
       - 0: Completely irrelevant
       
       Focus on semantic relevance, factual accuracy, and information completeness.
+      ${useContextualInfo ? `
+      IMPORTANT: Pay special attention to results that contain contextual metadata:
+      - Document summaries provide an overview of the source document
+      - Key points highlight important information in the result
+      - When results contain definitions or examples, they may be more useful to the user
+      - Related topics can indicate broader relevance to the query
+      ` : ''}
       
       IMPORTANT: You must respond with a valid JSON array of objects, where each object has resultId and score properties.
     `;
         // Prepare results for evaluation
         const formattedResults = hybridResults.map((result, i) => {
+            var _a, _b, _c, _d, _e;
             // Truncate content to a reasonable length for evaluation
             const content = result.item.text.length > 500
                 ? result.item.text.substring(0, 500) + '...'
                 : result.item.text;
-            return `[${i + 1}] ${content}`;
+            // Include contextual information if available and requested
+            let contextInfo = '';
+            if (useContextualInfo && result.item.metadata) {
+                const metadata = result.item.metadata;
+                if (metadata.documentSummary) {
+                    contextInfo += `\nDocument Summary: ${metadata.documentSummary}`;
+                }
+                if ((_a = metadata.context) === null || _a === void 0 ? void 0 : _a.description) {
+                    contextInfo += `\nContent Description: ${metadata.context.description}`;
+                }
+                if (((_b = metadata.context) === null || _b === void 0 ? void 0 : _b.keyPoints) && metadata.context.keyPoints.length > 0) {
+                    contextInfo += `\nKey Points: ${metadata.context.keyPoints.join(', ')}`;
+                }
+                if ((_c = metadata.context) === null || _c === void 0 ? void 0 : _c.isDefinition) {
+                    contextInfo += `\nContains Definition: Yes`;
+                }
+                if ((_d = metadata.context) === null || _d === void 0 ? void 0 : _d.containsExample) {
+                    contextInfo += `\nContains Example: Yes`;
+                }
+                if (((_e = metadata.context) === null || _e === void 0 ? void 0 : _e.relatedTopics) && metadata.context.relatedTopics.length > 0) {
+                    contextInfo += `\nRelated Topics: ${metadata.context.relatedTopics.join(', ')}`;
+                }
+            }
+            return `[${i + 1}] ${content}${contextInfo}`;
         }).join('\n\n');
         // User prompt with query and results
         const userPrompt = `
@@ -92,8 +168,8 @@ async function rerank(query, results, topK = results.length, options = {}) {
         const timeoutPromise = new Promise((resolve) => {
             setTimeout(() => resolve(null), timeoutMs);
         });
-        // Request reranking with timeout
-        const rerankerPromise = (0, openaiClient_1.generateStructuredResponse)(systemPrompt, userPrompt, {
+        // Schema for structured response
+        const responseSchema = {
             type: 'array',
             items: {
                 type: 'object',
@@ -104,7 +180,16 @@ async function rerank(query, results, topK = results.length, options = {}) {
                 },
                 required: ['resultId', 'score']
             }
-        }, model);
+        };
+        // Choose appropriate provider to generate reranking
+        let rerankerPromise;
+        if (provider === 'gemini') {
+            rerankerPromise = (0, geminiClient_1.generateStructuredGeminiResponse)(systemPrompt, userPrompt, responseSchema);
+        }
+        else {
+            // Default to OpenAI
+            rerankerPromise = (0, openaiClient_1.generateStructuredResponse)(systemPrompt, userPrompt, responseSchema, model);
+        }
         // Race between reranker and timeout
         const rerankerResponse = await Promise.race([rerankerPromise, timeoutPromise]);
         // Handle timeout
@@ -166,10 +251,19 @@ async function rerank(query, results, topK = results.length, options = {}) {
             // Sort by relevance score in descending order
             .sort((a, b) => b.relevanceScore - a.relevanceScore);
         console.log(`[Reranking] Successfully reranked results`);
-        // Return the top K results in reranked order
+        // Return the top K results in reranked order with added reranking metadata
         return rerankedResults
             .slice(0, topK)
-            .map((item) => item.original);
+            .map((item) => {
+            // Add reranking score to the result metadata for debugging/analysis
+            const original = item.original;
+            if (original.item && original.item.metadata) {
+                // Use type assertion to add the reranking metadata properties
+                original.item.metadata.rerankScore = item.relevanceScore;
+                original.item.metadata.originalScore = original.score;
+            }
+            return original;
+        });
     }
     catch (error) {
         // Log error and fall back to original ranking
@@ -177,4 +271,375 @@ async function rerank(query, results, topK = results.length, options = {}) {
         console.log('[Reranking] Falling back to original ranking due to error');
         return results.slice(0, topK);
     }
+}
+/**
+ * Specialized reranking function for multi-modal content using Gemini
+ * This reranker is designed to process both text and visual context
+ *
+ * @param query The user query
+ * @param results The search results to rerank
+ * @param options Reranking options
+ * @returns Reranked results optimized for multi-modal content
+ */
+async function rerankWithGemini(query, results, options = {}) {
+    // Early return if not enough results to rerank
+    if (results.length <= 1)
+        return results;
+    // Set default options
+    const { limit = 5, includeScores = true, useVisualContext = true, visualFocus = false, visualTypes = [], timeoutMs = 10000 } = options;
+    try {
+        // Import Gemini client functions
+        const { generateStructuredGeminiResponse } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
+        // Get enhanced visual query analysis
+        let queryVisualAnalysis = {
+            isVisualQuery: visualFocus,
+            visualTypes: visualTypes,
+            confidence: visualFocus ? 1.0 : 0,
+            explicitVisualRequest: visualFocus
+        };
+        // Use the enhanced query analysis if not explicitly set
+        if (!visualFocus && query) {
+            try {
+                const { analyzeVisualQuery } = await Promise.resolve().then(() => __importStar(require('./queryAnalysis')));
+                queryVisualAnalysis = analyzeVisualQuery(query);
+            }
+            catch (e) {
+                console.log('[Reranking] Error analyzing visual aspects of query:', e);
+            }
+        }
+        // Determine which visual types to prioritize
+        const targetVisualTypes = queryVisualAnalysis.visualTypes.length > 0
+            ? queryVisualAnalysis.visualTypes
+            : visualTypes;
+        const queryHasVisualFocus = queryVisualAnalysis.isVisualQuery;
+        const visualConfidence = queryVisualAnalysis.confidence;
+        // Convert to the internal structure for reranking
+        const itemsToRerank = results.map((result, index) => {
+            // Extract the item and its metadata
+            const item = result.item;
+            const metadata = item.metadata || {};
+            // Prepare visual context information
+            let visualContextInfo = '';
+            let visualTypesList = [];
+            // Include visual content information if available and enabled
+            if (useVisualContext) {
+                // Extract visual content information
+                if (item.visualContent && Array.isArray(item.visualContent) && item.visualContent.length > 0) {
+                    // Process each visual element
+                    const visualDescriptions = item.visualContent.map((visual) => {
+                        // Track the visual type
+                        if (visual.type && !visualTypesList.includes(visual.type.toString())) {
+                            visualTypesList.push(visual.type.toString());
+                        }
+                        let visualDesc = `[${visual.type.toUpperCase()}]: ${visual.description || 'No description available'}`;
+                        // Add extracted text if available
+                        if (visual.extractedText || visual.detectedText) {
+                            const extractedText = visual.extractedText || visual.detectedText;
+                            visualDesc += `\nText in visual: ${extractedText}`;
+                        }
+                        // Add structured data summary if available
+                        if (visual.structuredData || visual.data) {
+                            try {
+                                const structuredData = visual.structuredData || visual.data;
+                                const structuredDataSummary = typeof structuredData === 'object'
+                                    ? JSON.stringify(structuredData).substring(0, 150) + '...'
+                                    : String(structuredData).substring(0, 150) + '...';
+                                visualDesc += `\nStructured data: ${structuredDataSummary}`;
+                            }
+                            catch (e) {
+                                // Ignore structured data if it causes issues
+                            }
+                        }
+                        // Add figure number if available
+                        if (visual.figureNumber) {
+                            visualDesc += `\nFigure #${visual.figureNumber}`;
+                        }
+                        return visualDesc;
+                    }).join('\n\n');
+                    visualContextInfo = `VISUAL CONTENT:\n${visualDescriptions}\n\n`;
+                }
+                // Or if we have metadata about visual elements
+                else if (metadata.isVisualElement || metadata.hasVisualContent || metadata.hasVisualElements) {
+                    visualContextInfo = 'VISUAL CONTENT:\n';
+                    if (metadata.isVisualElement && metadata.visualElementType) {
+                        visualContextInfo += `[${metadata.visualElementType.toUpperCase()}]: This is a visual element`;
+                        // Add to visual types list
+                        if (!visualTypesList.includes(metadata.visualElementType)) {
+                            visualTypesList.push(metadata.visualElementType);
+                        }
+                    }
+                    else if (metadata.hasVisualContent || metadata.hasVisualElements) {
+                        visualContextInfo += 'Contains visual elements that may be relevant to the query';
+                    }
+                    if (metadata.visualElementTypes && Array.isArray(metadata.visualElementTypes)) {
+                        visualContextInfo += `\nVisual types: ${metadata.visualElementTypes.join(', ')}`;
+                        // Add to visual types list
+                        for (const vType of metadata.visualElementTypes) {
+                            if (!visualTypesList.includes(vType)) {
+                                visualTypesList.push(vType);
+                            }
+                        }
+                    }
+                }
+            }
+            // Get the text content, prioritizing original text if available
+            const textContent = item.originalText || item.text;
+            // Check if this result has matched visuals
+            const hasMatchedVisual = result.matchedVisual !== undefined;
+            const matchType = result.matchType || 'text';
+            // Determine if there's a visual type match with the query
+            const hasVisualTypeMatch = targetVisualTypes.length > 0 &&
+                visualTypesList.some(vType => targetVisualTypes.some(tType => vType.toLowerCase().includes(tType.toLowerCase()) ||
+                    tType.toLowerCase().includes(vType.toLowerCase())));
+            return {
+                id: index,
+                text: textContent,
+                visualContext: visualContextInfo,
+                initialScore: result.score,
+                hasMatchedVisual,
+                matchType,
+                visualTypes: visualTypesList,
+                hasVisualTypeMatch
+            };
+        });
+        // Create enhanced prompt for Gemini with multi-modal awareness
+        const systemPrompt = `
+      You are a specialized Multi-Modal Search Result Evaluator. Your task is to rank search results by relevance to the query, considering both textual and visual content.
+      
+      Assign a score from 0-10 for each result where:
+      - 10: Perfect match that directly and comprehensively answers the query
+      - 7-9: Highly relevant with most information needed
+      - 4-6: Moderately relevant with partial information
+      - 1-3: Slightly relevant but missing key information
+      - 0: Completely irrelevant
+      
+      IMPORTANT INSTRUCTIONS FOR MULTI-MODAL EVALUATION:
+      
+      ${queryHasVisualFocus ? `
+      - This query is SPECIFICALLY ABOUT VISUAL CONTENT with a confidence of ${(visualConfidence * 100).toFixed(0)}%.
+      - The query is explicitly asking for visual information${targetVisualTypes.length > 0 ? ` related to: ${targetVisualTypes.join(', ')}` : ''}.
+      - Results containing relevant visual elements should receive significantly higher scores.
+      - Text-only results should be downranked unless they are exceptionally relevant to the query.
+      - Results with the exact visual types requested should receive the highest scores.
+      ` : `
+      - This query is primarily about textual information, but may benefit from supporting visuals.
+      - Results with relevant visual content that complements the text should receive moderately higher scores.
+      `}
+      
+      Visual Content Evaluation Guidelines:
+      - Always examine the "VISUAL CONTENT" sections when present - they contain valuable context
+      - For each result, consider how well the visual elements enhance understanding of the topic
+      - Evaluate the relevance of the visual descriptions to the query
+      - Consider both the quality and quantity of visual information provided
+      - For charts and diagrams, check if they illustrate concepts mentioned in the query
+      - For tables, assess if they contain data points relevant to the query
+      - For images and screenshots, evaluate if they show the relevant visual information
+      
+      Scoring Adjustments:
+      - Results with visuals that match the specific types requested should get +2-3 points
+      - Results with relevant but not exact visual matches should get +1-2 points
+      - Results with high-quality textual content AND relevant visuals should receive the highest scores
+      - If a query explicitly asks to "show" something, results without visuals should rarely score above 5
+      
+      IMPORTANT: Your response must be a valid JSON array of objects, where each object has 'id', 'score', and 'reason' properties.
+    `;
+        // Prepare the documents for evaluation
+        const formattedItems = itemsToRerank.map((item) => {
+            // Build document representation with visual type highlighting
+            let documentInfo = `DOCUMENT ${item.id}:`;
+            // Add visual type information if available
+            if (item.visualTypes && item.visualTypes.length > 0) {
+                documentInfo += `\nVISUAL TYPES PRESENT: ${item.visualTypes.join(', ')}`;
+                // Highlight visual type matches if query has specific targets
+                if (targetVisualTypes.length > 0 && item.hasVisualTypeMatch) {
+                    documentInfo += `\n⭐ MATCHES REQUESTED VISUAL TYPE: ${targetVisualTypes.join(', ')} ⭐`;
+                }
+            }
+            // Add the visual context and text content
+            documentInfo += `\n${item.visualContext ? item.visualContext : ''}---\n${item.text}`;
+            return documentInfo;
+        }).join('\n\n');
+        // User prompt with query and documents
+        const userPrompt = `
+      QUERY: "${query}"
+      
+      ${queryHasVisualFocus
+            ? `This is a VISUAL QUERY with confidence ${(visualConfidence * 100).toFixed(0)}%.${targetVisualTypes.length > 0
+                ? ` It specifically requests these visual types: ${targetVisualTypes.join(', ')}.`
+                : ''}`
+            : 'This is primarily a text-based query that may benefit from visual information.'}
+      
+      DOCUMENTS:
+      ${formattedItems}
+      
+      Evaluate the relevance of each document to the query, paying special attention to visual content when present.
+      ${targetVisualTypes.length > 0
+            ? `Prioritize results containing these specific visual types: ${targetVisualTypes.join(', ')}.`
+            : ''}
+      
+      Return a JSON array where each item has:
+      - id: The document number
+      - score: A relevance score from 0-10
+      - reason: Brief justification for the score that includes consideration of visual content when present
+      
+      Format your response as a JSON array ONLY, with no additional text.
+    `;
+        // Schema for structured response
+        const responseSchema = {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'integer' },
+                    score: { type: 'number' },
+                    reason: { type: 'string' }
+                },
+                required: ['id', 'score', 'reason']
+            }
+        };
+        // Set up timeout for the reranking
+        const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => resolve(null), timeoutMs);
+        });
+        // Generate reranking with Gemini
+        const rerankerPromise = generateStructuredGeminiResponse(systemPrompt, userPrompt, responseSchema);
+        // Race between reranker and timeout
+        const rerankerResponse = await Promise.race([rerankerPromise, timeoutPromise]);
+        // Handle timeout with intelligent fallback
+        if (!rerankerResponse) {
+            console.log(`[MultiModal Reranking] Timed out after ${timeoutMs}ms, using fallback reranking`);
+            // Use a simple heuristic-based fallback reranking when Gemini times out
+            return applyFallbackReranking(results, {
+                query,
+                limit,
+                visualFocus: queryHasVisualFocus,
+                targetVisualTypes,
+                includeScores
+            });
+        }
+        // Process the response
+        let rankingItems = Array.isArray(rerankerResponse) ? rerankerResponse : [];
+        // Handle empty or invalid responses with fallback
+        if (rankingItems.length === 0) {
+            console.log('[MultiModal Reranking] Empty response from reranker, using fallback');
+            return applyFallbackReranking(results, {
+                query,
+                limit,
+                visualFocus: queryHasVisualFocus,
+                targetVisualTypes,
+                includeScores
+            });
+        }
+        // Map the ranked items back to the original results
+        const rerankedResults = rankingItems.map(rankItem => {
+            const originalResultIndex = rankItem.id;
+            // Safety check to ensure the index is valid
+            if (originalResultIndex < 0 || originalResultIndex >= results.length) {
+                console.warn(`[Reranking] Invalid result index: ${originalResultIndex}`);
+                return null;
+            }
+            const originalResult = results[originalResultIndex];
+            // Normalize the score to 0-1 range (from 0-10)
+            const normalizedScore = rankItem.score / 10;
+            return {
+                ...originalResult,
+                score: normalizedScore,
+                // Include the original score and explanation if requested
+                ...(includeScores ? {
+                    originalScore: originalResult.score,
+                    explanation: rankItem.reason
+                } : {})
+            };
+        }).filter(Boolean); // Remove any null results from invalid indices
+        // Sort the results by their new scores and limit them
+        return rerankedResults
+            .sort((a, b) => b.score - a.score)
+            .slice(0, limit);
+    }
+    catch (error) {
+        console.error("[MultiModal Reranking] Error during Gemini reranking:", error);
+        // Fallback to a simple reranking strategy based on visual content
+        return applyFallbackReranking(results, {
+            query,
+            limit,
+            visualFocus: visualFocus,
+            targetVisualTypes: visualTypes,
+            includeScores,
+            error: String(error)
+        });
+    }
+}
+/**
+ * Apply a simple heuristic-based fallback reranking when Gemini reranking fails
+ * This ensures we still get reasonable results even if the LLM-based reranking fails
+ */
+function applyFallbackReranking(results, options) {
+    const { query, limit, visualFocus, targetVisualTypes, includeScores, error } = options;
+    // Clone the results to avoid modifying the originals
+    const modifiedResults = results.map(r => ({ ...r }));
+    // Apply heuristic score adjustments
+    for (const result of modifiedResults) {
+        const item = result.item;
+        const metadata = item.metadata || {};
+        let scoreAdjustment = 0;
+        let explanationText = 'Fallback scoring: ';
+        // Boost results with matched visuals
+        if (result.matchedVisual) {
+            scoreAdjustment += 0.25;
+            explanationText += 'Has matched visual (+0.25). ';
+        }
+        // Boost results with any visual content if the query has visual focus
+        if (visualFocus &&
+            (item.visualContent || metadata.hasVisualContent || metadata.isVisualElement)) {
+            scoreAdjustment += 0.2;
+            explanationText += 'Query has visual focus and result has visual content (+0.2). ';
+            // Additional boost for specific visual type matches
+            const resultVisualTypes = [];
+            // Get visual types from visualContent
+            if (item.visualContent && Array.isArray(item.visualContent)) {
+                for (const visual of item.visualContent) {
+                    if (visual.type && !resultVisualTypes.includes(visual.type.toString())) {
+                        resultVisualTypes.push(visual.type.toString());
+                    }
+                }
+            }
+            // Get visual types from metadata
+            if (metadata.visualElementType && !resultVisualTypes.includes(metadata.visualElementType)) {
+                resultVisualTypes.push(metadata.visualElementType);
+            }
+            if (metadata.visualElementTypes && Array.isArray(metadata.visualElementTypes)) {
+                for (const type of metadata.visualElementTypes) {
+                    if (!resultVisualTypes.includes(type)) {
+                        resultVisualTypes.push(type);
+                    }
+                }
+            }
+            // Check for visual type matches
+            if (targetVisualTypes.length > 0 && resultVisualTypes.length > 0) {
+                const hasTypeMatch = resultVisualTypes.some(resultType => targetVisualTypes.some(targetType => resultType.toLowerCase().includes(targetType.toLowerCase()) ||
+                    targetType.toLowerCase().includes(resultType.toLowerCase())));
+                if (hasTypeMatch) {
+                    scoreAdjustment += 0.3;
+                    explanationText += `Matches requested visual type(s): ${targetVisualTypes.join(', ')} (+0.3). `;
+                }
+            }
+        }
+        // Preserve the original score for reference
+        if (includeScores) {
+            result.originalScore = result.score;
+        }
+        // Apply the adjustment (keeping within 0-1 range)
+        result.score = Math.min(1, Math.max(0, result.score + scoreAdjustment));
+        // Add explanation if scores are included
+        if (includeScores) {
+            if (error) {
+                explanationText += `Fallback used due to error: ${error}. `;
+            }
+            result.explanation = explanationText;
+        }
+    }
+    // Sort by adjusted scores
+    return modifiedResults
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
 }

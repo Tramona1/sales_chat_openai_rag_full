@@ -1,5 +1,5 @@
 import { VectorStoreItem } from './vectorStore';
-import { logInfo, logError } from './errorHandling';
+import { logInfo, logError } from './logger';
 import { detectConflictWithGemini } from './geminiProcessor';
 
 /**
@@ -98,7 +98,7 @@ export function detectDocumentConflicts(
   let relevantDocs = documents;
   if (entityName) {
     relevantDocs = documents.filter(doc => 
-      doc.text.toLowerCase().includes(entityName.toLowerCase())
+      doc.text && doc.text.toLowerCase().includes(entityName.toLowerCase())
     );
   }
   
@@ -224,11 +224,11 @@ export async function detectConflictsWithGemini(
       const conflictAnalysis = await detectConflictWithGemini(
         { 
           id: doc1.metadata?.source || 'doc1', 
-          text: doc1.text 
+          text: doc1.text || ''
         },
-        { 
-          id: doc2.metadata?.source || 'doc2', 
-          text: doc2.text 
+        {
+          id: doc2.metadata?.source || 'doc2',
+          text: doc2.text || ''
         }
       ) as GeminiConflictResult;
       
@@ -332,7 +332,7 @@ function detectLeadershipConflicts(documents: VectorStoreItem[]): ConflictGroup 
   
   // Filter for documents mentioning leadership
   const leadershipDocs = documents.filter(doc => 
-    ceoPattern.test(doc.text.toLowerCase())
+    doc.text && ceoPattern.test(doc.text.toLowerCase())
   );
   
   if (leadershipDocs.length <= 1) {
@@ -356,6 +356,7 @@ function detectLeadershipConflicts(documents: VectorStoreItem[]): ConflictGroup 
     ];
     
     for (const pattern of ceoMentionPatterns) {
+      if (!doc.text) continue;
       const matches = doc.text.match(pattern);
       if (matches && matches[1]) {
         const name = matches[1].trim();

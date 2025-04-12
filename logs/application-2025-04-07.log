@@ -1,6 +1,0 @@
-{"timestamp":"2025-04-07T07:17:15.969Z","level":"info","message":"Loaded vector documents","details":{"count":1460}}
-{"timestamp":"2025-04-07T07:17:15.978Z","level":"info","message":"Loaded corpus statistics","details":{"termsCount":17753,"documentCount":1460}}
-{"timestamp":"2025-04-07T07:17:15.978Z","level":"info","message":"Hybrid search system initialized","details":{"documentCount":1460,"vectorDocumentsCount":1460}}
-{"timestamp":"2025-04-07T07:31:45.545Z","level":"info","message":"Loaded vector documents","details":{"count":1460}}
-{"timestamp":"2025-04-07T07:31:45.555Z","level":"info","message":"Loaded corpus statistics","details":{"termsCount":17753,"documentCount":1460}}
-{"timestamp":"2025-04-07T07:31:45.556Z","level":"info","message":"Hybrid search system initialized","details":{"documentCount":1460,"vectorDocumentsCount":1460}}

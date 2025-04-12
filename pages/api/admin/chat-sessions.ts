@@ -8,7 +8,7 @@ import {
   deleteChatSession,
   updateChatSession
 } from '@/utils/chatStorage';
-import { logError } from '@/utils/errorHandling';
+import { logError } from '@/utils/logger';
 
 // Simple authorization check for admin routes
 // In a production app, this would use proper authentication

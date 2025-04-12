@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { standardizeApiErrorResponse } from '../../../../utils/errorHandling';
-import { getAllVectorStoreItems, vectorStore } from '../../../../utils/vectorStore';
+import { getAllVectorStoreItems, VectorStoreItem } from '../../../../utils/vectorStore';
 import path from 'path';
 import fs from 'fs';
 
@@ -35,7 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Get all vector store items
-    const allDocuments = getAllVectorStoreItems();
+    const allDocuments = await getAllVectorStoreItems();
     
     // Track which IDs were found and deleted
     const deletedIds: string[] = [];
@@ -48,7 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }> = {};
     
     // Filter out the documents to delete
-    const documentsToKeep = allDocuments.filter(item => {
+    const documentsToKeep = allDocuments.filter((item: VectorStoreItem) => {
       const documentId = item.metadata?.source;
       
       // If this is one of the documents to delete
@@ -131,15 +131,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }, null, 2));
     
     // Update the in-memory vector store to reflect the changes
-    try {
-      // Assign the documents directly to the vectorStore array
-      (vectorStore as any).length = 0; // Clear the array
-      documentsToKeep.forEach(item => (vectorStore as any).push(item));
-      
-      console.log(`Vector store updated with ${documentsToKeep.length} remaining documents`);
-    } catch (error) {
-      console.error('Error updating vector store in memory:', error);
-    }
+    // (vectorStore as any).length = 0; // Clear the array
+    // documentsToKeep.forEach((item: VectorStoreItem) => (vectorStore as any).push(item));
+    // console.log(`Vector store updated with ${documentsToKeep.length} remaining documents`);
     
     console.log(`Deleted ${deletedIds.length} documents, keeping ${documentsToKeep.length} documents`);
     

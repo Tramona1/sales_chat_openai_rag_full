@@ -4,14 +4,17 @@ import {
   convertAnalysisToMetadata,
   processDocumentWithEnhancedLabels,
   convertEnhancedAnalysisToMetadata
-} from '@/utils/geminiProcessor';
-import { embedText } from '@/utils/openaiClient';
-import { logError, logInfo } from '@/utils/errorHandling';
-import { addToPendingDocuments, checkForContentConflicts } from '@/utils/adminWorkflow';
+} from '../../../utils/geminiProcessor';
+import { embedText } from '../../../utils/embeddingClient';
+import { logError, logInfo } from '../../../utils/errorHandling';
+import { addToPendingDocuments, checkForContentConflicts } from '../../../utils/adminWorkflow';
+import { splitIntoChunksWithContext } from '../../../utils/documentProcessing';
+import { ContextualChunk } from '../../../types/documentProcessing';
 
 /**
  * API endpoint for ingesting documents with Gemini processing
  * This endpoint processes documents, analyzes them with Gemini, and adds them to the pending queue
+ * Enhanced with contextual chunking for improved document understanding
  */
 export default async function handler(
   req: NextApiRequest,
@@ -29,6 +32,7 @@ export default async function handler(
       source, 
       existingMetadata, 
       useEnhancedLabeling = true, // Default to enhanced labeling 
+      useContextualChunking = true, // Added flag for contextual chunking
       retryCount = 0              // For handling Gemini processing retries
     } = req.body;
 
@@ -45,7 +49,8 @@ export default async function handler(
       source,
       textLength: text.length,
       hasExistingMetadata: !!existingMetadata,
-      useEnhancedLabeling
+      useEnhancedLabeling,
+      useContextualChunking
     });
 
     // Check for potential content conflicts early
@@ -141,6 +146,7 @@ export default async function handler(
               source,
               existingMetadata,
               useEnhancedLabeling: true,
+              useContextualChunking,
               retryCount: retryCount + 1
             })
           });
@@ -173,11 +179,33 @@ export default async function handler(
       }
     }
 
-    // Generate embedding for vector storage
-    const embedding = await embedText(text);
+    // Process document with contextual chunking if enabled
+    let chunks: ContextualChunk[] = [];
+    if (useContextualChunking) {
+      try {
+        // Use our new contextual chunking with the document metadata
+        logInfo('Applying contextual chunking to document', { source });
+        chunks = await splitIntoChunksWithContext(text, 500, source, true, metadata);
+        logInfo(`Created ${chunks.length} contextual chunks`, { source });
+      } catch (chunkingError) {
+        logError('Error in contextual chunking', chunkingError);
+        // Fall back to non-contextual processing
+        logInfo('Falling back to standard chunking', { source });
+        // We'll handle this in the addToPendingDocuments function
+      }
+    }
+
+    // Generate embedding for vector storage (if we haven't done contextual chunking)
+    const embedding = chunks.length === 0 ? await embedText(text) : null;
 
     // Add to pending documents queue instead of vector store
-    const documentId = await addToPendingDocuments(text, metadata, embedding);
+    // Pass the chunks if we have them, otherwise null to use default processing
+    const documentId = await addToPendingDocuments(
+      text, 
+      metadata, 
+      embedding,
+      chunks.length > 0 ? chunks : null
+    );
 
     // Return success with analysis summary and conflict information
     return res.status(200).json({
@@ -186,6 +214,8 @@ export default async function handler(
       documentId,
       requiresApproval: true,
       useEnhancedLabeling,
+      useContextualChunking,
+      chunksCreated: chunks.length,
       processingSuccess,
       hasConflicts,
       conflictingDocIds: hasConflicts ? conflictingDocIds : [],

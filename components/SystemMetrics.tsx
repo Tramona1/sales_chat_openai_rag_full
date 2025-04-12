@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Database, Archive, MessageSquare, Clock } from 'lucide-react';
+import { Database, Archive, MessageSquare, Clock, FileText, Layers, Activity } from 'lucide-react';
 
 interface SystemMetricsProps {
   refreshInterval?: number; // Refresh interval in milliseconds
@@ -9,6 +9,8 @@ interface SystemMetricsProps {
 interface SystemMetricsData {
   vectorStore: {
     totalItems: number;
+    documents: number;
+    chunks: number;
   };
   caching: {
     size: number;
@@ -24,6 +26,10 @@ interface SystemMetricsData {
     last24Hours: number;
     last7Days: number;
     avgResponseTime: number;
+  };
+  performance?: {
+    averageQueryTime: number;
+    totalQueries: number;
   };
   lastUpdated: string;
 }
@@ -98,6 +104,12 @@ export default function SystemMetrics({ refreshInterval = 30000 }: SystemMetrics
     { name: 'Last 7d', value: metrics.queries.last7Days },
   ] : [];
 
+  // Prepare data for document chart
+  const documentChartData = metrics ? [
+    { name: 'Documents', value: metrics.vectorStore.documents },
+    { name: 'Chunks', value: metrics.vectorStore.chunks },
+  ] : [];
+
   if (loading && !metrics) {
     return (
       <div className="p-6 bg-white rounded-lg shadow">
@@ -157,11 +169,18 @@ export default function SystemMetrics({ refreshInterval = 30000 }: SystemMetrics
               <Archive className="h-5 w-5 text-blue-600 mr-2" />
               <h3 className="font-medium text-gray-700">Vector Store</h3>
             </div>
-            <div className="mt-4 text-center">
-              <div className="text-3xl font-bold text-blue-600">
-                {metrics.vectorStore.totalItems.toLocaleString()}
-              </div>
-              <div className="text-sm text-gray-500 mt-1">Total Items</div>
+            <div className="h-32">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={documentChartData}>
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#3B82F6" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-center text-sm text-gray-500 mt-2">
+              {metrics.vectorStore.totalItems.toLocaleString()} total items
             </div>
           </div>
 
@@ -207,7 +226,7 @@ export default function SystemMetrics({ refreshInterval = 30000 }: SystemMetrics
           {/* Query Stats Card */}
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
             <div className="flex items-center mb-2">
-              <MessageSquare className="h-5 w-5 text-amber-600 mr-2" />
+              <Activity className="h-5 w-5 text-amber-600 mr-2" />
               <h3 className="font-medium text-gray-700">Queries</h3>
             </div>
             <div className="h-32">
@@ -223,6 +242,11 @@ export default function SystemMetrics({ refreshInterval = 30000 }: SystemMetrics
             <div className="text-center text-sm text-gray-500 mt-2">
               {metrics.queries.last24Hours} queries in last 24 hours
             </div>
+            {metrics.performance && (
+              <div className="text-xs text-gray-500 mt-1">
+                Avg. Response: {metrics.performance.averageQueryTime.toFixed(2)}ms
+              </div>
+            )}
           </div>
         </div>
       )}

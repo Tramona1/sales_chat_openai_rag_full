@@ -4,12 +4,41 @@
  */
 
 import { OpenAI } from 'openai';
-import { AI_SETTINGS } from './modelConfig';
-import { logError } from './errorHandling';
 import * as dotenv from 'dotenv';
+import { logError } from './logger';
 
 // Load environment variables
 dotenv.config();
+
+// Default settings in case imports fail
+let AI_SETTINGS: any = {
+  defaultModel: process.env.DEFAULT_LLM_MODEL || 'gpt-4',
+  fallbackModel: process.env.FALLBACK_LLM_MODEL || 'gpt-3.5-turbo-1106',
+  embeddingModel: 'models/text-embedding-004',
+  embeddingDimension: 768,
+  maxTokens: 1000,
+  temperature: 0.7,
+  systemPrompt: 'You are a helpful assistant that answers based only on provided context.'
+};
+
+// Initialize AI_SETTINGS asynchronously
+(async () => {
+  try {
+    // Try to import from modelConfig
+    const modelConfig = await import('./modelConfig');
+    AI_SETTINGS = modelConfig.AI_SETTINGS;
+  } catch (error) {
+    console.warn('Error importing from modelConfig, using fallback', error);
+    try {
+      // Try to import from fallback
+      const fallbackConfig = await import('./modelConfigFallback');
+      AI_SETTINGS = fallbackConfig.AI_SETTINGS;
+    } catch (fallbackError) {
+      console.error('Failed to import from modelConfigFallback too', fallbackError);
+      // Will use the default implementation defined above
+    }
+  }
+})();
 
 // Initialize OpenAI client
 export const openai = new OpenAI({
@@ -24,6 +53,19 @@ export async function embedText(text: string): Promise<number[]> {
   try {
     // Clean and prepare text
     const cleanedText = text.trim().replace(/\n+/g, ' ');
+    
+    // Try to use the Gemini embedding function first (if available)
+    try {
+      // Dynamic import to avoid circular dependencies
+      const { embedTextWithGemini } = await import('./geminiClient');
+      const embedding = await embedTextWithGemini(cleanedText);
+      if (embedding && embedding.length > 0) {
+        return embedding;
+      }
+    } catch (geminiError) {
+      console.warn('Gemini embedding failed, falling back to OpenAI', geminiError);
+      // Fall back to OpenAI if Gemini fails
+    }
     
     // Get embedding from OpenAI
     const response = await openai.embeddings.create({

@@ -213,6 +213,7 @@ function DocumentManager({ limit = 50 }) {
         setError(null);
         try {
             // Call the API to update the document
+            console.log('Saving document update:', updatedDoc.id);
             const response = await fetch(`/api/admin/documents/${updatedDoc.id}`, {
                 method: 'PUT',
                 headers: {
@@ -223,19 +224,28 @@ function DocumentManager({ limit = 50 }) {
                     metadata: updatedDoc.metadata
                 })
             });
+            // Get the response data
+            const responseData = await response.json();
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(((_a = errorData.error) === null || _a === void 0 ? void 0 : _a.message) || 'Failed to update document');
+                console.error('Error response from server:', responseData);
+                throw new Error(((_a = responseData.error) === null || _a === void 0 ? void 0 : _a.message) || 'Failed to update document');
             }
-            // Refresh the documents list to show the updated document
-            setRefreshTrigger(prev => prev + 1);
+            console.log('Document saved successfully:', responseData);
+            // Refresh the documents list to show the updated document after a small delay
+            // to ensure server has time to process the update
+            setTimeout(() => {
+                setRefreshTrigger(prev => prev + 1);
+            }, 500);
+            // Close the modal
             setEditingDocument({ document: null, isOpen: false });
             // Show success message
-            alert("Document updated successfully");
+            alert(`Document ${updatedDoc.id} updated successfully. The document's embedding has been updated for search.`);
         }
         catch (err) {
             console.error('Error updating document:', err);
-            setError(err instanceof Error ? err.message : 'An error occurred while updating the document');
+            const errorMessage = err instanceof Error ? err.message : 'An error occurred while updating the document';
+            setError(errorMessage);
+            alert(`Error: ${errorMessage}\nPlease try again or check the console for more details.`);
         }
         finally {
             setSavingEdit(false);

@@ -19,7 +19,7 @@ const METADATA_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_RETRIES = 2;
 const DEFAULT_MODEL = 'gpt-4-turbo';
 const FALLBACK_MODEL = 'gpt-3.5-turbo';
-const GEMINI_MODEL = 'gemini-1.5-pro';
+const GEMINI_MODEL = 'gemini-2.0-pro';
 // Cache key prefix
 const METADATA_CACHE_KEY_PREFIX = 'metadata_extraction_';
 // Primary model for metadata extraction

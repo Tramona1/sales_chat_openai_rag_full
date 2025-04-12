@@ -4,7 +4,7 @@
  * This module provides utilities for advanced document processing with semantic understanding.
  */
 
-import { logError } from './errorHandling';
+import { logError } from './logger';
 
 /**
  * Process text with semantic understanding

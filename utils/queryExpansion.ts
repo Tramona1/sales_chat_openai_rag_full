@@ -7,7 +7,7 @@
 
 import { generateChatCompletion, generateStructuredResponse } from './openaiClient';
 import { tokenize } from './tokenization';
-import { logError } from './errorHandling';
+import { logError } from './logger';
 import { getFromCache, cacheWithExpiry } from './caching';
 
 /**

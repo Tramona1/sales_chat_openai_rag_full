@@ -8,6 +8,9 @@ const errorHandling_1 = require("../../../../utils/errorHandling");
 const vectorStore_1 = require("../../../../utils/vectorStore");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+// Constants for batch processing
+const VECTOR_STORE_DIR = path_1.default.join(process.cwd(), 'data', 'vector_batches');
+const BATCH_INDEX_FILE = path_1.default.join(process.cwd(), 'data', 'batch_index.json');
 async function handler(req, res) {
     // Only allow POST requests
     if (req.method !== 'POST') {
@@ -35,14 +38,37 @@ async function handler(req, res) {
         // Track which IDs were found and deleted
         const deletedIds = [];
         const notFoundIds = [];
+        // Create a map to track which batches need to be updated
+        const batchUpdates = {};
         // Filter out the documents to delete
         const documentsToKeep = allDocuments.filter(item => {
-            var _a;
+            var _a, _b, _c;
             const documentId = (_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source;
             // If this is one of the documents to delete
             if (documentId && documentIds.includes(documentId)) {
                 deletedIds.push(documentId);
+                // Track batches that need updating
+                const batchId = (_b = item.metadata) === null || _b === void 0 ? void 0 : _b.batch;
+                if (batchId) {
+                    if (!batchUpdates[batchId]) {
+                        batchUpdates[batchId] = {
+                            batchId,
+                            documentsToKeep: []
+                        };
+                    }
+                }
                 return false; // Remove this document
+            }
+            // If it has a batch ID, store it for batch updates
+            const batchId = (_c = item.metadata) === null || _c === void 0 ? void 0 : _c.batch;
+            if (batchId) {
+                if (!batchUpdates[batchId]) {
+                    batchUpdates[batchId] = {
+                        batchId,
+                        documentsToKeep: []
+                    };
+                }
+                batchUpdates[batchId].documentsToKeep.push(item);
             }
             return true; // Keep this document
         });
@@ -58,8 +84,30 @@ async function handler(req, res) {
                 }
             });
         }
-        // Manually save the updated documents
-        // Save to the single vectorStore.json file
+        // Update the batch files if applicable
+        if (fs_1.default.existsSync(BATCH_INDEX_FILE)) {
+            try {
+                // Read the batch index
+                const indexData = JSON.parse(fs_1.default.readFileSync(BATCH_INDEX_FILE, 'utf-8'));
+                const activeBatches = indexData.activeBatches || [];
+                // Update each affected batch
+                for (const batchId of Object.keys(batchUpdates)) {
+                    if (activeBatches.includes(batchId)) {
+                        const batchFile = path_1.default.join(VECTOR_STORE_DIR, `batch_${batchId}.json`);
+                        if (fs_1.default.existsSync(batchFile)) {
+                            // Write the updated batch with only the kept documents
+                            fs_1.default.writeFileSync(batchFile, JSON.stringify(batchUpdates[batchId].documentsToKeep, null, 2));
+                            console.log(`Updated batch ${batchId} after removing documents`);
+                        }
+                    }
+                }
+            }
+            catch (batchError) {
+                console.error('Error updating batch files during batch deletion:', batchError);
+                // Continue with main deletion even if batch updates fail
+            }
+        }
+        // Manually save the updated documents to the single vectorStore.json file
         const singleStoreFile = path_1.default.join(process.cwd(), 'data', 'vectorStore.json');
         fs_1.default.writeFileSync(singleStoreFile, JSON.stringify({
             items: documentsToKeep,

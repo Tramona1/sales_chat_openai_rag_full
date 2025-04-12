@@ -23,6 +23,8 @@ const errorHandling_1 = require("./errorHandling");
 const vectorStore_1 = require("./vectorStore");
 const bm25_1 = require("./bm25");
 const documentCategories_1 = require("./documentCategories");
+const documentProcessing_js_1 = require("./documentProcessing.js");
+const embeddingClient_js_1 = require("./embeddingClient.js");
 // File paths for storing pending documents
 const PENDING_DIR = path_1.default.join(process.cwd(), 'data', 'pending');
 const PENDING_INDEX_FILE = path_1.default.join(PENDING_DIR, 'pending_index.json');
@@ -61,8 +63,13 @@ async function getPendingDocuments() {
 }
 /**
  * Add a document to the pending queue
+ * @param text The document text
+ * @param metadata Document metadata
+ * @param embedding Optional document embedding
+ * @param contextualChunks Optional array of contextual chunks
+ * @returns Document ID
  */
-async function addToPendingDocuments(text, metadata, embedding) {
+async function addToPendingDocuments(text, metadata, embedding, contextualChunks) {
     await initPendingDir();
     try {
         // Create a pending document with a unique ID
@@ -73,12 +80,53 @@ async function addToPendingDocuments(text, metadata, embedding) {
             submittedAt: new Date().toISOString(),
             reviewStatus: 'pending'
         };
+        // Process chunks if not provided
+        let chunks;
+        let hasContextualChunks = false;
+        if (contextualChunks && contextualChunks.length > 0) {
+            (0, errorHandling_1.logInfo)(`Using ${contextualChunks.length} provided contextual chunks for document ${id}`);
+            hasContextualChunks = true;
+            // Generate embeddings for all chunks in a batch
+            const chunkTexts = contextualChunks.map(chunk => chunk.text);
+            const chunkEmbeddings = await (0, embeddingClient_js_1.embedBatch)(chunkTexts);
+            // Map embeddings back to chunks
+            chunks = contextualChunks.map((chunk, index) => ({
+                text: chunk.text,
+                embedding: chunkEmbeddings[index],
+                metadata: {
+                    ...chunk.metadata,
+                    source: metadata.source,
+                    parentDocument: id
+                }
+            }));
+        }
+        else {
+            (0, errorHandling_1.logInfo)('No contextual chunks provided, using standard chunking', { id });
+            // Use standard chunking as a fallback
+            const standardChunks = (0, documentProcessing_js_1.splitIntoChunks)(text, 500, metadata.source);
+            // Generate embeddings for all chunks
+            const chunkTexts = standardChunks.map(chunk => chunk.text);
+            const chunkEmbeddings = await (0, embeddingClient_js_1.embedBatch)(chunkTexts);
+            chunks = standardChunks.map((chunk, index) => ({
+                text: chunk.text,
+                embedding: chunkEmbeddings[index],
+                metadata: {
+                    ...chunk.metadata,
+                    source: metadata.source,
+                    parentDocument: id
+                }
+            }));
+        }
+        // Generate document embedding if not provided
+        const docEmbedding = embedding || await (0, embeddingClient_js_1.embedText)(text);
         // Create the stored document
         const pendingDocument = {
             id,
             metadata: pendingMetadata,
             text,
-            embedding,
+            embedding: docEmbedding,
+            chunks,
+            hasContextualChunks,
             submittedAt: new Date().toISOString()
         };
         // Get current pending documents
@@ -87,7 +135,7 @@ async function addToPendingDocuments(text, metadata, embedding) {
         pendingDocs.push(pendingDocument);
         // Save updated index
         await promises_1.default.writeFile(PENDING_INDEX_FILE, JSON.stringify({ items: pendingDocs }, null, 2));
-        console.log(`Added document ${id} to pending queue`);
+        console.log(`Added document ${id} to pending queue with ${chunks.length} chunks`);
         return id;
     }
     catch (error) {
@@ -155,67 +203,74 @@ async function approveOrRejectDocument(id, decision) {
 async function addApprovedDocumentToVectorStore(pendingDoc) {
     try {
         // Extract document information
-        const { id, text, embedding, metadata } = pendingDoc;
-        // Create a properly typed metadata object that preserves all Gemini-generated fields
-        const enhancedMetadata = {
-            ...metadata,
-            approvedAt: new Date().toISOString()
-        };
-        // Make sure all category fields are properly structured for search
-        if (!enhancedMetadata.category && enhancedMetadata.primaryCategory) {
-            enhancedMetadata.category = enhancedMetadata.primaryCategory;
-        }
-        // Ensure technical level is within range
-        if (enhancedMetadata.technicalLevel !== undefined) {
-            let techLevel = Number(enhancedMetadata.technicalLevel);
-            if (isNaN(techLevel)) {
-                techLevel = 5; // Default middle level
-            }
-            enhancedMetadata.technicalLevel = Math.max(1, Math.min(10, techLevel));
-        }
-        // Ensure entities are stored as a JSON string for vector store
-        if (enhancedMetadata.entities && typeof enhancedMetadata.entities !== 'string') {
-            try {
-                enhancedMetadata.entities = JSON.stringify(enhancedMetadata.entities);
-            }
-            catch (error) {
-                console.error('Error stringifying entities:', error);
-                // If there's an error, provide at least an empty object
-                enhancedMetadata.entities = '{}';
-            }
-        }
-        // Process array fields for better searchability
-        const arrayFields = [
-            'keywords',
-            'secondaryCategories',
-            'industryCategories',
-            'functionCategories',
-            'useCases'
-        ];
-        // Convert arrays to strings for storage compatibility
-        arrayFields.forEach(field => {
-            if (Array.isArray(enhancedMetadata[field])) {
-                enhancedMetadata[`${field}_str`] = enhancedMetadata[field].join(', ');
-            }
+        const { id, text, embedding, metadata, chunks, hasContextualChunks } = pendingDoc;
+        // Log approval
+        (0, errorHandling_1.logInfo)(`Adding approved document ${id} to vector store`, {
+            hasChunks: !!chunks,
+            chunkCount: (chunks === null || chunks === void 0 ? void 0 : chunks.length) || 0,
+            hasContextualChunks
         });
-        // Create vector store item with final metadata
-        const vectorStoreItem = {
-            id: id,
-            text: text,
-            embedding: embedding || [], // Use provided embedding or empty array
-            metadata: enhancedMetadata
+        // Store approval metadata
+        const approvalInfo = {
+            approvedAt: new Date().toISOString(),
+            pendingDocId: id
         };
-        // Add item to vector store
-        await (0, vectorStore_1.addToVectorStore)(vectorStoreItem);
-        // Update BM25 corpus statistics in the background
-        updateBM25CorpusStatistics().catch(error => {
-            console.error('Error updating BM25 corpus statistics:', error);
-        });
-        // Log success with fields preserved
-        console.log(`Document ${id} added to vector store with AI-generated metadata:`, Object.keys(enhancedMetadata).join(', '));
+        if (chunks && chunks.length > 0) {
+            // If we have chunks, add each chunk to the vector store
+            (0, errorHandling_1.logInfo)(`Adding ${chunks.length} chunks for document ${id}`, {
+                contextual: hasContextualChunks
+            });
+            // Add each chunk to the vector store with its embedding
+            for (const chunk of chunks) {
+                // Skip chunks with no text
+                if (!chunk.text.trim())
+                    continue;
+                // Create vector store item
+                const vectorItem = {
+                    embedding: chunk.embedding || [],
+                    text: chunk.text,
+                    metadata: {
+                        ...chunk.metadata,
+                        ...metadata,
+                        // Add approval info and override some fields
+                        ...approvalInfo,
+                        // Set chunk flag
+                        isChunk: true,
+                        isContextualChunk: hasContextualChunks,
+                        approved: true,
+                        reviewStatus: 'approved'
+                    }
+                };
+                // Add to vector store
+                (0, vectorStore_1.addToVectorStore)(vectorItem);
+            }
+            // Update BM25 corpus statistics
+            await updateBM25CorpusStatistics();
+            (0, errorHandling_1.logInfo)(`Successfully added ${chunks.length} chunks to vector store for document ${id}`);
+            return;
+        }
+        // Fallback: add entire document as a single item
+        (0, errorHandling_1.logInfo)(`No chunks available, adding full document ${id} as single item`);
+        // Create vector store item
+        const vectorItem = {
+            embedding: embedding || [],
+            text,
+            metadata: {
+                ...metadata,
+                ...approvalInfo,
+                isChunk: false,
+                approved: true,
+                reviewStatus: 'approved'
+            }
+        };
+        // Add to vector store
+        (0, vectorStore_1.addToVectorStore)(vectorItem);
+        // Update BM25 corpus statistics
+        await updateBM25CorpusStatistics();
+        (0, errorHandling_1.logInfo)(`Successfully added document ${id} to vector store`);
     }
     catch (error) {
-        (0, errorHandling_1.logError)(`Failed to add approved document ${pendingDoc.id} to vector store`, error);
+        (0, errorHandling_1.logError)('Failed to add approved document to vector store', error);
         throw error;
     }
 }

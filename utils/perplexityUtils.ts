@@ -4,7 +4,7 @@
  * Utility functions specific to Perplexity API integration
  */
 
-import { logError } from './errorHandling';
+import { logError } from './logger';
 
 // Simple in-memory cache object
 interface CacheItem {

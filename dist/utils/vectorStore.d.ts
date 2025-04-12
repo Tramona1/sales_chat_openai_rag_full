@@ -2,6 +2,7 @@ export interface VectorStoreItem {
     id?: string;
     embedding: number[];
     text: string;
+    originalText?: string;
     metadata?: {
         source?: string;
         page?: number;
@@ -22,6 +23,24 @@ export interface VectorStoreItem {
         isDeprecated?: string;
         deprecatedBy?: string;
         deprecatedAt?: string;
+        isVisualContent?: boolean;
+        documentSummary?: string;
+        isChunk?: boolean;
+        isContextualChunk?: boolean;
+        documentType?: string;
+        primaryTopics?: string;
+        audienceType?: string;
+        context?: any;
+        visualElementType?: string;
+        visualElementTypes?: string[];
+        hasVisualContent?: boolean;
+        hasVisualElements?: boolean;
+        isVisualElement?: boolean;
+        rerankScore?: number;
+        originalScore?: number;
+        approved?: boolean;
+        visualType?: string;
+        imageMetadata?: any;
     };
 }
 declare let vectorStore: VectorStoreItem[];

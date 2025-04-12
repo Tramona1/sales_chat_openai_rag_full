@@ -1,7 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getAllVectorStoreItems } from '@/utils/vectorStore';
+import fsPromises from 'fs/promises';
 import fs from 'fs';
+import { getAllVectorStoreItems, VectorStoreItem } from '../../../utils/vectorStore';
 import path from 'path';
+import { logError } from '../../../utils/logger';
+import { standardizeApiErrorResponse } from '../../../utils/errorHandling';
 
 // Interface for expected request body
 interface ResolveConflictRequest {
@@ -40,10 +43,10 @@ export default async function handler(
     }
 
     // Get vector store data
-    const vectorStoreItems = getAllVectorStoreItems();
+    const vectorStoreItems = await getAllVectorStoreItems();
     
     // Find preferred document
-    const preferredDoc = vectorStoreItems.find(item => item.metadata?.source === preferredDocId);
+    const preferredDoc = vectorStoreItems.find((item: VectorStoreItem) => item.metadata?.source === preferredDocId);
     if (!preferredDoc) {
       return res.status(404).json({ message: 'Preferred document not found' });
     }
@@ -60,7 +63,7 @@ export default async function handler(
     
     // Mark deprecated documents
     for (const deprecatedId of deprecatedDocIds) {
-      const deprecatedDoc = vectorStoreItems.find(item => item.metadata?.source === deprecatedId);
+      const deprecatedDoc = vectorStoreItems.find((item: VectorStoreItem) => item.metadata?.source === deprecatedId);
       if (deprecatedDoc) {
         if (!deprecatedDoc.metadata) deprecatedDoc.metadata = {};
         deprecatedDoc.metadata.isDeprecated = 'true';
@@ -94,11 +97,9 @@ export default async function handler(
       deprecated: markedDocIds
     });
   } catch (error) {
-    console.error('Error resolving conflict:', error);
-    return res.status(500).json({ 
-      message: 'Failed to resolve conflict',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
+    logError('Error resolving conflict:', error);
+    const errorResponse = standardizeApiErrorResponse(error);
+    return res.status(500).json(errorResponse);
   }
 }
 

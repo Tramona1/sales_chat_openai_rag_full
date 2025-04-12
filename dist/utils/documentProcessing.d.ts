@@ -1,3 +1,4 @@
+import { ContextualChunk, SplitIntoChunksWithContextFn } from '../types/documentProcessing';
 export type SupportedMimeType = 'application/pdf' | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' | 'text/plain';
 /**
  * Extract text content from various document formats
@@ -33,3 +34,26 @@ export declare function splitIntoChunks(text: string, chunkSize?: number, source
         infoType?: string;
     };
 }>;
+/**
+ * Split text into chunks with enhanced contextual information
+ *
+ * This advanced chunking method extracts contextual information about each chunk
+ * to improve retrieval accuracy and answer generation quality.
+ *
+ * @param text The text to split into chunks
+ * @param chunkSize Size of each chunk
+ * @param source Source identifier for the document
+ * @param generateContext Whether to generate context for each chunk
+ * @param existingContext Optional existing document context to use
+ * @returns Array of chunks with contextual metadata
+ */
+export declare const splitIntoChunksWithContext: SplitIntoChunksWithContextFn;
+/**
+ * Prepares text for embedding by incorporating contextual information
+ * This is a critical part of the contextual retrieval system as it enriches the text
+ * with semantic information before embedding
+ *
+ * @param chunk The contextual chunk containing text and metadata
+ * @returns Enhanced text string to be embedded
+ */
+export declare function prepareTextForEmbedding(chunk: ContextualChunk): string;

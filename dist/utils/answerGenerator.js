@@ -4,8 +4,42 @@
  * Generates accurate answers from search results using the OpenAI API
  * With fallback to Gemini for handling large contexts
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateAnswer = generateAnswer;
+exports.generateAnswerWithVisualContext = generateAnswerWithVisualContext;
 const errorHandling_1 = require("./errorHandling");
 const openaiClient_1 = require("./openaiClient");
 const geminiClient_1 = require("./geminiClient");
@@ -328,5 +362,460 @@ ${includeSourceCitations ? 'If appropriate, you may include source citations usi
     catch (error) {
         (0, errorHandling_1.logError)('Error generating answer', error);
         return 'Sorry, I encountered an error while processing your request. Please try again.';
+    }
+}
+/**
+ * Generate an answer based on retrieved context with multi-modal awareness
+ * This function handles both text and visual elements in the search results
+ *
+ * @param query The user's original query
+ * @param searchResults The multi-modal search results from the retrieval system
+ * @param options Optional settings for answer generation
+ * @returns A string with the generated answer
+ */
+async function generateAnswerWithVisualContext(query, searchResults, options = {}) {
+    var _a, _b, _c;
+    try {
+        // Only handle basic greetings conversationally 
+        if (isBasicConversational(query)) {
+            return await handleConversationalQuery(query, options.conversationHistory);
+        }
+        // Use options or defaults
+        const model = options.model || modelConfig_1.AI_SETTINGS.defaultModel;
+        const includeSourceCitations = (_a = options.includeSourceCitations) !== null && _a !== void 0 ? _a : true;
+        const maxSourcesInAnswer = options.maxSourcesInAnswer || 10;
+        const visualFocus = options.visualFocus || false;
+        const visualTypes = options.visualTypes || [];
+        const includeImageUrls = (_b = options.includeImageUrls) !== null && _b !== void 0 ? _b : true; // Default to true for including image URLs
+        // For company-specific questions with no results, fall back to standard handling
+        if (!searchResults || searchResults.length === 0) {
+            // Reuse the no-results logic from the standard generateAnswer function
+            const lowerQuery = query.toLowerCase();
+            const companySpecificTerms = [
+                'company', 'our', 'we', 'us', 'client', 'customer', 'product',
+                'service', 'price', 'pricing', 'feature', 'offering', 'team', 'investor'
+            ];
+            const isLikelyCompanySpecific = companySpecificTerms.some(term => lowerQuery.includes(term));
+            if (isLikelyCompanySpecific) {
+                // Determine topics for fallback message
+                const isInvestorQuery = lowerQuery.includes('investor') || lowerQuery.includes('funding');
+                const isCustomerQuery = lowerQuery.includes('customer') || lowerQuery.includes('client');
+                const isProductQuery = lowerQuery.includes('product') || lowerQuery.includes('feature');
+                // Enhanced visual query detection
+                const isVisualQuery = visualFocus ||
+                    lowerQuery.includes('chart') ||
+                    lowerQuery.includes('image') ||
+                    lowerQuery.includes('diagram') ||
+                    lowerQuery.includes('picture') ||
+                    lowerQuery.includes('graph') ||
+                    lowerQuery.includes('table') ||
+                    lowerQuery.includes('figure') ||
+                    lowerQuery.includes('visual') ||
+                    lowerQuery.includes('illustration') ||
+                    lowerQuery.includes('screenshot');
+                let fallbackPrompt = `You are a knowledgeable sales representative for Workstream, an HR, Payroll, and Hiring platform for the hourly workforce.
+
+The user asked: "${query}"
+
+Unfortunately, we don't have specific information in our knowledge base to fully answer this particular question. However, please provide:
+1. A helpful response that acknowledges the specific limitation
+2. Share general information we do know about the topic (if available)
+3. Offer to help with related information we might have
+`;
+                // Add visual-specific context if needed
+                if (isVisualQuery) {
+                    fallbackPrompt += `
+For visual-related questions:
+- We have various charts, diagrams, and images in our documentation
+- We can provide visual materials on request for specific topics
+- Mention that you don't have the specific visual content they're looking for but could help them find related information
+
+Please acknowledge that you don't have the specific visual content they're asking about.`;
+                }
+                // Add other context types from the original function...
+                if (isInvestorQuery) {
+                    fallbackPrompt += `
+For investor-related questions:
+- We know Workstream is backed by several investors including GGV Capital, Bond, Coatue, Basis Set Ventures, CRV, and Peterson Ventures
+- We've had funding rounds including a Series A and Series B
+- Our investors page is at https://www.workstream.us/investors
+        
+Please incorporate this general investor information while clearly stating that you don't have the specific details requested.`;
+                }
+                if (isCustomerQuery) {
+                    fallbackPrompt += `
+For customer-related questions:
+- Workstream serves hourly workforce businesses across various industries
+- We have case studies and customer testimonials on our website
+        
+Please incorporate this general customer information while clearly stating that you don't have the specific details requested.`;
+                }
+                if (isProductQuery) {
+                    fallbackPrompt += `
+For product-related questions:
+- Workstream offers HR, Payroll, and Hiring solutions for the hourly workforce
+- Our platform includes features for recruitment, onboarding, and workforce management
+        
+Please incorporate this general product information while clearly stating that you don't have the specific details requested.`;
+                }
+                // Include conversation history if available
+                let userPrompt = query;
+                if (options.conversationHistory && options.conversationHistory.trim()) {
+                    userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}`;
+                }
+                return await (0, openaiClient_1.generateChatCompletion)(fallbackPrompt, userPrompt, model);
+            }
+            // For truly general questions, use a more helpful response
+            const fallbackSystemPrompt = `You are a helpful AI assistant for the sales team of our company.
+You should be friendly, concise, and helpful.
+If the question seems to be asking for specific company information, products, pricing, or sales data, explain that you don't have that specific information in your knowledge base yet, but you'd be happy to help with any other information about our products or services.
+Always maintain the perspective that you are part of the company's sales team.`;
+            // Include conversation history if available
+            let userPrompt = query;
+            if (options.conversationHistory && options.conversationHistory.trim()) {
+                userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}`;
+            }
+            return await (0, openaiClient_1.generateChatCompletion)(fallbackSystemPrompt, userPrompt, model);
+        }
+        // Detect specific visual types requested in the query
+        const queryLower = query.toLowerCase();
+        const requestedVisualTypes = new Set();
+        // Enhanced visual type detection
+        const visualTypeMapping = [
+            { terms: ['chart', 'graph', 'plot'], type: 'chart' },
+            { terms: ['table', 'grid', 'spreadsheet'], type: 'table' },
+            { terms: ['diagram', 'flowchart', 'architecture'], type: 'diagram' },
+            { terms: ['screenshot', 'screen capture', 'screen shot'], type: 'screenshot' },
+            { terms: ['photo', 'picture', 'image', 'photo', 'photograph'], type: 'image' },
+            { terms: ['figure', 'illustration', 'visual'], type: 'figure' },
+            { terms: ['infographic', 'data visualization'], type: 'infographic' },
+        ];
+        // Check query for visual type references
+        visualTypeMapping.forEach(mapping => {
+            if (mapping.terms.some(term => queryLower.includes(term))) {
+                requestedVisualTypes.add(mapping.type);
+            }
+        });
+        // Add any visual types from options
+        if (visualTypes && visualTypes.length > 0) {
+            visualTypes.forEach(type => requestedVisualTypes.add(type.toLowerCase()));
+        }
+        // Format the context with enhanced handling for visual content
+        const formattedContextItems = searchResults
+            .slice(0, maxSourcesInAnswer)
+            .map((item, index) => {
+            var _a;
+            // Build the source information
+            let sourceInfo = '';
+            if (item.source) {
+                sourceInfo = `Source: ${item.source}`;
+                if ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.page) {
+                    sourceInfo += `, Page: ${item.metadata.page}`;
+                }
+            }
+            // Enhanced visual content formatting with consistent structure
+            let visualContent = [];
+            let imageUrls = [];
+            // Process visualContent array if present
+            if (item.visualContent && item.visualContent.length > 0) {
+                item.visualContent.forEach(visual => {
+                    // Format visual type for better readability
+                    const formattedType = formatVisualType(visual.type);
+                    // Generate a unique reference ID for this visual
+                    const visualRefId = `visual-${index}-${visualContent.length + 1}`;
+                    // Check if this visual matches any specifically requested types
+                    const isRequestedType = requestedVisualTypes.size === 0 ||
+                        requestedVisualTypes.has(visual.type.toLowerCase());
+                    // Build the formatted visual information
+                    let visualInfo = `[${formattedType}]: ${visual.description}`;
+                    // Add extracted text if available, with cleaner formatting
+                    if (visual.extractedText && visual.extractedText.trim()) {
+                        // Truncate and clean extracted text if too long
+                        const cleanedText = formatExtractedText(visual.extractedText, 150);
+                        visualInfo += `\nText content: ${cleanedText}`;
+                    }
+                    // Handle structured data with better formatting
+                    if (visual.structuredData) {
+                        const structuredDataSummary = formatStructuredData(visual.structuredData);
+                        if (structuredDataSummary) {
+                            visualInfo += `\nData content: ${structuredDataSummary}`;
+                        }
+                    }
+                    // Add image URL if available and enabled
+                    if (includeImageUrls && visual.imageUrl) {
+                        // Add to separate array for final prompt construction
+                        imageUrls.push(`${visualRefId}: ${visual.imageUrl}`);
+                        // Reference the image in the visual description
+                        visualInfo += `\nImage reference: ${visualRefId}`;
+                    }
+                    // Add relevance indicator for requested visual types
+                    if (requestedVisualTypes.size > 0) {
+                        visualInfo += isRequestedType ?
+                            '\n[RELEVANT TO QUERY]' :
+                            '\n[SUPPLEMENTARY VISUAL]';
+                    }
+                    visualContent.push(visualInfo);
+                });
+            }
+            // Handle matchedVisual format (direct match in result)
+            if (item.matchedVisual && (!item.visualContent || item.visualContent.length === 0)) {
+                const visual = item.matchedVisual;
+                const formattedType = formatVisualType(visual.type);
+                const visualRefId = `visual-${index}-direct`;
+                // Build the formatted visual information
+                let visualInfo = `[${formattedType}]: ${visual.description}`;
+                // Add extracted text if available
+                if (visual.extractedText && visual.extractedText.trim()) {
+                    const cleanedText = formatExtractedText(visual.extractedText, 150);
+                    visualInfo += `\nText content: ${cleanedText}`;
+                }
+                // Handle structured data with better formatting
+                if (visual.structuredData) {
+                    const structuredDataSummary = formatStructuredData(visual.structuredData);
+                    if (structuredDataSummary) {
+                        visualInfo += `\nData content: ${structuredDataSummary}`;
+                    }
+                }
+                // Add image URL if available and enabled
+                if (includeImageUrls && visual.imageUrl) {
+                    imageUrls.push(`${visualRefId}: ${visual.imageUrl}`);
+                    visualInfo += `\nImage reference: ${visualRefId}`;
+                }
+                // Add match type indicator
+                visualInfo += '\n[DIRECTLY MATCHED VISUAL]';
+                visualContent.push(visualInfo);
+            }
+            // Include formatted visual content if available
+            let visualInfoBlock = '';
+            if (visualContent.length > 0) {
+                visualInfoBlock = `\n\nVISUAL CONTENT (${visualContent.length}):\n${visualContent.join('\n\n')}`;
+            }
+            // Include match type information if available
+            let matchTypeInfo = '';
+            if (item.matchType) {
+                matchTypeInfo = `\nMatch type: ${item.matchType.toUpperCase()}`;
+            }
+            // Combine all context information
+            return {
+                text: `[${index + 1}] ${item.text.trim()}${visualInfoBlock}${matchTypeInfo}\n${sourceInfo}`,
+                imageUrls: imageUrls
+            };
+        });
+        // Extract the text and image URLs
+        const contextTextArray = formattedContextItems.map(item => item.text);
+        const allImageUrls = formattedContextItems.flatMap(item => item.imageUrls);
+        // Combine the context text
+        const contextText = contextTextArray.join('\n\n');
+        // Add image URLs to the end if available
+        const imageUrlsText = allImageUrls.length > 0 ?
+            `\n\nIMAGE REFERENCES:\n${allImageUrls.join('\n')}` : '';
+        // Complete context text with image URLs
+        const fullContextText = contextText + imageUrlsText;
+        // Estimate token count for context and history
+        const historyText = ((_c = options.conversationHistory) === null || _c === void 0 ? void 0 : _c.trim()) || '';
+        const promptOverhead = estimateTokenCount(`Question: ${query}\n\nContext:\n\n\nAnswer:`);
+        const historyTokens = estimateTokenCount(historyText);
+        const contextTokens = estimateTokenCount(fullContextText);
+        const totalEstimatedTokens = promptOverhead + historyTokens + contextTokens;
+        console.log(`[Multi-Modal] Estimated tokens: ${totalEstimatedTokens} (Context: ${contextTokens}, History: ${historyTokens}, Overhead: ${promptOverhead})`);
+        console.log(`[Multi-Modal] Visual content: ${allImageUrls.length} images referenced`);
+        // We'll use Gemini for:
+        // 1. Multi-modal content (has visual focus)
+        // 2. Large context
+        // 3. When specific visual types are requested
+        const useGemini = totalEstimatedTokens > MAX_TOKENS_OPENAI ||
+            visualFocus ||
+            requestedVisualTypes.size > 0;
+        // If total is too large, summarize the context
+        let finalContextText = fullContextText;
+        if (totalEstimatedTokens > MAX_CONTEXT_LENGTH) {
+            console.log(`[Multi-Modal] Context too large (${totalEstimatedTokens} tokens), applying summarization`);
+            // Preserve image URLs when summarizing
+            const contextWithoutUrls = contextText;
+            const summarizedContext = await summarizeContext(query, contextWithoutUrls);
+            finalContextText = summarizedContext + imageUrlsText;
+        }
+        if (useGemini) {
+            console.log(`[Multi-Modal] Using Gemini for answer generation with visual context (${totalEstimatedTokens} tokens)`);
+            // Import the Gemini client
+            const { generateGeminiChatCompletion } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
+            // Create an enhanced system prompt for visual content with improved instructions
+            const systemPrompt = `You are a knowledgeable AI assistant for our company's sales team.
+You have access to our company's knowledge base, which includes both text and visual content descriptions.
+
+IMPORTANT: You represent our company. When answering questions about "our company," "our products," "our services," or referring to "we" or "us," you should speak from the perspective of a company representative.
+
+Answer the user's question using the provided context, which contains:
+1. Text snippets from our knowledge base
+2. Descriptions of visual content (images, charts, diagrams, tables) 
+3. Image references that may be displayed to the user
+
+VISUAL CONTENT GUIDELINES:
+${visualFocus || requestedVisualTypes.size > 0 ? '- This query is specifically about visual content, so prioritize information from the visual descriptions' : '- Include visual information where relevant to the query'}
+- When referencing visuals, use their type and a brief description: "our chart showing monthly sales trends" or "our diagram of the software architecture"
+- If image references are provided, mention them when discussing related visuals: "You can refer to the chart (image-reference-id) showing..."
+- For charts and graphs: describe the trends, key data points, and conclusions that can be drawn
+- For diagrams: explain the components, relationships, and overall structure
+- For tables: summarize the most important data points and patterns
+- For screenshots: describe what the interface shows and its key elements
+
+NEVER use phrases like "as shown in the image" or "as you can see" since the user cannot directly see the visual content.
+${includeSourceCitations ? 'If appropriate, include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}
+
+If the context doesn't contain enough information to fully answer the question, acknowledge this limitation while being helpful with the information you do have.`;
+            // Include conversation history if available
+            let userPrompt;
+            if (options.conversationHistory && options.conversationHistory.trim()) {
+                userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+            }
+            else {
+                userPrompt = `Question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+            }
+            try {
+                return await generateGeminiChatCompletion(systemPrompt, userPrompt);
+            }
+            catch (error) {
+                (0, errorHandling_1.logError)('[Multi-Modal] Error generating answer with Gemini', error);
+                return 'I apologize, but I encountered an issue processing your visual content query. Please try again with a more specific question.';
+            }
+        }
+        // Use OpenAI for non-visual or smaller contexts
+        console.log(`[Multi-Modal] Using OpenAI (${model}) for answer generation with ${totalEstimatedTokens} estimated tokens`);
+        // Create enhanced system prompt for knowledge-based questions with visual awareness
+        const systemPrompt = `You are a knowledgeable AI assistant for our company's sales team.
+You have access to our company's knowledge base, which includes both text and visual content descriptions.
+
+IMPORTANT: You represent our company. When answering questions about "our company," "our products," "our services," or referring to "we" or "us," you should speak from the perspective of a company representative.
+
+Answer the user's question using the provided context, which contains:
+1. Text snippets from our knowledge base
+2. Descriptions of visual content (images, charts, diagrams, tables) 
+3. Image references that may be displayed to the user
+
+VISUAL CONTENT GUIDELINES:
+- When referencing visuals, use their type and a brief description: "our chart showing monthly sales trends" or "our diagram of the software architecture"
+- If image references are provided, mention them when discussing related visuals: "You can refer to the chart (image-reference-id) showing..."
+- For charts and graphs: describe the trends, key data points, and conclusions that can be drawn
+- For diagrams: explain the components, relationships, and overall structure
+- For tables: summarize the most important data points and patterns
+- For screenshots: describe what the interface shows and its key elements
+
+NEVER use phrases like "as shown in the image" or "as you can see" since the user cannot directly see the visual content.
+${includeSourceCitations ? 'If appropriate, include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}
+
+If the context doesn't contain enough information to fully answer the question, acknowledge this limitation while being helpful with the information you do have.`;
+        // Include conversation history if available
+        let userPrompt;
+        if (options.conversationHistory && options.conversationHistory.trim()) {
+            userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+        }
+        else {
+            userPrompt = `Question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+        }
+        // Set a timeout
+        const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => {
+                resolve("I apologize, but it's taking me longer than expected to process your request with the visual content. Please try again or rephrase your question.");
+            }, options.timeout || 15000);
+        });
+        try {
+            // Generate the answer using the LLM
+            const answerPromise = (0, openaiClient_1.generateChatCompletion)(systemPrompt, userPrompt, model);
+            return await Promise.race([answerPromise, timeoutPromise]);
+        }
+        catch (error) {
+            // Check if error is token limit related
+            const errorStr = String(error);
+            if (errorStr.includes('context_length_exceeded') ||
+                errorStr.includes('maximum context length') ||
+                errorStr.includes('Request too large') ||
+                errorStr.includes('rate_limit_exceeded')) {
+                console.log('[Multi-Modal] Attempting with fallback model Gemini due to token limits...');
+                // Import the Gemini client
+                const { generateGeminiChatCompletion } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
+                return await generateGeminiChatCompletion(systemPrompt, userPrompt);
+            }
+            // Re-throw other errors
+            throw error;
+        }
+    }
+    catch (error) {
+        (0, errorHandling_1.logError)('[Multi-Modal] Error generating answer with visual context', error);
+        return 'Sorry, I encountered an error while processing your request about visual content. Please try again.';
+    }
+}
+/**
+ * Format visual type for better readability
+ */
+function formatVisualType(type) {
+    if (!type)
+        return 'VISUAL';
+    // Handle common type variations
+    const lowerType = type.toLowerCase();
+    // Map type to standardized format
+    const typeMap = {
+        'chart': 'CHART',
+        'graph': 'CHART',
+        'table': 'TABLE',
+        'diagram': 'DIAGRAM',
+        'screenshot': 'SCREENSHOT',
+        'image': 'IMAGE',
+        'photo': 'IMAGE',
+        'figure': 'FIGURE',
+        'infographic': 'INFOGRAPHIC',
+        'unknown': 'VISUAL'
+    };
+    // Return standardized type or capitalized original
+    return typeMap[lowerType] || type.toUpperCase();
+}
+/**
+ * Format extracted text for better presentation
+ */
+function formatExtractedText(text, maxLength = 150) {
+    if (!text)
+        return '';
+    // Clean up the text
+    let cleanedText = text
+        .replace(/\s+/g, ' ')
+        .replace(/\n+/g, ' ')
+        .trim();
+    // Truncate if needed
+    if (cleanedText.length > maxLength) {
+        cleanedText = cleanedText.substring(0, maxLength) + '...';
+    }
+    return cleanedText;
+}
+/**
+ * Format structured data for better presentation
+ */
+function formatStructuredData(data) {
+    if (!data)
+        return '';
+    try {
+        if (typeof data === 'object') {
+            // Handle arrays differently than objects
+            if (Array.isArray(data)) {
+                // If it's a simple array, join with commas
+                if (data.length <= 5 && data.every(item => typeof item !== 'object')) {
+                    return `[${data.join(', ')}]`;
+                }
+                // For longer or complex arrays, summarize
+                return `Array with ${data.length} items`;
+            }
+            // For objects, summarize key fields
+            const keys = Object.keys(data);
+            if (keys.length <= 3) {
+                // For simple objects, show all properties
+                return JSON.stringify(data).substring(0, 100) + (JSON.stringify(data).length > 100 ? '...' : '');
+            }
+            // For complex objects, just list the keys
+            return `Object with properties: ${keys.slice(0, 5).join(', ')}${keys.length > 5 ? '...' : ''}`;
+        }
+        // For strings or numbers, return as is
+        return String(data).substring(0, 100) + (String(data).length > 100 ? '...' : '');
+    }
+    catch (e) {
+        // Fall back to simple string representation if an error occurs
+        return 'Complex data structure';
     }
 }

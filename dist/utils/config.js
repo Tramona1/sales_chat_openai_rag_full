@@ -6,6 +6,7 @@
  * Browser-compatible version that uses environment variables.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.appConfig = void 0;
 exports.getConfig = getConfig;
 exports.reloadConfig = reloadConfig;
 // Default configuration
@@ -14,7 +15,7 @@ const defaultConfig = {
         defaultModel: 'gpt-3.5-turbo',
     },
     gemini: {
-        defaultModel: 'gemini-1.5-pro',
+        defaultModel: 'gemini-2.0-flash',
     },
     vectorStore: {
         path: '/data/vectorStore.json',
@@ -70,3 +71,12 @@ function reloadConfig() {
     configCache = null;
     return getConfig();
 }
+exports.appConfig = {
+    // Model Configuration
+    modelConfig: {
+        defaultModel: 'gemini-2.0-flash',
+        temperature: 0.2,
+        // ... existing code ...
+    },
+    // ... existing code ...
+};

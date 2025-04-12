@@ -3,12 +3,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.splitIntoChunksWithContext = void 0;
 exports.extractText = extractText;
 exports.detectStructuredInfo = detectStructuredInfo;
 exports.splitIntoChunks = splitIntoChunks;
+exports.prepareTextForEmbedding = prepareTextForEmbedding;
 const fs_1 = __importDefault(require("fs"));
 const mammoth_1 = __importDefault(require("mammoth"));
 const pdf_parse_1 = __importDefault(require("pdf-parse"));
+const geminiClient_js_1 = require("./geminiClient.js");
 /**
  * Extract text content from various document formats
  * @param filePath Path to the file
@@ -418,4 +421,192 @@ function findLastSentence(text) {
         return sentences[sentences.length - 1];
     }
     return null;
+}
+/**
+ * Split text into chunks with enhanced contextual information
+ *
+ * This advanced chunking method extracts contextual information about each chunk
+ * to improve retrieval accuracy and answer generation quality.
+ *
+ * @param text The text to split into chunks
+ * @param chunkSize Size of each chunk
+ * @param source Source identifier for the document
+ * @param generateContext Whether to generate context for each chunk
+ * @param existingContext Optional existing document context to use
+ * @returns Array of chunks with contextual metadata
+ */
+const splitIntoChunksWithContext = async (text, chunkSize = 500, source = 'unknown', generateContext = true, existingContext) => {
+    // First, generate chunks using the standard method as a base
+    const baseChunks = splitIntoChunks(text, chunkSize, source);
+    // If context generation is disabled, return the base chunks
+    if (!generateContext) {
+        return baseChunks;
+    }
+    // Extract document-level context if not already provided
+    let documentContext;
+    try {
+        if (existingContext) {
+            documentContext = existingContext;
+            console.log('Using provided document context');
+        }
+        else {
+            console.log('Extracting document context...');
+            documentContext = await (0, geminiClient_js_1.extractDocumentContext)(text);
+            console.log('Document context extracted successfully');
+        }
+    }
+    catch (error) {
+        console.error('Error extracting document context:', error);
+        // If document context extraction fails, return base chunks
+        return baseChunks;
+    }
+    // Process each chunk to add contextual information
+    const enhancedChunks = [];
+    console.log(`Processing ${baseChunks.length} chunks for contextual enhancement...`);
+    // Process chunks in batches to avoid overwhelming the API
+    const batchSize = 5;
+    for (let i = 0; i < baseChunks.length; i += batchSize) {
+        const batch = baseChunks.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (chunk) => {
+            try {
+                // Skip empty chunks
+                if (!chunk.text.trim()) {
+                    return {
+                        text: chunk.text,
+                        metadata: chunk.metadata
+                    };
+                }
+                // Generate context for this chunk
+                const chunkContext = await (0, geminiClient_js_1.generateChunkContext)(chunk.text, documentContext);
+                // Create enhanced chunk with context
+                return {
+                    text: chunk.text,
+                    metadata: {
+                        ...(chunk.metadata || {}),
+                        source,
+                        context: chunkContext
+                    }
+                };
+            }
+            catch (error) {
+                console.error(`Error generating context for chunk: ${error}`);
+                // If chunk context generation fails, return the base chunk
+                return {
+                    text: chunk.text,
+                    metadata: chunk.metadata
+                };
+            }
+        });
+        // Wait for all chunks in this batch to be processed
+        const processBatchResults = await Promise.all(batchPromises);
+        enhancedChunks.push(...processBatchResults);
+        console.log(`Processed batch ${Math.ceil(i / batchSize) + 1}/${Math.ceil(baseChunks.length / batchSize)}`);
+    }
+    console.log(`Enhanced ${enhancedChunks.length} chunks with contextual information`);
+    return enhancedChunks;
+};
+exports.splitIntoChunksWithContext = splitIntoChunksWithContext;
+/**
+ * Prepares text for embedding by incorporating contextual information
+ * This is a critical part of the contextual retrieval system as it enriches the text
+ * with semantic information before embedding
+ *
+ * @param chunk The contextual chunk containing text and metadata
+ * @returns Enhanced text string to be embedded
+ */
+function prepareTextForEmbedding(chunk) {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    // Start with original text
+    const originalText = chunk.text;
+    const contextParts = [];
+    // Add document-level context if available
+    if ((_a = chunk.metadata) === null || _a === void 0 ? void 0 : _a.parentDocument) {
+        contextParts.push(`Document: ${chunk.metadata.parentDocument}`);
+    }
+    // Add source information if available
+    if ((_b = chunk.metadata) === null || _b === void 0 ? void 0 : _b.source) {
+        contextParts.push(`Source: ${chunk.metadata.source}`);
+    }
+    // --- DOCUMENT CONTEXT ---
+    if ((_d = (_c = chunk.metadata) === null || _c === void 0 ? void 0 : _c.context) === null || _d === void 0 ? void 0 : _d.document) {
+        const docContext = chunk.metadata.context.document;
+        // Add document summary
+        if (docContext.summary) {
+            contextParts.push(`Document summary: ${docContext.summary}`);
+        }
+        // Add document topics
+        if (docContext.mainTopics && docContext.mainTopics.length > 0) {
+            contextParts.push(`Document topics: ${docContext.mainTopics.join(', ')}`);
+        }
+        // Add document type and technical level
+        if (docContext.documentType) {
+            let docTypeInfo = `Document type: ${docContext.documentType}`;
+            if (docContext.technicalLevel !== undefined) {
+                const techLevelTerms = ['non-technical', 'basic', 'intermediate', 'advanced'];
+                const techLevel = techLevelTerms[Math.min(docContext.technicalLevel, 3)];
+                docTypeInfo += `, ${techLevel} level`;
+            }
+            contextParts.push(docTypeInfo);
+        }
+        // Add audience information
+        if (docContext.audienceType && docContext.audienceType.length > 0) {
+            contextParts.push(`Audience: ${docContext.audienceType.join(', ')}`);
+        }
+    }
+    // --- CHUNK CONTEXT ---
+    if ((_e = chunk.metadata) === null || _e === void 0 ? void 0 : _e.context) {
+        const context = chunk.metadata.context;
+        // Add chunk description
+        if (context.description) {
+            contextParts.push(`Content: ${context.description}`);
+        }
+        // Add key points
+        if (context.keyPoints && context.keyPoints.length > 0) {
+            contextParts.push(`Key points: ${context.keyPoints.join('; ')}`);
+        }
+        // Add semantic markers for special content types
+        const contentMarkers = [];
+        if (context.isDefinition) {
+            contentMarkers.push('definition');
+        }
+        if (context.containsExample) {
+            contentMarkers.push('example');
+        }
+        if (contentMarkers.length > 0) {
+            contextParts.push(`Contains: ${contentMarkers.join(', ')}`);
+        }
+        // Add related topics for better semantic search
+        if (context.relatedTopics && context.relatedTopics.length > 0) {
+            contextParts.push(`Related topics: ${context.relatedTopics.join(', ')}`);
+        }
+    }
+    // --- VISUAL CONTENT ---
+    // Add visual content information if available
+    if (((_f = chunk.metadata) === null || _f === void 0 ? void 0 : _f.hasVisualContent) && Array.isArray(chunk.visualContent) && chunk.visualContent.length > 0) {
+        const visualDescriptions = chunk.visualContent.map(visual => {
+            let desc = `${visual.type}`;
+            if (visual.description) {
+                desc += `: ${visual.description.substring(0, 100)}`;
+            }
+            if (visual.detectedText) {
+                const truncatedText = visual.detectedText.length > 50
+                    ? visual.detectedText.substring(0, 50) + '...'
+                    : visual.detectedText;
+                desc += ` [Text: ${truncatedText}]`;
+            }
+            return desc;
+        });
+        contextParts.push(`Visual content: ${visualDescriptions.join(' | ')}`);
+    }
+    // Add structured info type if available
+    if (((_g = chunk.metadata) === null || _g === void 0 ? void 0 : _g.isStructured) && ((_h = chunk.metadata) === null || _h === void 0 ? void 0 : _h.infoType)) {
+        contextParts.push(`Content type: ${chunk.metadata.infoType.replace(/_/g, ' ')}`);
+    }
+    // If we have contextual parts, format them as a structured context prefix
+    if (contextParts.length > 0) {
+        // Group context by categories to make it more readable and useful for embedding
+        return `[CONTEXT: ${contextParts.join(' | ')}] ${originalText}`;
+    }
+    // If no context is available, return the original text
+    return originalText;
 }

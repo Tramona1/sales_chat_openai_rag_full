@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import ChatMessage from '@/components/ChatMessage';
 import { StoredChatMessage, generateSessionTitle, extractKeywords } from '@/utils/chatStorage';
+import { trackEvent, trackSearch } from '@/utils/analytics';
+import { ChatFeedback } from '@/components/enhanced-tracking';
 
 // Message type
 interface Message {
@@ -29,6 +31,11 @@ export default function ChatPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [chatTitle, setChatTitle] = useState<string>('New Chat');
+  const [isCompanyChat, setIsCompanyChat] = useState<boolean>(false);
+  const [companyName, setCompanyName] = useState<string>('');
+  const [companyInfo, setCompanyInfo] = useState<string>('');
+  const [salesNotes, setSalesNotes] = useState<string>('');
 
   // Initialize with welcome message and handle URL parameters
   useEffect(() => {
@@ -123,41 +130,54 @@ export default function ChatPage() {
   
   // Function to save the current chat session
   const saveChatSession = async () => {
-    if (messages.length <= 1) return; // Don't save if we only have the welcome message
-    
     try {
-      // Convert our messages to the format expected by the API
-      const storedMessages: StoredChatMessage[] = messages.map(msg => ({
+      // Make sure we have messages and a title
+      if (!messages.length || !chatTitle.trim()) {
+        return;
+      }
+
+      // Format the messages for storage
+      const formattedMessages = messages.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'assistant',
         content: msg.content,
         timestamp: msg.timestamp.toISOString()
       }));
-      
-      // Get keywords and generate a title
-      const keywords = extractKeywords(storedMessages);
-      const title = generateSessionTitle(storedMessages);
-      
-      const response = await fetch('/api/admin/chat-sessions', {
+
+      // Prepare session data
+      const sessionData = {
+        title: chatTitle,
+        sessionType: isCompanyChat ? 'company' : 'general',
+        messages: formattedMessages,
+        salesRepName: 'Anonymous User', // Would be replaced by user info in a real auth system
+        companyName: isCompanyChat ? companyName : undefined,
+        companyInfo: isCompanyChat ? companyInfo : undefined,
+        salesNotes: salesNotes
+      };
+
+      // Call the API to save the session
+      const response = await fetch('/api/storage/chat-operations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          sessionType: 'general',
-          title,
-          messages: storedMessages,
-          keywords,
-        }),
+        body: JSON.stringify(sessionData),
       });
-      
+
+      if (!response.ok) {
+        throw new Error(`Failed to save chat session: ${response.statusText}`);
+      }
+
       const data = await response.json();
       
-      if (data.sessionId) {
-        setSessionId(data.sessionId);
-        console.log(`Chat session saved with ID: ${data.sessionId}`);
-      }
+      // Update the session ID
+      setSessionId(data.id);
+      
+      console.log('Chat session saved successfully with ID:', data.id);
+      
+      return data.id;
     } catch (error) {
-      console.error('Failed to save chat session:', error);
+      console.error('Error saving chat session:', error);
+      // Implement better error handling here
     }
   };
   
@@ -183,10 +203,13 @@ export default function ChatPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          sessionType: 'general',
+          sessionType: isCompanyChat ? 'company' : 'general',
           title,
           messages: storedMessages,
           keywords,
+          companyName: isCompanyChat ? companyName : undefined,
+          companyInfo: isCompanyChat ? companyInfo : undefined,
+          salesNotes
         }),
       });
     } catch (error) {
@@ -228,64 +251,88 @@ export default function ChatPage() {
   const processMessageForResponse = async (messageText: string, currentMessages: Message[]) => {
     try {
       setIsLoading(true);
+      // Log start of processing
+      console.log("Processing message for response:", messageText.substring(0, 50) + "...");
       
-      // Create context from recent messages
-      const recentMessages = currentMessages
-        .slice(-5)
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-        .join('\n');
-
-      // Determine if this is a company-specific query
+      // Determine if this is company-specific
       const isCompanyQuery = isCompanySpecificQuery(messageText);
       
-      // Set options for the API call
-      const options = isCompanyQuery ? {
-        // Use lower hybrid ratio for company queries to favor BM25 term matching
-        hybridRatio: 0.3,
-        // Increase search results limit for company queries
-        limit: 5
-      } : {};
-
-      // Call API with the message
-      const response = await axios.post('/api/query', {
+      // Prepare the request body
+      const requestBody = {
         query: messageText,
-        context: recentMessages,
-        options: options
-      });
-
-      // Generate a unique ID for the message
-      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-      // Log conversation for admin review and feedback tracking
-      await axios.post('/api/log', {
-        user: 'Anonymous',
-        query: messageText,
-        response: response.data.answer,
-        isCompanyQuery: isCompanyQuery,
         sessionId: sessionId,
-        messageId: messageId,
-      });
-
-      // Add bot response
-      setMessages([
-        ...currentMessages,
-        {
-          id: messageId,
-          role: 'bot',
-          content: response.data.answer,
-          timestamp: new Date()
+        conversationHistory: currentMessages.map(msg => ({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content
+        })),
+        options: {
+          includeSourceCitations: true,
+          useGemini: true
         }
-      ]);
-    } catch (error) {
-      console.error('Error getting response:', error);
+      };
       
-      // Add error message
+      // Call the actual query API with the proper POST request
+      const response = await fetch('/api/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
+      // Create a unique ID for the bot message
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Add bot response to messages
+      const botMessage: Message = {
+        id: messageId,
+        role: 'bot',
+        content: result.answer || "I'm sorry, I couldn't generate a response. Please try again.",
+        timestamp: new Date()
+      };
+      
+      // Update messages with bot response
+      setMessages([...currentMessages, botMessage]);
+      
+      // Log the conversation for admin review if enabled
+      try {
+        if (sessionId) {
+          await fetch('/api/log-conversation', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sessionId,
+              message: messageText,
+              response: result.answer,
+              metadata: {
+                sessionType: isCompanyQuery ? 'company' : 'general',
+                timestamp: new Date().toISOString()
+              }
+            }),
+          });
+        }
+      } catch (logError) {
+        console.error("Failed to log conversation:", logError);
+        // Non-blocking, continue despite log failure
+      }
+    } catch (error) {
+      console.error("Error processing message:", error);
+      
+      // Add error message to chat
       setMessages([
         ...currentMessages,
         {
           id: Date.now().toString(),
           role: 'bot',
-          content: 'Sorry, I encountered an error while processing your request. Please try again.',
+          content: "Sorry, I encountered an error processing your request. Please try again.",
           timestamp: new Date()
         }
       ]);
@@ -321,6 +368,17 @@ export default function ChatPage() {
     
     setInput('');
     
+    // Track message sent event
+    trackEvent({
+      event_type: 'chat_message_sent',
+      session_id: sessionId || undefined,
+      event_data: {
+        message_type: 'text',
+        content_length: messageText.length,
+        is_company_specific: isCompanySpecificQuery(messageText)
+      }
+    });
+    
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -332,49 +390,61 @@ export default function ChatPage() {
   
   // Handle feedback on assistant messages
   const handleFeedback = async (messageIndex: number, feedbackType: 'positive' | 'negative') => {
-    const message = messages[messageIndex];
-    
-    if (message.role !== 'bot') return;
-    
-    // Update UI immediately
-    const updatedMessages = [...messages];
-    updatedMessages[messageIndex] = {
-      ...message,
-      feedback: feedbackType
-    };
-    setMessages(updatedMessages);
-    
-    // Find the corresponding user query (message before this one)
-    let userQuery = '';
-    if (messageIndex > 0 && updatedMessages[messageIndex - 1].role === 'user') {
-      userQuery = updatedMessages[messageIndex - 1].content;
-    }
-    
-    // Submit feedback to API
     try {
+      // Don't allow feedback on system messages or multiple feedback submissions
+      if (messages[messageIndex].role !== 'bot' || messages[messageIndex].feedback) {
+        return;
+      }
+      
+      // Find the preceding user message to get the query
+      let userMessageIndex = messageIndex - 1;
+      while (userMessageIndex >= 0) {
+        if (messages[userMessageIndex].role === 'user') {
+          break;
+        }
+        userMessageIndex--;
+      }
+      
+      if (userMessageIndex < 0) {
+        console.error('Could not find user message for feedback');
+        return;
+      }
+      
+      // Update UI immediately
+      const updatedMessages = [...messages];
+      updatedMessages[messageIndex] = {
+        ...updatedMessages[messageIndex],
+        feedback: feedbackType
+      };
+      setMessages(updatedMessages);
+      
+      // Send to API
       const response = await fetch('/api/feedback', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          query: userQuery,
-          response: message.content,
+          query: messages[userMessageIndex].content,
+          response: messages[messageIndex].content,
           feedback: feedbackType,
-          messageIndex,
+          messageIndex: messageIndex,
           sessionId: sessionId,
-          messageId: message.id,
           metadata: {
-            sessionType: 'general'
+            isCompanyChat: isCompanyChat,
+            companyName: companyName || undefined
           }
-        }),
+        })
       });
       
       if (!response.ok) {
-        console.error('Failed to submit feedback');
+        throw new Error('Failed to record feedback');
       }
+      
+      console.log('Feedback submitted successfully');
     } catch (error) {
       console.error('Error submitting feedback:', error);
+      // Don't revert UI state to avoid confusion
     }
   };
 
@@ -476,32 +546,13 @@ export default function ChatPage() {
                 
                 {/* Feedback buttons (only show for assistant messages) */}
                 {message.role === 'bot' && index > 0 && (
-                  <div className="mt-2 flex justify-end gap-2">
-                    <button
-                      onClick={() => handleFeedback(index, 'positive')}
-                      className={`p-1 rounded-full ${
-                        message.feedback === 'positive'
-                          ? 'bg-green-800 text-green-200'
-                          : 'hover:bg-gray-700 text-gray-400'
-                      }`}
-                      aria-label="Helpful"
-                      title="Helpful"
-                    >
-                      <ThumbsUp className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleFeedback(index, 'negative')}
-                      className={`p-1 rounded-full ${
-                        message.feedback === 'negative'
-                          ? 'bg-red-800 text-red-200'
-                          : 'hover:bg-gray-700 text-gray-400'
-                      }`}
-                      aria-label="Not helpful"
-                      title="Not helpful"
-                    >
-                      <ThumbsDown className="h-4 w-4" />
-                    </button>
-                  </div>
+                  <ChatFeedback
+                    messageIndex={index}
+                    query={index > 0 ? messages[index - 1].content : ''}
+                    response={message.content}
+                    sessionId={sessionId || undefined}
+                    onFeedbackSubmitted={(type) => handleFeedback(index, type)}
+                  />
                 )}
               </div>
             </div>
