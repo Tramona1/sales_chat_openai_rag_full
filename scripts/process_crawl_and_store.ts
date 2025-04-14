@@ -172,7 +172,7 @@ async function rebuildVectorStore() {
     const { addToVectorStore, clearVectorStore } = await import('../utils/vectorStoreFactory.js');
     const { testSupabaseConnection } = await import('../utils/supabaseClient.js');
     const { generateGeminiChatCompletion } = await import('../utils/geminiClient.js');
-    
+
     logger.info('--- Starting Vector Store Rebuild from Crawl Data ---');
     logger.info(`Using Crawl Data: ${CRAWL_DATA_DIR}`);
 
@@ -272,24 +272,6 @@ async function rebuildVectorStore() {
             const batchPromises = batchDocs.map(async (doc) => {
                 const docIdentifier = doc.title || doc.url;
                 try {
-                    // Step 1: Document Analysis - COMMENTED OUT
-                    // const analysisResult: DocumentAnalysisResult = await analyzeDocument(doc.content, doc.url, { useCaching: false });
-                    // logger.info(`Analyzed content for: ${docIdentifier}`);
-                    
-                    // Create a dummy analysis result since we're skipping analysis
-                    const analysisResult = {
-                        primaryCategory: 'GENERAL',
-                        secondaryCategories: [],
-                        technicalLevel: 5,
-                        keywords: [],
-                        entities: {},
-                        qualityFlags: {},
-                        confidenceScore: 0.8,
-                        routingPriority: 'medium',
-                        documentContext: {}
-                    };
-                    logger.info(`Skipping content analysis for: ${docIdentifier} (using dummy values)`);
-
                     // Step 1b: URL-Based Categorization
                     let derivedCategory = DocumentCategoryType.GENERAL; // Default
                     let secondaryCategories: string[] = [];
@@ -297,13 +279,25 @@ async function rebuildVectorStore() {
                     let painPointCategories: string[] = [];
                     let technicalFeatureCategories: string[] = [];
                     let valuePropositionCategories: string[] = [];
+                    let urlPathSegments: string[] = []; // Array to store all path segments
                     
                     try {
-                        const urlPath = new URL(doc.url).pathname.toLowerCase();
+                        const url = new URL(doc.url);
+                        const urlPath = url.pathname.toLowerCase();
+                        
+                        // Extract all path segments for tagging
+                        urlPathSegments = urlPath.split('/')
+                            .filter(segment => segment.trim() !== '') // Remove empty segments
+                            .map(segment => segment.replace(/-/g, '_').toUpperCase()); // Convert to tag format
+                        
+                        logger.info(`Extracted URL path segments: [${urlPathSegments.join(', ')}] from ${doc.url}`);
                         
                         // Primary category from URL path - Core Platform Features
                         // Priority given to specific functional categories in the path
-                        if (urlPath.includes('/payroll/')) {
+                        if (urlPath === '/' || urlPath === '') {
+                            // Special case for the homepage
+                            derivedCategory = DocumentCategoryType.PRODUCT_OVERVIEW;
+                        } else if (urlPath.includes('/payroll/')) {
                             derivedCategory = DocumentCategoryType.PAYROLL;
                         } else if (urlPath.includes('/onboarding/')) {
                             derivedCategory = DocumentCategoryType.ONBOARDING;
@@ -325,16 +319,27 @@ async function rebuildVectorStore() {
                             derivedCategory = DocumentCategoryType.MOBILE_SOLUTIONS;
                         } else if (urlPath.includes('/platform/') || urlPath.includes('/features/') || urlPath.includes('/product/')) {
                             derivedCategory = DocumentCategoryType.DOCUMENTS;
-                        } else if (urlPath.includes('/blog/')) {
+                        } else if (urlPath === '/blog' || urlPath === '/blog/' || urlPath.startsWith('/blog/')) {
+                            derivedCategory = DocumentCategoryType.BLOG;
+                        } else if (urlPath === '/about' || urlPath === '/about/' || urlPath.startsWith('/about/') || 
+                                   urlPath === '/team' || urlPath === '/team/' || urlPath.startsWith('/team/') || 
+                                   urlPath === '/company' || urlPath === '/company/' || urlPath.startsWith('/company/')) {
+                            derivedCategory = DocumentCategoryType.COMPANY_INFO;
+                        } else if (urlPath === '/investors' || urlPath === '/investors/' || urlPath.startsWith('/investors/') || 
+                                   urlPath === '/funding' || urlPath === '/funding/' || urlPath.startsWith('/funding/')) {
                             derivedCategory = DocumentCategoryType.GENERAL;
-                        } else if (urlPath.includes('/about/') || urlPath.includes('/team/') || urlPath.includes('/company/')) {
-                            derivedCategory = DocumentCategoryType.GENERAL;
-                        } else if (urlPath.includes('/investors/') || urlPath.includes('/funding/')) {
-                            derivedCategory = DocumentCategoryType.GENERAL;
-                        } else if (urlPath.includes('/pricing/') || urlPath.includes('/plans/') || urlPath.includes('/subscription/')) {
-                            derivedCategory = DocumentCategoryType.GENERAL;
-                        } else if (urlPath.includes('/careers/') || urlPath.includes('/jobs/')) {
+                        } else if (urlPath === '/pricing' || urlPath === '/pricing/' || urlPath.startsWith('/pricing/') || 
+                                   urlPath === '/plans' || urlPath === '/plans/' || urlPath.startsWith('/plans/') || 
+                                   urlPath === '/subscription' || urlPath === '/subscription/' || urlPath.startsWith('/subscription/')) {
+                            derivedCategory = DocumentCategoryType.PRICING_INFORMATION;
+                        } else if (urlPath === '/careers' || urlPath === '/careers/' || urlPath.startsWith('/careers/') || 
+                                   urlPath === '/jobs' || urlPath === '/jobs/' || urlPath.startsWith('/jobs/')) {
                             derivedCategory = DocumentCategoryType.HIRING;
+                        } else if (urlPath === '/agentterms' || urlPath === '/agentterms/' || urlPath.startsWith('/agentterms/') || 
+                                   urlPath === '/terms' || urlPath === '/terms/' || urlPath.startsWith('/terms/') || 
+                                   urlPath === '/legal' || urlPath === '/legal/' || urlPath.startsWith('/legal/') || 
+                                   urlPath === '/privacy' || urlPath === '/privacy/' || urlPath.startsWith('/privacy/')) {
+                            derivedCategory = DocumentCategoryType.LEGAL;
                         } else {
                             // Fall back to less specific checks if no exact path match
                             if (urlPath.includes('payroll')) {
@@ -519,110 +524,82 @@ async function rebuildVectorStore() {
                     }
                     
                     // Step 1c: LLM Document Context Enrichment
-                    let docContext: DocumentContext = {
-                        summary: "",
-                        entities: [],
-                        keywords: [],
-                        suggestedCategories: {}
-                    };
+                    let docSummary: string = "";
+                    let docEntities: Array<{text: string; type: string; relevance: number}> = [];
+                    let docKeywords: string[] = [];
+                    let llmCategories: string[] = [];
+                    let targetAudience: string[] = [];
+                    let salesRelevanceScore: number = 0;
+                    
                     try {
                         const contextResult = await getDocumentLevelContextFromLLM(doc.content, doc.url);
                         if (contextResult) {
-                            docContext = convertToDocContext(contextResult);
+                            docSummary = contextResult.summary || "";
+                            docEntities = contextResult.named_entities || [];
+                            docKeywords = contextResult.keywords || [];
+                            llmCategories = contextResult.categories || [];
+                            targetAudience = contextResult.target_audience || [];
+                            salesRelevanceScore = contextResult.sales_relevance_score || 0;
                         } else {
-                            console.warn(`Could not extract document context for ${docIdentifier}`);
+                            logger.warning(`Could not extract document context for ${docIdentifier}`);
                         }
                     } catch (error) {
-                        console.error('Error during document enrichment:', error);
+                        logger.error('Error during document enrichment:', error);
                         // Continue with empty context
                     }
 
-                    // Use LLM-suggested categories if available
-                    const llmPrimaryCategory = docContext.suggestedCategories?.primary;
-                    const llmSecondaryCategories = docContext.suggestedCategories?.secondary || [];
-                    const llmIndustryCategories = docContext.suggestedCategories?.industry || [];
-                    const llmPainPointCategories = docContext.suggestedCategories?.painPoints || [];
-                    const llmTechnicalFeatureCategories = docContext.suggestedCategories?.technicalFeatures || [];
-                    const llmValuePropositionCategories = docContext.suggestedCategories?.valuePropositions || [];
-                    
-                    // If URL didn't provide a good category, fall back to LLM
-                    const primaryCategory = derivedCategory !== DocumentCategoryType.GENERAL ? 
-                        derivedCategory : (llmPrimaryCategory || derivedCategory);
-                    
-                    // Combine secondaries, prioritizing URL-derived ones
-                    let combinedSecondaryCategories = [...secondaryCategories];
-                    // Add LLM categories that aren't already included and don't match the primary
-                    if (llmSecondaryCategories.length > 0) {
-                        llmSecondaryCategories.forEach((cat: string) => {
-                            if (!combinedSecondaryCategories.includes(cat) && cat !== primaryCategory) {
-                                combinedSecondaryCategories.push(cat);
-                            }
-                        });
-                    }
-                    // Limit to 3 categories
-                    combinedSecondaryCategories = combinedSecondaryCategories.slice(0, 3);
-                    
-                    // Combine industry categories
-                    let combinedIndustryCategories = [...industryCategories];
-                    if (llmIndustryCategories.length > 0) {
-                        llmIndustryCategories.forEach((cat: string) => {
-                            if (!combinedIndustryCategories.includes(cat)) {
-                                combinedIndustryCategories.push(cat);
-                            }
-                        });
-                    }
-                    // Limit to 2 industry categories
-                    combinedIndustryCategories = combinedIndustryCategories.slice(0, 2);
-                    
-                    // Combine pain point categories
-                    let combinedPainPointCategories = [...painPointCategories];
-                    if (llmPainPointCategories.length > 0) {
-                        llmPainPointCategories.forEach((cat: string) => {
-                            if (!combinedPainPointCategories.includes(cat)) {
-                                combinedPainPointCategories.push(cat);
-                            }
-                        });
-                    }
-                    // Limit to 3 pain point categories
-                    combinedPainPointCategories = combinedPainPointCategories.slice(0, 3);
-                    
-                    // Combine technical feature categories
-                    let combinedTechnicalFeatureCategories = [...technicalFeatureCategories];
-                    if (llmTechnicalFeatureCategories.length > 0) {
-                        llmTechnicalFeatureCategories.forEach((cat: string) => {
-                            if (!combinedTechnicalFeatureCategories.includes(cat)) {
-                                combinedTechnicalFeatureCategories.push(cat);
-                            }
-                        });
-                    }
-                    
-                    // Combine value proposition categories
-                    let combinedValuePropositionCategories = [...valuePropositionCategories];
-                    if (llmValuePropositionCategories.length > 0) {
-                        llmValuePropositionCategories.forEach((cat: string) => {
-                            if (!combinedValuePropositionCategories.includes(cat)) {
-                                combinedValuePropositionCategories.push(cat);
-                            }
-                        });
-                    }
-                    // Limit to 3 value proposition categories
-                    combinedValuePropositionCategories = combinedValuePropositionCategories.slice(0, 3);
-                    
-                    // Step 2: Document Record Preparation (Type annotation works now)
+                    // Create a combined category logic that intelligently merges URL and LLM-derived categories
+                    const primaryCategory = (() => {
+                        // First check if the LLM provided a valid category with high confidence
+                        if (llmCategories.length > 0 && salesRelevanceScore >= 7) {
+                            // Always prioritize high-confidence LLM categories
+                            return llmCategories[0];
+                        }
+                        
+                        // Otherwise fall back to URL-derived category if available
+                        if (derivedCategory) {
+                            return derivedCategory;
+                        }
+                        
+                        // Last resort - use first LLM category or default
+                        return llmCategories.length > 0 ? llmCategories[0] : DocumentCategoryType.GENERAL;
+                    })();
+
+                    // Combine secondary categories from both sources with deduplication and validation
+                    const validSecondaryCategories = new Set([
+                        // Start with URL-derived secondary categories
+                        ...secondaryCategories,
+                        // Add LLM categories (except the primary one that's already selected)
+                        ...llmCategories.filter(cat => cat !== primaryCategory)
+                    ]);
+
+                    // Convert back to array and remove any empty strings
+                    const combinedSecondaryCategories = Array.from(validSecondaryCategories)
+                        .filter(cat => cat && cat.trim().length > 0);
+
+                    // Log the category selection logic
+                    logger.info(`Document ${docIdentifier} categorization:
+                        - URL derived category: ${derivedCategory || 'N/A'} 
+                        - LLM categories: ${llmCategories.join(', ') || 'N/A'}
+                        - Selected primary category: ${primaryCategory}
+                        - Combined secondary categories: ${combinedSecondaryCategories.join(', ') || 'None'}`);
+
+                    // Step 2: Document Record Preparation
                     const documentRecord = {
                         title: doc.title,
-                        content: doc.content.substring(0, 500) + '...', // Truncated preview
+                        // IMPORTANT: Remove content field to avoid inserting duplicate content
                         source: doc.url,
                         source_type: 'web_crawl',
-                        metadata: {
+                        metadata: { 
                             primaryCategory: primaryCategory,
                             secondaryCategories: combinedSecondaryCategories,
-                            industryCategories: combinedIndustryCategories,
-                            painPointCategories: combinedPainPointCategories,
-                            technicalFeatureCategories: combinedTechnicalFeatureCategories,
-                            valuePropositionCategories: combinedValuePropositionCategories,
-                            technicalLevel: analysisResult.technicalLevel,
-                            qualityScore: analysisResult.confidenceScore,
+                            industryCategories: industryCategories,
+                            painPointCategories: painPointCategories,
+                            technicalFeatureCategories: technicalFeatureCategories,
+                            valuePropositionCategories: valuePropositionCategories,
+                            // Store URL path segments for direct access
+                            urlPathSegments: urlPathSegments,
+                            // No hardcoded technicalLevel or confidenceScore
                             timestamp: doc.timestamp,
                             urlDerivedCategory: derivedCategory,
                             urlDerivedSecondaryCategories: secondaryCategories,
@@ -630,27 +607,35 @@ async function rebuildVectorStore() {
                             urlDerivedPainPointCategories: painPointCategories,
                             urlDerivedTechnicalFeatureCategories: technicalFeatureCategories,
                             urlDerivedValuePropositionCategories: valuePropositionCategories,
-                            llmSummary: docContext.summary,
-                            llmExtractedEntities: docContext.entities,
-                            llmKeywords: docContext.keywords,
-                            llmPrimaryCategory: llmPrimaryCategory,
-                            llmSecondaryCategories: llmSecondaryCategories,
-                            llmIndustryCategories: llmIndustryCategories,
-                            llmPainPointCategories: llmPainPointCategories,
-                            llmTechnicalFeatureCategories: llmTechnicalFeatureCategories,
-                            llmValuePropositionCategories: llmValuePropositionCategories,
+                            // LLM-derived data
+                            llmSummary: docSummary,
+                            llmEntities: docEntities,
+                            llmKeywords: docKeywords,
+                            llmCategories: llmCategories,
+                            llmTargetAudience: targetAudience,
+                            llmSalesRelevanceScore: salesRelevanceScore,
+                            // Original metadata
                             crawlTimestamp: doc.timestamp,
                             ...(doc.metadata || {})
                         }
                     };
 
-                    // Step 3: Chunking - Use the static type import here
+                    // Step 3: Chunking
+                    const documentContext = {
+                        summary: docSummary,
+                        mainTopics: docKeywords,
+                        entities: docEntities.map(e => e.text),
+                        documentType: "web_content",
+                        technicalLevel: salesRelevanceScore > 7 ? 2 : 1, // Simple heuristic
+                        audienceType: targetAudience
+                    };
+                    
                     const chunks: ContextualChunk[] = await splitIntoChunksWithContext(
                         doc.content,
                         DEFAULT_CHUNK_SIZE,
                         doc.url,
                         true,
-                        analysisResult.documentContext
+                        documentContext
                     );
                     logger.info(`Created ${chunks.length} chunks for: ${docIdentifier}`);
 
@@ -679,40 +664,35 @@ async function rebuildVectorStore() {
                             text: chunk.text,          // Store the clean chunk text (that was embedded) here
                             metadata: {
                                 ...(chunk.metadata || {}),
+                                // Add URL path segments to chunk metadata
+                                urlPathSegments: urlPathSegments,
+                                // Categories from URL and LLM
                                 primaryCategory: primaryCategory,
                                 secondaryCategories: combinedSecondaryCategories,
-                                industryCategories: combinedIndustryCategories,
-                                painPointCategories: combinedPainPointCategories,
-                                technicalFeatureCategories: combinedTechnicalFeatureCategories,
-                                valuePropositionCategories: combinedValuePropositionCategories,
-                                technicalLevel: analysisResult.technicalLevel,
-                                keywords: analysisResult.keywords,
-                                entities: analysisResult.entities,
-                                qualityFlags: analysisResult.qualityFlags,
-                                confidenceScore: analysisResult.confidenceScore,
-                                routingPriority: analysisResult.routingPriority,
-                                // Add URL-derived category and document context
+                                industryCategories: industryCategories,
+                                painPointCategories: painPointCategories,
+                                technicalFeatureCategories: technicalFeatureCategories,
+                                valuePropositionCategories: valuePropositionCategories,
+                                // URL-derived metadata
                                 urlDerivedCategory: derivedCategory,
                                 urlDerivedSecondaryCategories: secondaryCategories,
                                 urlDerivedIndustryCategories: industryCategories,
                                 urlDerivedPainPointCategories: painPointCategories,
                                 urlDerivedTechnicalFeatureCategories: technicalFeatureCategories,
                                 urlDerivedValuePropositionCategories: valuePropositionCategories,
-                                docSummary: docContext.summary,
-                                docEntities: docContext.entities,
-                                llmKeywords: docContext.keywords,
-                                llmPrimaryCategory: llmPrimaryCategory,
-                                llmSecondaryCategories: llmSecondaryCategories,
-                                llmIndustryCategories: llmIndustryCategories,
-                                llmPainPointCategories: llmPainPointCategories,
-                                llmTechnicalFeatureCategories: llmTechnicalFeatureCategories,
-                                llmValuePropositionCategories: llmValuePropositionCategories,
+                                // Document-level LLM context
+                                docSummary: docSummary,
+                                docEntities: docEntities,
+                                llmKeywords: docKeywords,
+                                llmCategories: llmCategories,
+                                llmTargetAudience: targetAudience,
+                                salesRelevanceScore: salesRelevanceScore,
                             },
                             context: chunk.metadata?.context || {},
                         };
                     }).filter(record => record !== null);
 
-                    if (chunkRecords.length !== chunks.length) {
+                     if (chunkRecords.length !== chunks.length) {
                         logger.warning(`Skipped ${chunks.length - chunkRecords.length} chunks due to embedding issues for ${docIdentifier}`);
                     }
 
@@ -845,51 +825,64 @@ export async function getDocumentLevelContextFromLLM(
     truncatedText = text.substring(0, 18000); // For performance and cost reasons
   }
 
-  const prompt = `You are an AI assistant specializing in sales content analysis and document processing.
+  // Enhanced prompt with clearer category definitions and improved structure
+  const prompt = `You are an AI assistant specializing in sales content analysis for a company called Workstream that offers hiring, HR, payroll, and workforce management solutions for hourly workers.
 
-Review the following document carefully and extract key information for a sales knowledge base. This document comes from the source: ${source}
+Review the following document carefully and extract key information for categorization. This document comes from the source: ${source}
 
 ${truncatedText}
 
 Based on the document above, provide the following information in a structured JSON format:
 
-1. A concise, informative summary (150-250 words) that captures the main points and sales-relevant information.
+1. A concise, informative summary (100-150 words maximum) that captures the main points.
 
 2. Named entities with their types, categorized as follows:
-   - person: Names of people mentioned
-   - organization: Company names or organizational entities
-   - product: Specific products (e.g., Workstream Platform, Text-to-Apply)
-   - feature: Product features (e.g., Shift Scheduling, Candidate Screening)
-   - price: Any pricing information or cost-related details
-   - date: Important dates or time periods
-   - location: Geographical locations
-   - industry: Industry sectors (e.g., Restaurant, Retail, Healthcare)
-   - job_title: Professional roles or positions
-   - competitor: Competitive products or companies
-   - integration_partner: Integration platforms or partners
-   - technology: Technologies mentioned (e.g., AI, SMS, API)
-   - regulation: Regulatory frameworks or compliance requirements
-   - decision_maker: Key decision makers in purchasing contexts
-   - pain_point: Business challenges the product addresses
-   - value_prop: Value propositions highlighted
-   - roi_metric: Return on investment metrics or statistics
-   - customer_segment: Specific customer segments discussed
-   - sales_trigger: Events that might trigger a purchase decision
-   - objection: Common sales objections mentioned
-   - other: Other relevant entities
+   - person: Names of individuals mentioned (e.g., "Desmond Lim", "John Smith")
+   - organization: Company names or organizational entities (e.g., "Workstream", "Burger King")
+   - product: Specific products (e.g., "Workstream Platform", "Text-to-Apply")
+   - feature: Product features (e.g., "Shift Scheduling", "Candidate Screening")
+   - price: Any pricing information or cost-related details (e.g., "$50 per month", "20% discount")
+   - industry: Industry sectors (e.g., "Restaurant", "Retail", "Healthcare") 
+   - competitor: Competitive products or companies (e.g., "ADP", "Gusto")
+   - technology: Technologies mentioned (e.g., "AI", "SMS", "API")
 
-3. The most relevant keywords for sales conversations, particularly focusing on industry-specific terms, benefits, value propositions, and competitive advantages.
+3. The 5-8 most relevant keywords for search and categorization.
 
-4. Document categorization using these categories: 
-   - Primary business function (HIRING, ONBOARDING, HR_MANAGEMENT, PAYROLL, COMPLIANCE, etc.)
-   - Sales-relevant categories (CASE_STUDIES, CUSTOMER_TESTIMONIALS, ROI_CALCULATOR, PRICING_INFORMATION, COMPETITIVE_ANALYSIS, etc.)
-   - Secondary categories: More specific aspects like TEXT_TO_APPLY, BACKGROUND_CHECKS, INDUSTRY_SPECIFIC, etc.
+4. Document categorization using these specific categories:
+   PRIMARY CATEGORIES (choose exactly ONE):
+   - HIRING: Content primarily about recruitment, applicant tracking, candidate sourcing
+   - ONBOARDING: Content about employee onboarding, paperwork, training new hires
+   - HR_MANAGEMENT: General HR functions, employee records, HR administration
+   - PAYROLL: Content about payroll processing, taxes, wages, payment methods
+   - COMPLIANCE: Content about legal requirements, regulations, policy compliance
+   - SCHEDULING: Content about shift scheduling, time management, workforce scheduling
+   - PRODUCT_OVERVIEW: General product information and platform descriptions
+   - BLOG: Blog posts, articles, thought leadership content
+   - PRICING_INFORMATION: Content specifically discussing prices, plans, costs
+   - CUSTOMER_TESTIMONIALS: Customer success stories, testimonials, case studies
+   - LEGAL: Terms of service, privacy policies, legal documents
+   - COMPANY_INFO: Information about the company, team, mission, values
 
-5. Target audience segmentation: Identify which audience segments this content is most relevant for (e.g., HR managers, franchise owners, small business operators, enterprise decision-makers).
+   SECONDARY CATEGORIES (select 2-3 most relevant):
+   - TEXT_TO_APPLY: Content about text-based job applications
+   - BACKGROUND_CHECKS: Content about background screening, verification
+   - SHIFT_MANAGEMENT: Content about managing shifts, shift swapping
+   - DIGITAL_SIGNATURES: Content about electronic document signing
+   - MOBILE_SOLUTIONS: Content about mobile apps, mobile-first approaches
+   - REPORTING: Content about analytics, reporting, data insights
+   - TIME_TRACKING: Content about time clocks, attendance tracking
+   - TAX_COMPLIANCE: Content about tax regulations, compliance
+   - EMPLOYEE_RETENTION: Content about reducing turnover, keeping employees
+   - EMPLOYEE_ENGAGEMENT: Content about improving employee satisfaction
+   - COMPETITIVE_ANALYSIS: Comparisons with competitors or alternatives
 
-6. Sales conversation relevance: Rate this document on a scale of 1-10 for its relevance in sales conversations, with 10 being extremely valuable for addressing customer questions or objections.`;
+5. Target audience: Identify exactly who this content is meant for (e.g., "HR managers", "franchise owners", "small business operators")
 
-  // Define the expected schema
+6. Sales relevance: Rate this document on a scale of 1-10 for its relevance in sales conversations, with 10 being extremely valuable.
+
+IMPORTANT: Return ONLY valid JSON with NO explanation text. The JSON must include ALL the fields described above.`;
+
+  // Define the expected schema with more detailed requirements
   const responseSchema = {
     summary: "string",
     named_entities: [{
@@ -907,18 +900,37 @@ Based on the document above, provide the following information in a structured J
     // Import the generateStructuredGeminiResponse function
     const { generateStructuredGeminiResponse } = await import('../utils/geminiClient.js');
     
-    // Use Gemini 2.0 Flash instead of OpenAI
-    const systemPrompt = "You are a document analysis specialist focusing on extracting structured information for sales and customer support.";
+    // Use a more specific system prompt to get better structured data
+    const systemPrompt = "You are a document analysis specialist for a workforce management company called Workstream. Analyze the document and extract structured information following the requested JSON format exactly. Be precise in your categorization based on the detailed category definitions provided.";
     
-    // Set up Gemini to get a structured JSON response
-    const result = await generateStructuredGeminiResponse(
-      systemPrompt,
-      prompt,
-      responseSchema
-    );
+    // Add retry logic for better error handling
+    let retryCount = 0;
+    const maxRetries = 2;
+    let result = null;
+    
+    while (retryCount <= maxRetries && !result) {
+      try {
+        result = await generateStructuredGeminiResponse(
+          systemPrompt,
+          prompt,
+          responseSchema
+        );
+        
+        // Validate the response has the required fields
+        if (!result || !result.summary || !Array.isArray(result.categories) || result.categories.length === 0) {
+          console.warn(`Incomplete response from LLM on attempt ${retryCount + 1}, retrying...`);
+          result = null;
+          retryCount++;
+        }
+      } catch (retryError) {
+        console.error(`Error on LLM attempt ${retryCount + 1}:`, retryError);
+        retryCount++;
+        if (retryCount > maxRetries) throw retryError;
+      }
+    }
     
     if (!result) {
-      console.warn("Empty response from Gemini for document analysis");
+      console.warn("Empty or invalid response from Gemini after retries");
       return {
         summary: "",
         named_entities: [],
@@ -929,14 +941,29 @@ Based on the document above, provide the following information in a structured J
       };
     }
 
-    // Ensure the object has all expected fields
+    // --- Enhanced validation and normalization of results
+    const normalizedCategories = Array.isArray(result.categories) 
+      ? result.categories.map((c: any) => typeof c === 'string' ? c.trim().toUpperCase() : '')
+          .filter((c: string) => c.length > 0)
+      : [];
+      
+    if (normalizedCategories.length === 0) {
+      console.warn("No valid categories returned by LLM");
+    }
+    
+    // Ensure named entities are properly formatted
+    const validatedEntities = Array.isArray(result.named_entities)
+      ? result.named_entities.filter((e: any) => e && e.text && e.type)
+      : [];
+      
+    // Ensure the object has all expected fields with proper validation
     return {
-      summary: result.summary || "",
-      named_entities: result.named_entities || [],
-      keywords: result.keywords || [],
-      categories: result.categories || [],
-      target_audience: result.target_audience || [],
-      sales_relevance_score: result.sales_relevance_score || 0
+      summary: typeof result.summary === 'string' ? result.summary : "",
+      named_entities: validatedEntities,
+      keywords: Array.isArray(result.keywords) ? result.keywords.filter((k: any) => k) : [],
+      categories: normalizedCategories,
+      target_audience: Array.isArray(result.target_audience) ? result.target_audience.filter((t: any) => t) : [],
+      sales_relevance_score: typeof result.sales_relevance_score === 'number' ? result.sales_relevance_score : 0
     };
     
   } catch (error) {
@@ -949,31 +976,7 @@ Based on the document above, provide the following information in a structured J
       target_audience: [],
       sales_relevance_score: 0
     };
-  }
-}
-
-// --- Add helper function to convert DocumentLevelContext to DocumentContext (around line 175) ---
-function convertToDocContext(context: DocumentLevelContext): DocumentContext {
-    return {
-        summary: context.summary,
-        entities: context.named_entities.map(entity => ({
-            type: entity.type,
-            text: entity.text,
-            relevance: entity.relevance
-        })),
-        keywords: context.keywords,
-        suggestedCategories: {
-            // Convert string categories to DocumentCategoryType if possible
-            primary: context.categories.length > 0 ? 
-                context.categories[0] as any as DocumentCategoryType : undefined,
-            secondary: context.categories.slice(1).map(cat => cat as any as DocumentCategoryType),
-            // Add empty arrays for other category types
-            industry: [],
-            painPoints: [],
-            technicalFeatures: [],
-            valuePropositions: []
-        }
-    };
+    }
 }
 
 // --- Run the rebuild ---

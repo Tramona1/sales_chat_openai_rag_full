@@ -34,6 +34,7 @@ export enum DocumentCategoryType {
   TAX_COMPLIANCE = 'TAX_COMPLIANCE',
   ENGAGEMENT = 'ENGAGEMENT',
   SECURITY_PRIVACY = 'SECURITY_PRIVACY',
+  PRODUCT_OVERVIEW = 'PRODUCT_OVERVIEW',
 
   // Secondary Categories
   TEXT_TO_APPLY = 'TEXT_TO_APPLY',
@@ -75,6 +76,11 @@ export enum DocumentCategoryType {
   INDUSTRY_INSIGHTS = 'INDUSTRY_INSIGHTS',
   COST_SAVINGS_ANALYSIS = 'COST_SAVINGS_ANALYSIS',
   DEMO_MATERIALS = 'DEMO_MATERIALS',
+
+  // Content Types - Added for better URL-based categorization
+  BLOG = 'BLOG',
+  COMPANY_INFO = 'COMPANY_INFO',
+  LEGAL = 'LEGAL',
 
   // Foundational / Other
   GENERAL = 'GENERAL'
@@ -444,6 +450,32 @@ export const CATEGORY_ATTRIBUTES: Record<DocumentCategoryType, CategoryAttribute
     description: 'Resources and information for demonstrating the product.',
     associatedKeywords: ['demo', 'demonstration', 'showcase', 'walkthrough', 'presentation', 'example'],
     potentiallySensitive: false, requiresApproval: false, color: '#FF8A65', routingPriority: 2
+  },
+
+  // Content Types - Added for better URL-based categorization
+  [DocumentCategoryType.BLOG]: {
+    displayName: 'Blog',
+    description: 'Articles and posts related to industry news, trends, and insights.',
+    associatedKeywords: ['blog', 'article', 'post', 'industry news', 'trends', 'insights'],
+    potentiallySensitive: false, requiresApproval: false, color: '#4285F4', routingPriority: 2
+  },
+  [DocumentCategoryType.COMPANY_INFO]: {
+    displayName: 'Company Information',
+    description: 'Information about the company, its history, mission, and values.',
+    associatedKeywords: ['company', 'information', 'history', 'mission', 'values', 'about'],
+    potentiallySensitive: false, requiresApproval: false, color: '#34A853', routingPriority: 2
+  },
+  [DocumentCategoryType.LEGAL]: {
+    displayName: 'Legal Documents',
+    description: 'Documents related to legal agreements, contracts, and compliance.',
+    associatedKeywords: ['legal', 'agreement', 'contract', 'compliance', 'terms', 'conditions'],
+    potentiallySensitive: true, requiresApproval: true, color: '#EA4335', routingPriority: 1
+  },
+  [DocumentCategoryType.PRODUCT_OVERVIEW]: {
+    displayName: 'Product Overview',
+    description: 'General product information, homepage content, and platform overviews.',
+    associatedKeywords: ['product', 'overview', 'platform', 'features', 'homepage', 'solution', 'introduction'],
+    potentiallySensitive: false, requiresApproval: false, color: '#5F6368', routingPriority: 2
   },
 
   // Foundational / Other

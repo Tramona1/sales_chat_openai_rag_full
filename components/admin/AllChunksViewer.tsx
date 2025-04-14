@@ -327,11 +327,12 @@ const AllChunksViewer: React.FC = () => {
         body: JSON.stringify({ queryText: queryVectorText }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to generate vector');
+        const data = await response.json();
+        throw new Error(data.message || data.error || 'Failed to generate vector');
       }
+
+      const data = await response.json();
 
       if (data.vector) {
         setGeneratedVector(`[${data.vector.join(',')}]`);
@@ -370,6 +371,18 @@ const AllChunksViewer: React.FC = () => {
       {/* --- Get Query Vector Section --- */} 
       <div className="mb-6 p-4 border border-gray-200 rounded-md bg-gray-50">
         <h3 className="text-lg font-medium mb-3">Generate Query Vector</h3>
+        
+        {/* Add info banner explaining vector generation use cases */}
+        <div className="bg-blue-50 border-l-4 border-blue-500 p-3 mb-4 text-sm text-blue-700">
+          <h4 className="font-medium mb-1">Use Cases for Vector Generation:</h4>
+          <ul className="list-disc list-inside space-y-1 ml-2">
+            <li>Diagnose retrieval problems by comparing query vectors</li>
+            <li>Test how new content would be vectorized by the embedding model</li>
+            <li>Compare semantic similarity between different text formulations</li>
+            <li>Debug search relevance issues by examining vector representations</li>
+          </ul>
+        </div>
+        
         <div className="flex items-end gap-2 mb-2">
           <div className="flex-grow">
             <label htmlFor="query-vector-text" className="block text-sm font-medium text-gray-700 mb-1">Text to Embed:</label>
@@ -464,6 +477,11 @@ const AllChunksViewer: React.FC = () => {
       {/* Advanced Filters Panel */}
       {advancedFiltersOpen && (
         <div className="mb-4 p-4 border border-gray-200 rounded-md bg-gray-50 grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Add info banner for advanced filters */}
+          <div className="md:col-span-3 bg-blue-50 border-l-4 border-blue-500 p-3 mb-2 text-sm text-blue-700">
+            These advanced filters allow you to fine-tune your search by document metadata, adjust search weights, and toggle between search modes.
+          </div>
+          
           {/* Category Filter */}
           <div>
             <label htmlFor="category-filter" className="block text-sm font-medium text-gray-700 mb-1">Category:</label>
@@ -561,6 +579,12 @@ const AllChunksViewer: React.FC = () => {
       {/* --- End Filters and Search Section --- */}
 
       {/* --- Chunks Table --- */}
+      <div className="bg-yellow-50 border-l-4 border-yellow-400 p-3 mb-4 text-sm text-yellow-800">
+        This Chunk Management view allows you to search, filter, and edit individual document chunks. 
+        Each chunk represents a segment of content that can be individually retrieved by the search system. 
+        You can use the Edit button to modify chunk metadata, which affects how chunks are retrieved in searches.
+      </div>
+        
       {error && <p className="text-red-500 mb-4">Error: {error}</p>}
       <div style={{ height: 600, width: '100%' }}>
         <Table<Chunk>

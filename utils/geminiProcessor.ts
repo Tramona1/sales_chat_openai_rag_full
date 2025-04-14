@@ -686,6 +686,124 @@ export function convertAnalysisToMetadata(analysis: GeminiDocumentAnalysis): Rec
     p.role?.toLowerCase().includes('chief executive') ||
     p.role?.toLowerCase().includes('founder')
   );
+  
+  // Extract CTO information if present
+  const ctoInfo = analysis.entities.people.find(p => 
+    p.role?.toLowerCase().includes('cto') || 
+    p.role?.toLowerCase().includes('chief technology') ||
+    p.role?.toLowerCase().includes('tech lead')
+  );
+
+  // Extract other leadership roles
+  const leadershipEntities = analysis.entities.people.filter(p => 
+    p.role?.toLowerCase().includes('chief') || 
+    p.role?.toLowerCase().includes('coo') ||
+    p.role?.toLowerCase().includes('cfo') ||
+    p.role?.toLowerCase().includes('director') ||
+    p.role?.toLowerCase().includes('head of') ||
+    p.role?.toLowerCase().includes('vp') ||
+    p.role?.toLowerCase().includes('vice president') ||
+    p.role?.toLowerCase().includes('president') ||
+    p.role?.toLowerCase().includes('founder')
+  );
+
+  // Derive industry categories from content if possible
+  const industryCategories: string[] = [];
+  // Look for industry mentions in entities and keywords
+  if (analysis.entities.companies) {
+    analysis.entities.companies.forEach(company => {
+      if (company.relationship?.toLowerCase().includes('industry')) {
+        industryCategories.push(company.name.toUpperCase().replace(/\s+/g, '_'));
+      }
+    });
+  }
+  
+  // Check keywords for industry terms
+  const industryKeywords = ['restaurant', 'retail', 'healthcare', 'logistics', 'manufacturing', 'franchise', 'hospitality'];
+  analysis.keywords.forEach(keyword => {
+    const lowerKeyword = keyword.toLowerCase();
+    for (const industry of industryKeywords) {
+      if (lowerKeyword.includes(industry)) {
+        industryCategories.push(industry.toUpperCase());
+        break;
+      }
+    }
+  });
+
+  // Derive pain points from content
+  const painPointCategories: string[] = [];
+  const painPointKeywords = [
+    {term: 'turnover', category: 'TURNOVER_REDUCTION'},
+    {term: 'retention', category: 'EMPLOYEE_RETENTION'},
+    {term: 'efficiency', category: 'EFFICIENCY_IMPROVEMENT'},
+    {term: 'time-saving', category: 'TIME_SAVINGS'},
+    {term: 'compliance', category: 'COMPLIANCE_MANAGEMENT'},
+    {term: 'regulation', category: 'COMPLIANCE_MANAGEMENT'},
+    {term: 'employee experience', category: 'EMPLOYEE_EXPERIENCE'},
+    {term: 'engagement', category: 'EMPLOYEE_ENGAGEMENT'}
+  ];
+  
+  analysis.keywords.forEach(keyword => {
+    const lowerKeyword = keyword.toLowerCase();
+    for (const painPoint of painPointKeywords) {
+      if (lowerKeyword.includes(painPoint.term)) {
+        painPointCategories.push(painPoint.category);
+        break;
+      }
+    }
+  });
+
+  // Derive technical features from content
+  const technicalFeatureCategories: string[] = [];
+  const techKeywords = [
+    {term: 'ai', category: 'AI_TOOLS'},
+    {term: 'artificial intelligence', category: 'AI_TOOLS'},
+    {term: 'machine learning', category: 'AI_TOOLS'},
+    {term: 'mobile', category: 'MOBILE_SOLUTIONS'},
+    {term: 'app', category: 'MOBILE_SOLUTIONS'},
+    {term: 'integration', category: 'INTEGRATIONS'},
+    {term: 'api', category: 'INTEGRATIONS'},
+    {term: 'security', category: 'DATA_SECURITY'},
+    {term: 'encryption', category: 'DATA_SECURITY'}
+  ];
+  
+  // Check keywords and product features for technical terms
+  [...analysis.keywords, ...analysis.entities.features].forEach(item => {
+    const lowerItem = typeof item === 'string' 
+      ? item.toLowerCase() 
+      : (item as { name: string }).name.toLowerCase();
+    
+    for (const tech of techKeywords) {
+      if (lowerItem.includes(tech.term)) {
+        technicalFeatureCategories.push(tech.category);
+        break;
+      }
+    }
+  });
+
+  // Derive value propositions from content
+  const valuePropositionCategories: string[] = [];
+  const valueProps = [
+    {term: 'cost saving', category: 'COST_SAVINGS'},
+    {term: 'roi', category: 'COST_SAVINGS'},
+    {term: 'time saving', category: 'TIME_SAVINGS'},
+    {term: 'faster', category: 'TIME_SAVINGS'},
+    {term: 'scalability', category: 'SCALABILITY'},
+    {term: 'scale', category: 'SCALABILITY'},
+    {term: 'growth', category: 'SCALABILITY'},
+    {term: 'employee retention', category: 'EMPLOYEE_RETENTION'},
+    {term: 'reduce turnover', category: 'EMPLOYEE_RETENTION'}
+  ];
+  
+  analysis.keywords.forEach(keyword => {
+    const lowerKeyword = keyword.toLowerCase();
+    for (const valueProp of valueProps) {
+      if (lowerKeyword.includes(valueProp.term)) {
+        valuePropositionCategories.push(valueProp.category);
+        break;
+      }
+    }
+  });
 
   return {
     // Core metadata
@@ -697,17 +815,28 @@ export function convertAnalysisToMetadata(analysis: GeminiDocumentAnalysis): Rec
       .filter((value, index, self) => self.indexOf(value) === index), // Remove duplicates
     technicalLevel: analysis.technicalLevel,
     
+    // Derived categories from content analysis
+    industryCategories: [...new Set(industryCategories)],
+    painPointCategories: [...new Set(painPointCategories)],
+    technicalFeatureCategories: [...new Set(technicalFeatureCategories)],
+    valuePropositionCategories: [...new Set(valuePropositionCategories)],
+    
     // Enhanced metadata
     summary: analysis.summary,
-    keywords: analysis.keywords.join(','),
-    entities: analysis.entities.people
-      .map(p => p.name)
-      .concat(analysis.entities.companies.map(c => c.name))
-      .join(','),
+    keywords: analysis.keywords,
+    entities: {
+      people: analysis.entities.people,
+      companies: analysis.entities.companies,
+      products: analysis.entities.products,
+      features: analysis.entities.features
+    },
     
-    // Special fields
+    // Leadership information
     hasCeoInfo: !!ceoInfo,
     ceoName: ceoInfo?.name || null,
+    hasCtoInfo: !!ctoInfo,
+    ctoName: ctoInfo?.name || null,
+    leadershipTeam: leadershipEntities.map(p => p.name),
     
     // Confidence and timestamps
     confidenceScore: analysis.confidenceScore,

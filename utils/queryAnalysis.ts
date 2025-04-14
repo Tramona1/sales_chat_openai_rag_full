@@ -239,7 +239,7 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
     
     // Get Gemini model
     const model = getQueryAnalysisModel();
-    const modelName = 'gemini-2.0-flash'; // Hardcoded for now, match getQueryAnalysisModel
+    const modelName = 'gemini-2.0-flash';
     
     // Create the query analysis prompt
     const prompt = `
@@ -256,10 +256,19 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
        - type: Type of entity (PERSON, ORGANIZATION, PRODUCT, FEATURE, LOCATION, CONCEPT, TECHNICAL_TERM, OTHER)
        - score: Confidence score between 0 and 1
     4. technicalLevel: Rating from 1 (non-technical) to 5 (highly technical)
-    5. primaryCategory: Most relevant category for the query. MUST be one of the following valid categories:
+    5. primaryCategory: IMPORTANT - The SINGLE most relevant category for retrieving content. You MUST choose exactly one category from this list:
        ${Object.values(DocumentCategoryType).join(', ')}
-    6. keywords: Array of key terms for search expansion
-    7. isAmbiguous: Boolean indicating if the query is ambiguous and needs clarification
+    6. secondaryCategories: Array of 1-3 additional categories from the same list that may contain relevant information
+    7. keywords: Array of key terms for search expansion
+    8. isAmbiguous: Boolean indicating if the query is ambiguous and needs clarification
+
+    Your choice of categories is critical for finding the right information. Choose the most specific category that fits rather than general ones when possible. 
+    For example:
+    - For questions about payroll, choose PAYROLL, not HR_MANAGEMENT
+    - For questions about hiring features, choose HIRING, not PRODUCT_OVERVIEW
+    - For questions about legal compliance, choose COMPLIANCE, not GENERAL
+    
+    The primary category should be the most focused and specific match possible, while secondary categories can be broader related areas.
     
     Format as valid JSON without explanations or additional text.
     `;

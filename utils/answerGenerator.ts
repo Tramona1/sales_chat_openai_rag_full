@@ -24,7 +24,7 @@ export interface SearchResultItem {
 // Token estimation constants
 const AVG_TOKENS_PER_WORD = 1.3; // A rough approximation for token estimation
 const MAX_TOKENS_OPENAI = 8000; // Conservative limit for OpenAI (leaving room for response)
-const MAX_CONTEXT_LENGTH = 15000; // Maximum context length for any model
+const MAX_CONTEXT_LENGTH = 60000; // Increased maximum context length for Gemini 2.0 Flash
 
 /**
  * Estimate tokens in a text string
@@ -275,13 +275,72 @@ Stay concise, helpful, and accurate. Use a tone that reflects Workstream's brand
 IMPORTANT INSTRUCTIONS:
 - Answer based *strictly* on the provided context ONLY. Do not use any prior knowledge.
 - If the context does not contain the information needed to answer the query, explicitly state that the information is not available in the provided context.
-- If the context *does* provide specific names answering the user's query (e.g., investor names, CEO name, CTO name), you MUST list those specific names clearly in your answer. Do not summarize generically (e.g., 'we have investors') if names are available. Extract and present all relevant factual details found.
+- If the context *does* provide specific names answering the user's query (e.g., investor names, CEO name, CTO name, leadership team members), you MUST list those specific names clearly in your answer. Do not summarize generically (e.g., 'we have investors') if names are available.
+- When answering questions about leadership or team members, prioritize information from COMPANY_INFO category documents.
+- If the question relates to a specific industry (e.g., restaurants, healthcare), prioritize information from sources with relevant industry tags.
+- For questions about specific features or capabilities, focus on information from documents with appropriate feature or technical categories.
+- Pay attention to pain points and value propositions in the context when answering sales-related questions.
+- Extract and present all relevant factual details found, especially for specific queries about people, features, or technical capabilities.
 `;
 
-    // Prepare context from search results
+    // Prepare context from search results with enhanced metadata
     const maxSources = options.maxSourcesInAnswer || 5;
     searchResults.slice(0, maxSources).forEach((result, index) => {
-      contextText += `Source [${index + 1}]: ${result.source || 'Unknown'}\nContent: ${result.text}\n\n`;
+      // Basic context text
+      contextText += `Source [${index + 1}]: ${result.source || 'Unknown'}\n`;
+      
+      // Add enhanced metadata if available
+      const metadata = result.metadata || {};
+      if (metadata) {
+        contextText += 'Metadata: ';
+        
+        // Add primary and secondary categories
+        if (metadata.primaryCategory) {
+          contextText += `[Primary Category: ${metadata.primaryCategory}] `;
+        }
+        
+        if (metadata.secondaryCategories && metadata.secondaryCategories.length > 0) {
+          contextText += `[Secondary Categories: ${Array.isArray(metadata.secondaryCategories) ? metadata.secondaryCategories.join(', ') : metadata.secondaryCategories}] `;
+        }
+        
+        // Add industry categories if available
+        if (metadata.industryCategories && metadata.industryCategories.length > 0) {
+          contextText += `[Industry: ${Array.isArray(metadata.industryCategories) ? metadata.industryCategories.join(', ') : metadata.industryCategories}] `;
+        }
+        
+        // Add technical features if available
+        if (metadata.technicalFeatureCategories && metadata.technicalFeatureCategories.length > 0) {
+          contextText += `[Technical Features: ${Array.isArray(metadata.technicalFeatureCategories) ? metadata.technicalFeatureCategories.join(', ') : metadata.technicalFeatureCategories}] `;
+        }
+        
+        // Add pain points if available
+        if (metadata.painPointCategories && metadata.painPointCategories.length > 0) {
+          contextText += `[Pain Points: ${Array.isArray(metadata.painPointCategories) ? metadata.painPointCategories.join(', ') : metadata.painPointCategories}] `;
+        }
+        
+        // Add value propositions if available
+        if (metadata.valuePropositionCategories && metadata.valuePropositionCategories.length > 0) {
+          contextText += `[Value Propositions: ${Array.isArray(metadata.valuePropositionCategories) ? metadata.valuePropositionCategories.join(', ') : metadata.valuePropositionCategories}] `;
+        }
+        
+        // Add document-level entities if available for leadership questions
+        if (metadata.docEntities && metadata.docEntities.length > 0) {
+          const peopleEntities = metadata.docEntities.filter((e: {type?: string; text?: string}) => 
+            e.type?.toLowerCase() === 'person' || 
+            e.type?.toLowerCase() === 'people'
+          );
+          
+          if (peopleEntities.length > 0) {
+            contextText += `[People Mentioned: ${peopleEntities.map((p: {text?: string}) => p.text || '').join(', ')}] `;
+          }
+        }
+        
+        contextText += '\n';
+      }
+      
+      // Add content text
+      contextText += `Content: ${result.text}\n\n`;
+      
       if (result.source) {
         includedSources.push(result.source);
       }
@@ -292,9 +351,9 @@ IMPORTANT INSTRUCTIONS:
     const promptEstimate = estimateTokenCount(query + contextText);
     logInfo(`Estimated prompt tokens (query + context): ${promptEstimate}`);
 
-    // Check if context needs summarization (Use a Gemini-friendly limit, e.g., ~30k tokens for Flash 1.5 context window, be conservative)
-    // Let's use a conservative limit like 28000 tokens to leave space for query, prompt, and response
-    const MAX_GEMINI_CONTEXT_TOKENS = 28000; 
+    // Check if context needs summarization (Using Gemini 2.0 Flash's expanded context window of 1M tokens)
+    // We use a conservative limit of 70000 tokens to leave space for query, prompt, and response
+    const MAX_GEMINI_CONTEXT_TOKENS = 70000; 
     if (promptEstimate > MAX_GEMINI_CONTEXT_TOKENS) {
       logWarning(`Context estimate (${promptEstimate} tokens) exceeds limit (${MAX_GEMINI_CONTEXT_TOKENS}). Summarizing...`);
       contextText = await summarizeContext(query, contextText);

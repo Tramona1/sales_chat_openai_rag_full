@@ -284,12 +284,142 @@ function prepareSearchContext(
   // Format each result
   const formattedResults = limitedResults.map((result, index) => {
     let content = `SOURCE ${index + 1}: ${result.source}\n`;
-    content += `TEXT: ${result.text}\n`;
+    
+    // Include enhanced metadata if available
+    const metadata = result.metadata || {};
+    
+    // Add primary category and related tags
+    if (metadata.primaryCategory || metadata.secondaryCategories) {
+      content += `CATEGORIES:\n`;
+      
+      if (metadata.primaryCategory) {
+        content += `- Primary: ${metadata.primaryCategory}\n`;
+      }
+      
+      if (metadata.secondaryCategories && metadata.secondaryCategories.length > 0) {
+        content += `- Secondary: ${Array.isArray(metadata.secondaryCategories) ? 
+          metadata.secondaryCategories.join(', ') : metadata.secondaryCategories}\n`;
+      }
+      
+      // Add URL-derived categories if available
+      if (metadata.urlDerivedCategory) {
+        content += `- URL-derived: ${metadata.urlDerivedCategory}\n`;
+      }
+      
+      // Add URL path segments for more targeted routing
+      if (metadata.urlPathSegments && metadata.urlPathSegments.length > 0) {
+        content += `- URL Path Tags: ${Array.isArray(metadata.urlPathSegments) ? 
+          metadata.urlPathSegments.join(', ') : metadata.urlPathSegments}\n`;
+      }
+    }
+    
+    // Enhanced - Sales-focused categories with higher priority
+    if (isSalesFocusedCategory(metadata.primaryCategory) || 
+        (metadata.secondaryCategories && Array.isArray(metadata.secondaryCategories) && 
+         metadata.secondaryCategories.some((c: string) => isSalesFocusedCategory(c)))) {
+      content += `SALES-FOCUSED CONTENT:\n`;
+      
+      // Extract sales-focused categories
+      if (metadata.secondaryCategories && Array.isArray(metadata.secondaryCategories)) {
+        const salesCategories = metadata.secondaryCategories.filter((c: string) => isSalesFocusedCategory(c));
+        if (salesCategories.length > 0) {
+          content += `- Sales Categories: ${salesCategories.join(', ')}\n`;
+        }
+      }
+      
+      // Check for specific sales metadata
+      if (metadata.targetAudience && metadata.targetAudience.length > 0) {
+        content += `- Target Audience: ${Array.isArray(metadata.targetAudience) ? 
+          metadata.targetAudience.join(', ') : metadata.targetAudience}\n`;
+      }
+      
+      if (metadata.salesRelevanceScore) {
+        content += `- Sales Relevance: ${metadata.salesRelevanceScore}/10\n`;
+      }
+    }
+    
+    // Add industry and technical context if available
+    if (metadata.industryCategories || metadata.technicalFeatureCategories) {
+      content += `INDUSTRY & TECHNICAL CONTEXT:\n`;
+      
+      if (metadata.industryCategories && metadata.industryCategories.length > 0) {
+        content += `- Industries: ${Array.isArray(metadata.industryCategories) ? 
+          metadata.industryCategories.join(', ') : metadata.industryCategories}\n`;
+      }
+      
+      if (metadata.technicalFeatureCategories && metadata.technicalFeatureCategories.length > 0) {
+        content += `- Technical Features: ${Array.isArray(metadata.technicalFeatureCategories) ? 
+          metadata.technicalFeatureCategories.join(', ') : metadata.technicalFeatureCategories}\n`;
+      }
+      
+      if (metadata.technicalLevel) {
+        content += `- Technical Level: ${metadata.technicalLevel}/10\n`;
+      }
+    }
+    
+    // Add sales context if available
+    if (metadata.painPointCategories || metadata.valuePropositionCategories || metadata.salesRelevanceScore) {
+      content += `SALES CONTEXT:\n`;
+      
+      if (metadata.painPointCategories && metadata.painPointCategories.length > 0) {
+        content += `- Pain Points: ${Array.isArray(metadata.painPointCategories) ? 
+          metadata.painPointCategories.join(', ') : metadata.painPointCategories}\n`;
+      }
+      
+      if (metadata.valuePropositionCategories && metadata.valuePropositionCategories.length > 0) {
+        content += `- Value Propositions: ${Array.isArray(metadata.valuePropositionCategories) ? 
+          metadata.valuePropositionCategories.join(', ') : metadata.valuePropositionCategories}\n`;
+      }
+      
+      if (metadata.targetAudience && metadata.targetAudience.length > 0) {
+        content += `- Target Audience: ${Array.isArray(metadata.targetAudience) ? 
+          metadata.targetAudience.join(', ') : metadata.targetAudience}\n`;
+      }
+    }
+    
+    // Include LLM-extracted entities if available (especially for leadership questions)
+    if (metadata.docEntities && metadata.docEntities.length > 0) {
+      content += `DOCUMENT ENTITIES:\n`;
+      
+      // Extract people entities for leadership questions
+      const peopleEntities = metadata.docEntities.filter((e: {type?: string; text?: string}) => 
+        e.type?.toLowerCase() === 'person' || e.type?.toLowerCase() === 'people'
+      );
+      
+      if (peopleEntities.length > 0) {
+        content += `- People: ${peopleEntities.map((p: {text?: string}) => p.text || '').join(', ')}\n`;
+      }
+      
+      // Extract organization entities
+      const orgEntities = metadata.docEntities.filter((e: {type?: string; text?: string}) => 
+        e.type?.toLowerCase() === 'organization' || e.type?.toLowerCase() === 'company'
+      );
+      
+      if (orgEntities.length > 0) {
+        content += `- Organizations: ${orgEntities.map((o: {text?: string}) => o.text || '').join(', ')}\n`;
+      }
+      
+      // Add competitor entities (particularly important for sales)
+      const competitorEntities = metadata.docEntities.filter((e: {type?: string; text?: string}) => 
+        e.type?.toLowerCase() === 'competitor'
+      );
+      
+      if (competitorEntities.length > 0) {
+        content += `- Competitors: ${competitorEntities.map((c: {text?: string}) => c.text || '').join(', ')}\n`;
+      }
+      
+      // Add industry entities
+      const industryEntities = metadata.docEntities.filter((e: {type?: string; text?: string}) => 
+        e.type?.toLowerCase() === 'industry'
+      );
+      
+      if (industryEntities.length > 0) {
+        content += `- Industry: ${industryEntities.map((i: {text?: string}) => i.text || '').join(', ')}\n`;
+      }
+    }
     
     // Include contextual information if available and enabled
     if (options.useContextualInformation) {
-      const metadata = result.metadata || {};
-      
       if (metadata.context) {
         const context = metadata.context;
         content += `CONTEXT:\n`;
@@ -316,35 +446,54 @@ function prepareSearchContext(
       }
       
       // Include document-level context if available
-      if (metadata.documentSummary) {
-        content += `DOCUMENT SUMMARY: ${metadata.documentSummary}\n`;
+      if (metadata.docSummary) {
+        content += `DOCUMENT SUMMARY: ${metadata.docSummary}\n`;
       }
       
       if (metadata.documentType) {
         content += `DOCUMENT TYPE: ${metadata.documentType}\n`;
       }
       
-      if (metadata.primaryTopics) {
-        content += `MAIN TOPICS: ${metadata.primaryTopics}\n`;
+      if (metadata.llmKeywords && metadata.llmKeywords.length > 0) {
+        content += `KEYWORDS: ${Array.isArray(metadata.llmKeywords) ? 
+          metadata.llmKeywords.join(', ') : metadata.llmKeywords}\n`;
       }
     }
     
-    // Include visual content if available and enabled
-    if (options.useMultiModalContent && result.visualContent && result.visualContent.length > 0) {
-      content += `VISUAL CONTENT:\n`;
-      
-      result.visualContent.forEach((visual, vIndex) => {
-        content += `- Visual ${vIndex + 1} (${visual.type}): ${visual.description}\n`;
-        if (visual.text) {
-          content += `  Text in visual: ${visual.text}\n`;
-        }
-      });
-    }
+    // Add the main text content
+    content += `\nTEXT: ${result.text}\n\n`;
     
     return content;
   });
   
-  return formattedResults.join('\n---\n\n');
+  return formattedResults.join('\n');
+}
+
+/**
+ * Helper function to identify sales-focused categories
+ */
+function isSalesFocusedCategory(category?: string): boolean {
+  if (!category) return false;
+  
+  const salesCategories = [
+    'CASE_STUDIES',
+    'CUSTOMER_TESTIMONIALS',
+    'ROI_CALCULATOR',
+    'PRICING_INFORMATION',
+    'COMPETITIVE_ANALYSIS',
+    'PRODUCT_COMPARISON',
+    'FEATURE_BENEFITS',
+    'SALES_ENABLEMENT',
+    'IMPLEMENTATION_PROCESS',
+    'CONTRACT_TERMS',
+    'CUSTOMER_SUCCESS_STORIES',
+    'PRODUCT_ROADMAP',
+    'INDUSTRY_INSIGHTS',
+    'COST_SAVINGS_ANALYSIS',
+    'DEMO_MATERIALS'
+  ];
+  
+  return salesCategories.includes(category);
 }
 
 /**
@@ -353,13 +502,24 @@ function prepareSearchContext(
 function createDefaultSystemPrompt(options: AnswerGenerationOptions): string {
   let prompt = `You are an AI assistant providing answers based on the given context.`;
   
+  // Enhanced prompt with sales focus
+  prompt += `
+When answering:
+- Prioritize sales-relevant information from the context, particularly focusing on SALES-FOCUSED CONTENT sections
+- When competitive information is present, provide accurate comparisons but emphasize advantages
+- For pricing information, ensure you present it clearly and completely
+- For case studies and testimonials, highlight the key benefits and outcomes
+- Emphasize specific industry relevance when available in the context
+- Pay attention to the URL path segments as they often indicate the most relevant content category
+- Consider both document metadata categories and the URL-derived category for maximum relevance`;
+  
   if (options.useContextualInformation) {
     prompt += `
-When answering:
-- Use the contextual information provided to understand how different pieces of information relate to each other
+Use the contextual information provided to understand how different pieces of information relate to each other:
 - Pay attention to document summaries and key points to get a better understanding of the overall content
 - Consider the document type and technical level to adjust your response appropriately
-- When a text contains definitions or examples, use that information in your answer`;
+- When a text contains definitions or examples, use that information in your answer
+- Leverage entity information, especially when answering questions about people, companies, or products`;
   }
   
   if (options.useMultiModalContent) {

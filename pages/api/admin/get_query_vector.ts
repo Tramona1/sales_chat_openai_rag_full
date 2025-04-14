@@ -1,52 +1,97 @@
 // pages/api/admin/get_query_vector.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getEmbeddingClient } from '../../../utils/embeddingClient'; // Adjust path as necessary
-import { logError, logInfo } from '../../../utils/logger'; // Adjust path as necessary
-import dotenv from 'dotenv';
+import { embedText } from '../../../utils/embeddingClient';
+import { getSupabaseAdmin } from '../../../utils/supabaseClient';
+import { logError, logInfo } from '../../../utils/logger';
+import { standardizeApiErrorResponse } from '../../../utils/errorHandling';
 
-// Ensure environment variables are loaded
-dotenv.config();
-
-interface ResponseData {
-  vector?: number[];
-  error?: string;
-  dimension?: number;
-}
-
+/**
+ * API endpoint to generate vector embeddings for query text
+ * Used for debugging and analysis in the admin dashboard
+ */
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<ResponseData>
+  res: NextApiResponse
 ) {
+  // Only accept POST requests
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return res.status(405).json({
+      error: 'Method not allowed',
+      message: 'Only POST requests are supported'
+    });
   }
-
-  const { queryText } = req.body;
-
-  if (!queryText || typeof queryText !== 'string' || queryText.trim() === '') {
-    return res.status(400).json({ error: 'Query text is required and must be a non-empty string.' });
-  }
-
-  logInfo('[API /admin/get_query_vector] Received request', { queryText });
 
   try {
-    const embeddingClient = getEmbeddingClient();
-    
-    // Generate the embedding using the RETRIEVAL_QUERY task type (default for embedText)
-    const vector = await embeddingClient.embedText(queryText);
-    const dimension = embeddingClient.getDimensions();
+    // Get query text from request body
+    const { queryText } = req.body;
 
-    if (!vector || vector.length === 0) {
-      logError('[API /admin/get_query_vector] EmbedText returned empty vector', { queryText });
-      return res.status(500).json({ error: 'Failed to generate embedding: Empty vector returned.' });
+    if (!queryText || typeof queryText !== 'string') {
+      return res.status(400).json({
+        error: 'Bad request',
+        message: 'Query text is required and must be a string'
+      });
     }
 
-    logInfo('[API /admin/get_query_vector] Successfully generated vector', { queryText, dimension });
-    return res.status(200).json({ vector, dimension });
+    if (queryText.length > 10000) {
+      return res.status(400).json({
+        error: 'Text too long',
+        message: 'Query text must be less than 10,000 characters'
+      });
+    }
 
-  } catch (error: any) {
-    logError('[API /admin/get_query_vector] Error generating embedding', { queryText, error: error.message, stack: error.stack });
-    return res.status(500).json({ error: `Error generating embedding: ${error.message}` });
+    logInfo(`[API] Generating query vector for text (${queryText.length} chars)`);
+
+    // Generate embedding vector using the RETRIEVAL_QUERY task type
+    const vector = await embedText(queryText, 'RETRIEVAL_QUERY');
+    
+    // Log embedding dimensions for monitoring
+    logInfo(`[API] Generated query vector with ${vector.length} dimensions`);
+    
+    // Track API usage in database
+    try {
+      const supabase = getSupabaseAdmin();
+      if (supabase) {
+        await supabase.from('api_call_logs').insert({
+          service: 'gemini',
+          api_function: 'embedding',
+          status: 'success',
+          metadata: { 
+            purpose: 'admin_query_vector_generation', 
+            text_length: queryText.length 
+          }
+        });
+      }
+    } catch (logErr) {
+      // Don't fail the request if logging fails
+      console.error('Failed to log API call:', logErr);
+    }
+
+    // Return the vector
+    return res.status(200).json({
+      vector,
+      dimension: vector.length,
+      queryLength: queryText.length
+    });
+
+  } catch (error) {
+    logError('[API] Error generating query vector:', error);
+    
+    // Track error in database
+    try {
+      const supabase = getSupabaseAdmin();
+      if (supabase) {
+        await supabase.from('api_call_logs').insert({
+          service: 'gemini',
+          api_function: 'embedding',
+          status: 'error',
+          metadata: { error: error instanceof Error ? error.message : 'Unknown error' }
+        });
+      }
+    } catch (logErr) {
+      // Don't fail the request if logging fails
+      console.error('Failed to log API error:', logErr);
+    }
+    
+    return res.status(500).json(standardizeApiErrorResponse(error));
   }
 } 

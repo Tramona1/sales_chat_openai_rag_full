@@ -257,11 +257,15 @@ All recommended changes have been implemented, with additional enhancements for 
    - Increased `DEFAULT_CHUNK_SIZE` from 500 to 700
    - Improved `splitRegularContent` to prioritize paragraph breaks
 
-5. **Action 5: Implement URL-Based Categorization** ✅ **ENHANCED**
+5. **Action 5: Implement URL-Based Categorization** ✅ **ENHANCED & FIXED**
    - Added URL-based categorization logic to `process_crawl_and_store.ts`
    - **Enhanced to prioritize URL path segments** as the primary source of category information
    - **Implemented path-specific category detection** (e.g., `/payroll/` → `PAYROLL` category)
    - **Added comprehensive secondary category detection** from URL paths
+   - **Fixed issue with URL paths incorrectly mapping to GENERAL category**:
+     - Added new categories to `DocumentCategoryType` enum: `BLOG`, `COMPANY_INFO`, `LEGAL`
+     - Updated URL pattern matching to map paths correctly (e.g., `/blog/` → `BLOG`, `/about/` → `COMPANY_INFO`)
+     - This ensures site structure-based content is properly categorized
 
 6. **Action 6: Implement LLM Document Context Enrichment** ✅ **ENHANCED**
    - Implemented `getDocumentLevelContextFromLLM` function in `process_crawl_and_store.ts`

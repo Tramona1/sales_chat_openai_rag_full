@@ -1,5 +1,6 @@
-import dotenv from 'dotenv';
-import path from 'path'; // Keep path for dotenv
+// Using require instead of import for dotenv and path modules
+const dotenv = require('dotenv');
+const path = require('path');
 import { getSupabaseAdmin } from './supabaseClient';
 import { logWarning } from './logger';
 

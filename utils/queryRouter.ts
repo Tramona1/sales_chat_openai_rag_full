@@ -29,7 +29,10 @@ import {
   RankedSearchResult
 } from './reranking'; // Make sure path is correct
 import { expandQuery } from './queryExpansion'; // Make sure path is correct
-import { logError, logInfo, logWarning, logDebug } from './logger'; // Make sure path is correct
+import { logError, logInfo, logWarning, logDebug, logApiCall } from './logger'; // Make sure path is correct
+import { Entity } from '../types/queryAnalysis';
+import { getSupabaseAdmin } from './supabaseClient';
+import { v4 as uuidv4 } from 'uuid';
 
 // Interface for search options
 export interface RouterSearchOptions {
@@ -58,6 +61,42 @@ const DEFAULT_SEARCH_OPTIONS: RouterSearchOptions = {
 // Add a type alias for compatibility - Adjust based on what routeQuery actually returns
 // Using RankedSearchResult as the most likely final type after reranking
 type FinalSearchResults = RankedSearchResult[];
+
+// Add these interfaces for tracing
+interface SearchTrace {
+  id: string;
+  query: string;
+  timestamp: string;
+  queryAnalysis: {
+    primaryCategory: string;
+    secondaryCategories: string[];
+    technicalLevel: number;
+    intent: string;
+    entities: any[];
+  };
+  searchDecisions: {
+    initialFilter: any;
+    appliedFilter: any;
+    filterRelaxed: boolean;
+    relaxationReason?: string;
+    categoryBalancing?: {
+      before: { sales: number; nonSales: number };
+      after: { sales: number; nonSales: number };
+    };
+  };
+  resultStats: {
+    initialResultCount: number;
+    finalResultCount: number;
+    categoriesInResults: Record<string, number>;
+    salesContentRatio: number;
+  };
+  timings: {
+    analysis: number;
+    search: number;
+    reranking?: number;
+    total: number;
+  };
+}
 
 /**
  * Routes a query through the intelligent retrieval pipeline
@@ -165,16 +204,49 @@ export async function routeQuery(
     // Create a filter object for search based on retrievalParams
     const searchFilter: HybridSearchFilter = searchOptions.applyMetadataFiltering ? {
         // Map categories correctly if needed
-        // Example: Assuming retrievalParams.categoryFilter.categories are strings matching DocumentCategoryType
-        primaryCategory: queryAnalysis.primaryCategory as DocumentCategoryType, // Adapt if needed
-        secondaryCategories: queryAnalysis.secondaryCategories as DocumentCategoryType[], // Adapt if needed
+        primaryCategory: queryAnalysis.primaryCategory as DocumentCategoryType,
+        secondaryCategories: queryAnalysis.secondaryCategories as DocumentCategoryType[],
 
+        // Add URL path segments if entities map to known URL paths
+        // This helps direct queries to specific site sections
+        urlPathSegments: extractUrlPathsFromEntities(queryAnalysis.entities),
+        
         // Widen the technical level range by 1 in each direction to be more inclusive
         technicalLevelMin: Math.max(1, (retrievalParams.technicalLevelRange?.min || 1) - 1),
         technicalLevelMax: Math.min(5, (retrievalParams.technicalLevelRange?.max || 5) + 1), // Assuming 1-5 scale now
+        
         // Add entities if they exist in the analysis
         requiredEntities: queryAnalysis.entities?.map(e => e.name).filter(name => !!name) as string[] | undefined,
-    } : {}; // Empty object if not applying filters
+    } : {};
+
+    // NEW: Log original filter for tracing
+    const originalFilter = { ...searchFilter };
+    
+    // NEW: Check for sales-focused categories and ensure balance
+    const isSalesFocused = isSalesFocusedCategory(queryAnalysis.primaryCategory) || 
+      (queryAnalysis.secondaryCategories && queryAnalysis.secondaryCategories
+        .some(c => isSalesFocusedCategory(c as string)));
+    
+    // Add detailed logging about filter application
+    logInfo(`[RouteQuery] Initial filter created:`, JSON.stringify(searchFilter, null, 2));
+    logInfo(`[RouteQuery] Query has sales focus: ${isSalesFocused}`);
+    
+    // Ensure we don't over-prioritize sales content for non-sales queries
+    if (!isSalesFocused && searchFilter.primaryCategory && 
+        isSalesFocusedCategory(searchFilter.primaryCategory)) {
+      logInfo(`[RouteQuery] Balancing: Changing primary category from sales-focused ${searchFilter.primaryCategory} to more general category`);
+      
+      // If primary is sales-focused but query isn't, use a secondary category instead
+      if (searchFilter.secondaryCategories && searchFilter.secondaryCategories.length > 0) {
+        // Find first non-sales secondary category
+        const nonSalesSecondary = searchFilter.secondaryCategories.find(c => !isSalesFocusedCategory(c));
+        if (nonSalesSecondary) {
+          searchFilter.primaryCategory = nonSalesSecondary;
+          logInfo(`[RouteQuery] Changed primary category to non-sales category: ${nonSalesSecondary}`);
+        }
+      }
+    }
+
     logInfo(`[RouteQuery] Constructed Search Filter:`, JSON.stringify(searchFilter, null, 2));
 
     // Prepare options for hybridSearch
@@ -330,17 +402,36 @@ export async function routeQuery(
     // Calculate total processing time
     const totalTime = Date.now() - startTime;
 
-    // Return final results and metadata
+    // Create trace of the search process
+    const processingTime = {
+      analysis: analysisTime,
+      search: searchTime,
+      reranking: rerankingTime || undefined,
+      total: totalTime
+    };
+
+    // Create search trace for debugging and analysis
+    const searchTrace = await createSearchTrace(
+      query,
+      queryAnalysis,
+      originalFilter,
+      hybridSearchOptions.filter,
+      !!(initialResults.length === 0 && searchOptions.applyMetadataFiltering && hybridSearchOptions.filter),
+      initialResults.length === 0 ? "No results with original filter" : undefined,
+      initialResults,
+      finalResults,
+      processingTime
+    );
+
+    // Store trace in database asynchronously (don't await)
+    storeSearchTrace(searchTrace).catch(err => 
+      logError('[RouteQuery] Failed to store search trace', err));
+
+    // Return results with timing information
     return {
-      results: finalResults, // Return the potentially reranked and limited results
-      queryAnalysis: queryAnalysis, // Return LocalQueryAnalysis
-      processingTime: {
-        analysis: analysisTime,
-        expansion: expansionTime > 0 ? expansionTime : undefined,
-        search: searchTime,
-        reranking: rerankingTime > 0 ? rerankingTime : undefined,
-        total: totalTime
-      }
+      results: finalResults,
+      queryAnalysis,
+      processingTime
     };
   } catch (error) {
     logError('[RouteQuery] Error in query routing pipeline', error instanceof Error ? error : String(error));
@@ -422,4 +513,193 @@ export function explainSearchStrategy(queryAnalysis: LocalQueryAnalysis): string
   }
 
   return explanation;
+}
+
+/**
+ * Extract URL path segments from query entities if they map to known site sections
+ * This helps direct certain queries to specific parts of the site
+ */
+function extractUrlPathsFromEntities(entities?: Entity[]): string[] | undefined {
+  if (!entities || entities.length === 0) return undefined;
+  
+  const pathSegments: string[] = [];
+  
+  // Map entity types to potential URL paths
+  entities.forEach(entity => {
+    // Skip entities with low confidence
+    if (entity.score && entity.score < 0.5) return;
+    
+    const entityName = entity.name.toLowerCase();
+    
+    // Check if entity type maps to a known URL section
+    if (entity.type === 'PRODUCT') {
+      if (entityName.includes('payroll')) {
+        pathSegments.push('PAYROLL');
+      } else if (entityName.includes('hiring') || entityName.includes('applicant') || entityName.includes('recruit')) {
+        pathSegments.push('HIRING');
+      } else if (entityName.includes('onboarding')) {
+        pathSegments.push('ONBOARDING');
+      } else if (entityName.includes('scheduling') || entityName.includes('shift')) {
+        pathSegments.push('SCHEDULING');
+      }
+    } else if (entity.type === 'ORGANIZATION' && entityName.includes('workstream')) {
+      pathSegments.push('ABOUT');
+    } else if (entity.type === 'CONCEPT') {
+      // Map concept entities to relevant paths
+      if (entityName.includes('compliance') || entityName.includes('legal')) {
+        pathSegments.push('COMPLIANCE');
+      } else if (entityName.includes('retention')) {
+        pathSegments.push('RETENTION');
+      }
+    }
+  });
+  
+  // Add debug logging for URL path segments
+  if (pathSegments.length > 0) {
+    logDebug(`[QueryRouter] Extracted URL path segments: ${pathSegments.join(', ')}`);
+  }
+  
+  return pathSegments.length > 0 ? pathSegments : undefined;
+}
+
+/**
+ * Determines if a category is sales-focused
+ * 
+ * @param category The category to check
+ * @returns true if the category is sales-focused, false otherwise
+ */
+function isSalesFocusedCategory(category?: string): boolean {
+  if (!category) return false;
+  
+  const salesCategories = [
+    'CASE_STUDIES',
+    'CUSTOMER_TESTIMONIALS',
+    'ROI_CALCULATOR',
+    'PRICING_INFORMATION',
+    'COMPETITIVE_ANALYSIS',
+    'PRODUCT_COMPARISON',
+    'FEATURE_BENEFITS',
+    'SALES_ENABLEMENT',
+    'IMPLEMENTATION_PROCESS',
+    'CONTRACT_TERMS',
+    'CUSTOMER_SUCCESS_STORIES',
+    'PRODUCT_ROADMAP',
+    'INDUSTRY_INSIGHTS',
+    'COST_SAVINGS_ANALYSIS',
+    'DEMO_MATERIALS'
+  ];
+  
+  return salesCategories.includes(category);
+}
+
+/**
+ * Creates a structured trace of the search process for diagnostics and analysis
+ */
+async function createSearchTrace(
+  query: string,
+  queryAnalysis: LocalQueryAnalysis,
+  initialFilter: any,
+  appliedFilter: any,
+  filterRelaxed: boolean,
+  relaxationReason: string | undefined,
+  initialResults: any[],
+  finalResults: any[],
+  processingTime: {
+    analysis: number;
+    search: number;
+    reranking?: number;
+    total: number;
+  }
+): Promise<SearchTrace> {
+  // Count categories in results for analysis
+  const categoriesInResults: Record<string, number> = {};
+  let salesContentCount = 0;
+  let nonSalesContentCount = 0;
+
+  finalResults.forEach(result => {
+    const primaryCategory = result.item?.metadata?.primaryCategory;
+    if (primaryCategory) {
+      categoriesInResults[primaryCategory] = (categoriesInResults[primaryCategory] || 0) + 1;
+      
+      // Count sales vs non-sales content
+      if (isSalesFocusedCategory(primaryCategory)) {
+        salesContentCount++;
+      } else {
+        nonSalesContentCount++;
+      }
+    }
+  });
+
+  // Calculate sales content ratio
+  const salesContentRatio = finalResults.length > 0 ? 
+    salesContentCount / finalResults.length : 0;
+
+  return {
+    id: uuidv4(),
+    query,
+    timestamp: new Date().toISOString(),
+    queryAnalysis: {
+      primaryCategory: queryAnalysis.primaryCategory,
+      secondaryCategories: queryAnalysis.secondaryCategories || [],
+      technicalLevel: queryAnalysis.technicalLevel,
+      intent: queryAnalysis.intent,
+      entities: queryAnalysis.entities || []
+    },
+    searchDecisions: {
+      initialFilter,
+      appliedFilter,
+      filterRelaxed,
+      relaxationReason,
+      // Include category balancing info if it was applied
+      categoryBalancing: filterRelaxed ? {
+        before: { 
+          sales: initialResults.filter(r => 
+            isSalesFocusedCategory(r.metadata?.primaryCategory)).length,
+          nonSales: initialResults.filter(r => 
+            !isSalesFocusedCategory(r.metadata?.primaryCategory)).length
+        },
+        after: { sales: salesContentCount, nonSales: nonSalesContentCount }
+      } : undefined
+    },
+    resultStats: {
+      initialResultCount: initialResults.length,
+      finalResultCount: finalResults.length,
+      categoriesInResults,
+      salesContentRatio
+    },
+    timings: processingTime
+  };
+}
+
+/**
+ * Stores search trace in the database for later analysis
+ */
+async function storeSearchTrace(trace: SearchTrace): Promise<void> {
+  try {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) {
+      logWarning('[storeSearchTrace] Supabase client not available, skipping trace storage');
+      return;
+    }
+
+    const { error } = await supabase
+      .from('search_traces')
+      .insert({
+        id: trace.id,
+        query: trace.query,
+        timestamp: trace.timestamp,
+        query_analysis: trace.queryAnalysis,
+        search_decisions: trace.searchDecisions,
+        result_stats: trace.resultStats,
+        timings: trace.timings
+      });
+
+    if (error) {
+      logError('[storeSearchTrace] Failed to store search trace', error);
+    } else {
+      logDebug('[storeSearchTrace] Successfully stored search trace', { traceId: trace.id });
+    }
+  } catch (err) {
+    logError('[storeSearchTrace] Error storing search trace', err);
+  }
 }

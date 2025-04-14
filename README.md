@@ -175,6 +175,7 @@ The application uses a standardized category system for document classification 
 - **Definition**: Categories are defined in `utils/tagUtils.ts` (`STANDARD_CATEGORIES`) and `utils/documentCategories.ts` (`DocumentCategoryType`).
 - **Examples**: `GENERAL`, `PRODUCT`, `TECHNICAL`, `FEATURES`, `SALES`, `INDUSTRY`, `COMPETITIVE`, `REFERENCE`, `INTERNAL`, `PRICING`, `COMPARISON`, `CUSTOMER_CASE`.
 - **Usage**: Applied during document processing, used for filtering in search (`HybridSearchFilter`), and displayed in UI components.
+- **Recent Improvements**: Enhanced tagging system with improved LLM prompts, better category selection logic, and more consistent entity extraction. [See Improved Tagging System](./docs/improved_tagging_system.md)
 
 [Detailed Documentation on Categories & Tagging](./docs/category_and_tagging.md)
 

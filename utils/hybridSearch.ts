@@ -96,6 +96,9 @@ export interface HybridSearchFilter {
   primaryCategory?: DocumentCategoryType;
   secondaryCategories?: DocumentCategoryType[];
   
+  // URL path segments for direct path filtering
+  urlPathSegments?: string[];
+  
   // Technical level filtering (1-10 scale)
   technicalLevelMin?: number;
   technicalLevelMax?: number;
@@ -293,82 +296,118 @@ export async function performHybridSearch(
 }
 
 /**
- * Convert HybridSearchFilter to a JSON filter suitable for the Supabase RPC call
- * Ensures standardized category handling for both primary and secondary categories
+ * Convert HybridSearchFilter to a JSON object format that Supabase RPC function can understand
+ * 
+ * This function converts the typed HybridSearchFilter object to a JSON structure that
+ * can be sent to the Supabase hybrid_search RPC function. It handles special logic for
+ * translating between our TypeScript interface and the PostgreSQL function parameters.
+ * 
+ * Enhanced features:
+ * - Improved handling of URL path segments filtering for more targeted retrieval
+ * - Special handling for sales-focused categories
+ * - Support for entity filtering, especially for competitors and industry entities
+ * 
+ * @param filter The filter object with various filtering criteria
+ * @returns JSON object to pass to Supabase RPC
  */
 function convertFilterToJson(filter?: HybridSearchFilter): any {
-  if (!filter) return null;
-
+  if (!filter) {
+    return null;
+  }
+  
+  // Start with an empty filter object
   const jsonFilter: any = {};
-
-  // Log the original filter object
-  logDebug('[convertFilterToJson] Original filter object:', JSON.stringify(filter, null, 2));
-
-  // Assign primaryCategory directly if it exists
-  if (filter.primaryCategory && Object.values(DocumentCategoryType).includes(filter.primaryCategory)) {
-    jsonFilter.primaryCategory = filter.primaryCategory;
-    logDebug(`[convertFilterToJson] Valid primaryCategory: ${filter.primaryCategory}`);
-  } else if (filter.primaryCategory) {
-    logWarning(`[convertFilterToJson] Invalid primaryCategory ignored: "${filter.primaryCategory}". Valid categories are: ${Object.values(DocumentCategoryType).join(', ')}`);
+  
+  // Add category filters
+  if (filter.primaryCategory) {
+    jsonFilter.primary_category = filter.primaryCategory;
+    
+    // Special handling for sales-focused categories - add stronger boosting
+    if (isSalesFocusedCategory(filter.primaryCategory)) {
+      jsonFilter.sales_focus = true;
+    }
   }
-
-  // Assign secondaryCategories directly if they exist and are valid
+  
   if (filter.secondaryCategories && filter.secondaryCategories.length > 0) {
-    const validSecondaryCategories = filter.secondaryCategories
-      .filter(cat => cat && Object.values(DocumentCategoryType).includes(cat)); // Ensure valid enum members
+    jsonFilter.secondary_categories = filter.secondaryCategories;
+    jsonFilter.strict_category_match = filter.strictCategoryMatch === true;
     
-    const invalidCategories = filter.secondaryCategories
-      .filter(cat => cat && !Object.values(DocumentCategoryType).includes(cat));
-    
-    if (invalidCategories.length > 0) {
-      logWarning(`[convertFilterToJson] Invalid secondaryCategories ignored: ${invalidCategories.join(', ')}`);
-    }
-    
-    if (validSecondaryCategories.length > 0) {
-      jsonFilter.secondaryCategories = validSecondaryCategories;
-      logDebug(`[convertFilterToJson] Valid secondaryCategories: ${validSecondaryCategories.join(', ')}`);
+    // Check for sales-focused categories in secondary categories
+    if (filter.secondaryCategories.some((c: string) => isSalesFocusedCategory(c))) {
+      jsonFilter.sales_focus = true;
     }
   }
-
-  // Set strictCategoryMatch if available (assuming the RPC expects this key)
-  if (filter.strictCategoryMatch !== undefined) {
-    jsonFilter.strict_category_match = filter.strictCategoryMatch;
+  
+  // Add URL path segment filters with enhanced processing
+  if (filter.urlPathSegments && filter.urlPathSegments.length > 0) {
+    // Normalize path segments (remove leading/trailing slashes, lowercase)
+    const normalizedSegments = filter.urlPathSegments.map(segment => 
+      segment.toLowerCase().replace(/^\/+|\/+$/g, '')
+    );
+    
+    // Add with both original and normalized versions for more reliable matching
+    jsonFilter.url_path_segments = normalizedSegments;
+    
+    // Log the URL path segments we're using
+    logDebug(`[convertFilterToJson] Using URL path segments: ${normalizedSegments.join(', ')}`);
   }
-
-  // Assign technical level filters directly (1-5 scale)
-  if (filter.technicalLevelMin !== undefined) {
-    // Ensure min is at least 1
-    jsonFilter.technicalLevelMin = Math.max(1, filter.technicalLevelMin);
+  
+  // Add technical level filters
+  if (filter.technicalLevelMin !== undefined || filter.technicalLevelMax !== undefined) {
+    jsonFilter.technical_level = {};
+    
+    if (filter.technicalLevelMin !== undefined) {
+      jsonFilter.technical_level.min = filter.technicalLevelMin;
+    }
+    
+    if (filter.technicalLevelMax !== undefined) {
+      jsonFilter.technical_level.max = filter.technicalLevelMax;
+    }
   }
-  if (filter.technicalLevelMax !== undefined) {
-    // Ensure max is at most 5
-    jsonFilter.technicalLevelMax = Math.min(5, filter.technicalLevelMax);
-  }
-  // Ensure min <= max if both are provided and adjust max if needed
-  if (jsonFilter.technicalLevelMin !== undefined && jsonFilter.technicalLevelMax !== undefined && jsonFilter.technicalLevelMin > jsonFilter.technicalLevelMax) {
-    logWarning('Technical level min filter > max filter, adjusting max to match min.');
-    jsonFilter.technicalLevelMax = jsonFilter.technicalLevelMin;
-  }
-
-  // Assign entity filters directly
+  
+  // Add entity filters
   if (filter.requiredEntities && filter.requiredEntities.length > 0) {
-    jsonFilter.entities = filter.requiredEntities;
+    jsonFilter.required_entities = filter.requiredEntities;
   }
-
-  // Assign keyword filters directly
+  
+  // Add keyword filters
   if (filter.keywords && filter.keywords.length > 0) {
     jsonFilter.keywords = filter.keywords;
   }
-
-  // Assign custom filters directly (assuming RPC expects 'custom' key for this)
-  if (filter.customFilters && Object.keys(filter.customFilters).length > 0) {
-    jsonFilter.custom = filter.customFilters; // Keep nested under 'custom' based on original logic
+  
+  // Add custom filters
+  if (filter.customFilters) {
+    jsonFilter.custom_filters = filter.customFilters;
   }
+  
+  return jsonFilter;
+}
 
-  // Log the final converted filter
-  logDebug('[convertFilterToJson] Converted filter:', JSON.stringify(jsonFilter, null, 2));
-
-  return Object.keys(jsonFilter).length > 0 ? jsonFilter : null;
+/**
+ * Helper function to identify sales-focused categories
+ */
+function isSalesFocusedCategory(category?: string): boolean {
+  if (!category) return false;
+  
+  const salesCategories = [
+    'CASE_STUDIES',
+    'CUSTOMER_TESTIMONIALS',
+    'ROI_CALCULATOR',
+    'PRICING_INFORMATION',
+    'COMPETITIVE_ANALYSIS',
+    'PRODUCT_COMPARISON',
+    'FEATURE_BENEFITS',
+    'SALES_ENABLEMENT',
+    'IMPLEMENTATION_PROCESS',
+    'CONTRACT_TERMS',
+    'CUSTOMER_SUCCESS_STORIES',
+    'PRODUCT_ROADMAP',
+    'INDUSTRY_INSIGHTS',
+    'COST_SAVINGS_ANALYSIS',
+    'DEMO_MATERIALS'
+  ];
+  
+  return salesCategories.includes(category);
 }
 
 /**

@@ -51,6 +51,7 @@ import DocumentManagement from '../components/admin/DocumentManagement';
 import AllChunksViewer from '../components/admin/AllChunksViewer';
 import AdminLayout from '../components/layout/AdminLayout';
 import { FeedbackLog } from '../types/feedback';
+import SearchAnalyticsTab from '../components/admin/SearchAnalyticsTab';
 
 interface AdminProps {
   logs: FeedbackLog[];
@@ -104,13 +105,13 @@ export const getServerSideProps: GetServerSideProps = async () => {
 // Define Tab Type
 type AdminTabId = 
   | 'insights'
-  | 'contentPerformance'
   | 'documentManagement'
   | 'pendingDocuments'
   | 'chunkManagement'
   | 'generalSessions'
   | 'companySessions'
-  | 'systemStatus';
+  | 'systemStatus'
+  | 'searchAnalytics';
 
 interface AdminTab {
   id: AdminTabId;
@@ -121,13 +122,13 @@ interface AdminTab {
 // Define Tabs - Reordered and Renamed
 const adminTabs: AdminTab[] = [
   { id: 'insights', label: 'Insights', icon: BarChart2 }, 
-  { id: 'contentPerformance', label: 'Content Performance', icon: BarChart },
   { id: 'documentManagement', label: 'Document Management', icon: Database },
   { id: 'pendingDocuments', label: 'Pending Documents', icon: AlertCircle },
   { id: 'chunkManagement', label: 'Chunk Management', icon: Layers },
   { id: 'generalSessions', label: 'General Sessions', icon: MessageSquare },
   { id: 'companySessions', label: 'Company Sessions', icon: Briefcase },
   { id: 'systemStatus', label: 'System Status', icon: Settings },
+  { id: 'searchAnalytics', label: 'Search Analytics', icon: Search },
 ];
 
 // Define TypeScript interfaces for Query Insights data structures
@@ -204,9 +205,21 @@ interface SystemStatusData {
 
 // --- Placeholder Components for New Tabs ---
 const SystemStatusTab = () => {
-  const [statsData, setStatsData] = useState<SystemStatusData | null>(null);
+  const [statsData, setStatsData] = useState<SystemStatusData>({
+    totalDocuments: 0,
+    totalChunks: 0,
+    queriesLast24h: 0,
+    queriesLast7d: 0,
+    avgResponseTime: 0,
+    perplexityCacheHits: 0,
+    perplexityCacheHitRate: 0,
+    apiCalls: {}
+  });
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Remove contentData state and references
+  const [contentLoading, setContentLoading] = useState<boolean>(false);
 
   useEffect(() => {
     const fetchSystemMetrics = async () => {
@@ -216,57 +229,19 @@ const SystemStatusTab = () => {
         if (!response.ok) {
           throw new Error(`API Error: ${response.status} ${response.statusText}`);
         }
-          const data = await response.json();
-        console.debug("[SystemStatusTab] Fetched metrics:", data);
-
-        // Map data to state, including all nested apiCalls fields
-        setStatsData({
-          totalDocuments: data.vectorStore?.documents ?? 0,
-          totalChunks: data.vectorStore?.chunks ?? 0,
-          queriesLast24h: data.queries?.last24Hours ?? 0,
-          queriesLast7d: data.queries?.last7Days ?? 0,
-          avgResponseTime: data.performance?.averageQueryTime ?? 0,
-          perplexityCacheHits: data.caching?.hits ?? 0,
-          perplexityCacheHitRate: data.caching?.hitRate ?? 0,
-          apiCalls: {
-            geminiChatSuccess: data.apiCalls?.geminiChatSuccess ?? 0,
-            geminiChatError: data.apiCalls?.geminiChatError ?? 0,
-            totalGeminiChatCalls: data.apiCalls?.totalGeminiChatCalls ?? 0,
-            estimatedChatCost: data.apiCalls?.estimatedChatCost ?? 0,
-            geminiEmbeddingSuccess: data.apiCalls?.geminiEmbeddingSuccess ?? 0,
-            geminiEmbeddingError: data.apiCalls?.geminiEmbeddingError ?? 0,
-            totalGeminiEmbeddingCalls: data.apiCalls?.totalGeminiEmbeddingCalls ?? 0,
-            estimatedEmbeddingCost: data.apiCalls?.estimatedEmbeddingCost ?? 0,
-            geminiQueryAnalysisSuccess: data.apiCalls?.geminiQueryAnalysisSuccess ?? 0,
-            geminiQueryAnalysisError: data.apiCalls?.geminiQueryAnalysisError ?? 0,
-            totalGeminiQueryAnalysisCalls: data.apiCalls?.totalGeminiQueryAnalysisCalls ?? 0,
-            estimatedAnalysisCost: data.apiCalls?.estimatedAnalysisCost ?? 0,
-            geminiAnswerGenerationSuccess: data.apiCalls?.geminiAnswerGenerationSuccess ?? 0,
-            geminiAnswerGenerationError: data.apiCalls?.geminiAnswerGenerationError ?? 0,
-            totalGeminiAnswerGenerationCalls: data.apiCalls?.totalGeminiAnswerGenerationCalls ?? 0,
-            estimatedAnswerGenCost: data.apiCalls?.estimatedAnswerGenCost ?? 0,
-            geminiRerankingSuccess: data.apiCalls?.geminiRerankingSuccess ?? 0,
-            geminiRerankingError: data.apiCalls?.geminiRerankingError ?? 0,
-            totalGeminiRerankingCalls: data.apiCalls?.totalGeminiRerankingCalls ?? 0,
-            estimatedRerankCost: data.apiCalls?.estimatedRerankCost ?? 0,
-            totalEstimatedCost: data.apiCalls?.totalEstimatedCost ?? 0
-          }
-        });
-
+        const data = await response.json();
+        console.debug("[SystemStatusTab] Fetched system metrics:", data);
+        setStatsData(data);
       } catch (error: any) {
         console.error('[SystemStatusTab] Error fetching system metrics:', error);
         setError(error.message || 'Failed to load system metrics.');
-        setStatsData(null);
-      } finally {
-        // Ensure loading is set false only after first attempt
-        if (loading) setLoading(false);
+        // Don't set statsData to null, keep the previous value or initialize with default values
       }
+      if (loading) setLoading(false);
     };
 
     fetchSystemMetrics();
-    const interval = setInterval(fetchSystemMetrics, 30000);
-    return () => clearInterval(interval);
-  }, [loading]); // Rerun effect only if loading state changes (relevant on initial load)
+  }, []);
   
   // Define StatCard prop types
   interface StatCardProps {
@@ -355,9 +330,10 @@ const SystemStatusTab = () => {
           />
           <StatCard 
           title="Avg Response Time (s)"
-          value={statsData.avgResponseTime.toFixed(2)} // Format to 2 decimal places
+          value={(statsData.avgResponseTime !== undefined && statsData.avgResponseTime !== null && typeof statsData.avgResponseTime === 'number') ? 
+            statsData.avgResponseTime.toFixed(2) : 'N/A'} 
           icon={Clock}
-          description="Average query processing time (API data)" // Indicate source
+          description="Average query processing time (API data)" 
           colorClass="bg-yellow-600"
         />
 
@@ -371,16 +347,17 @@ const SystemStatusTab = () => {
           />
           <StatCard 
           title="Cache Hit Rate (%)"
-          value={statsData.perplexityCacheHitRate.toFixed(1)} // Format to 1 decimal place
+          value={(statsData.perplexityCacheHitRate !== undefined && statsData.perplexityCacheHitRate !== null && typeof statsData.perplexityCacheHitRate === 'number') ?
+            statsData.perplexityCacheHitRate.toFixed(1) : 'N/A'} // Format to 1 decimal place
           icon={Percent}
           description="Cache hit percentage (Query Analysis)"
           colorClass="bg-purple-700"
           />
         </div>
 
-      {/* Section for API Calls & Costs */}
-      <h3 className="text-lg font-medium mb-3 text-gray-700">Gemini API Usage & Estimated Costs</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* API Call Statistics Section */}
+      <h3 className="text-lg font-medium mb-3 text-gray-700">API Call Statistics</h3>
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
         {/* --- Total Estimated Cost --- */}
         <StatCard 
           title="Total Estimated Cost"
@@ -423,165 +400,9 @@ const SystemStatusTab = () => {
         <StatCard title="Reranking Calls (Success)" value={statsData.apiCalls?.geminiRerankingSuccess ?? 0} icon={CheckCircle} description="Successful calls" colorClass="bg-fuchsia-500" />
         <StatCard title="Reranking Calls (Error)" value={statsData.apiCalls?.geminiRerankingError ?? 0} icon={AlertCircle} description="Failed calls" colorClass="bg-red-500" />
         <StatCard title="Reranking Calls (Est. Cost)" value={`$${statsData.apiCalls?.estimatedRerankCost?.toFixed(2) ?? '0.00'}`} icon={DollarSign} description="Approx. cost" colorClass="bg-orange-400" />
+      </div>
 
-                      </div>
       <p className="text-xs text-gray-500 mt-4 text-center">Note: API costs are estimates based on call counts and may not reflect exact billing.</p>
-    </div>
-  );
-};
-
-// Replace with a simple implementation:
-// Define interfaces for Content Performance tab
-interface ContentItem {
-  id: string;
-  text: string;
-  source: string;
-  retrievalCount: number;
-  feedbackScore: number;
-}
-
-interface ContentStatsData {
-  topContent: ContentItem[];
-  totalRetrievals: number;
-  avgFeedbackScore: number;
-}
-
-const ContentPerformanceTab = () => {
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [contentData, setContentData] = useState<ContentStatsData | null>(null);
-
-  // Mock data for development
-  const mockContentData: ContentStatsData = {
-    topContent: [
-      {
-        id: 'c-1',
-        text: 'Introduction to the product architecture',
-        source: 'Technical Documentation',
-        retrievalCount: 156,
-        feedbackScore: 0.87
-      },
-      {
-        id: 'c-2',
-        text: 'API integration guidelines for enterprise customers',
-        source: 'Developer Guide',
-        retrievalCount: 124,
-        feedbackScore: 0.92
-      },
-      {
-        id: 'c-3',
-        text: 'Troubleshooting common integration issues',
-        source: 'Troubleshooting Handbook',
-        retrievalCount: 98,
-        feedbackScore: 0.74
-      }
-    ],
-    totalRetrievals: 1248,
-    avgFeedbackScore: 0.78
-  };
-
-  useEffect(() => {
-    // Load mock data
-    setLoading(true);
-    setTimeout(() => {
-      setContentData(mockContentData);
-      setLoading(false);
-    }, 800);
-  }, []);
-
-  return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-semibold text-gray-900">Content Performance</h2>
-      </div>
-      
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded mb-6">
-          {error}
-        </div>
-      )}
-      
-      {/* Stats cards */}
-      {contentData && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Total Retrievals</h3>
-              <div className="p-2 rounded-md bg-blue-700">
-                <Search className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{contentData.totalRetrievals.toLocaleString()}</span>
-              <span className="text-xs text-gray-500 mt-1">All-time content retrievals</span>
-            </div>
-          </div>
-          
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Avg Feedback Score</h3>
-              <div className="p-2 rounded-md bg-green-600">
-                <Activity className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{(contentData.avgFeedbackScore * 100).toFixed(0)}%</span>
-              <span className="text-xs text-gray-500 mt-1">Average content feedback score</span>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Content Table */}
-      {loading ? (
-        <div className="flex justify-center items-center h-64">
-          <div className="flex flex-col items-center">
-            <svg className="animate-spin h-8 w-8 text-blue-600 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span className="text-gray-600">Loading content performance data...</span>
-          </div>
-        </div>
-      ) : contentData ? (
-        <div className="bg-white p-6 rounded-lg shadow-sm">
-          <h3 className="text-lg font-medium mb-4 text-gray-800">Most Retrieved Content</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Content</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Retrievals</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Feedback</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {contentData.topContent.map((item) => (
-                  <tr key={item.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900">{item.text}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{item.source}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{item.retrievalCount}</td>
-                    <td className="px-4 py-3 text-sm">
-                      <span className={`text-sm ${item.feedbackScore > 0.7 ? 'text-green-600' : item.feedbackScore < 0.5 ? 'text-red-500' : 'text-yellow-500'}`}>
-                        {(item.feedbackScore * 100).toFixed(0)}%
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
-        <div className="text-center py-6 text-gray-500">No content performance data available</div>
-      )}
-      
-      {/* Note about data source */}
-      <div className="mt-6 text-xs text-gray-500 text-center">
-        <p>Note: Currently displaying mock data for development purposes.</p>
-        <p>Integration with the content analytics API will be implemented once the backend infrastructure is ready.</p>
-      </div>
     </div>
   );
 };
@@ -987,12 +808,8 @@ export default function Admin({ logs }: AdminProps) {
   // --- Render Function --- 
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'systemStatus': 
-        return <SystemStatusTab />;
       case 'insights':
         return <InsightsTab />;
-      case 'contentPerformance':
-        return <ContentPerformanceTab />;
       case 'documentManagement':
         return <DocumentManagement />;
       case 'pendingDocuments':
@@ -1003,8 +820,12 @@ export default function Admin({ logs }: AdminProps) {
         return renderGeneralSessions();
       case 'companySessions':
         return renderCompanySessions();
+      case 'systemStatus':
+        return <SystemStatusTab />;
+      case 'searchAnalytics':
+        return <SearchAnalyticsTab />;
       default:
-        return <InsightsTab />;
+        return <div>Select a tab</div>;
     }
   };
 

@@ -247,7 +247,7 @@ Use confidence scores between 0 and 1, where 1 means extremely confident and 0 m
       // Parse JSON from the response
       try {
         // Find and extract JSON from the response
-        const jsonMatch = responseText.match(/\[\s*\{.*\}\s*\]/s);
+        const jsonMatch = responseText.match(/\[\s*\{.*\}\s*\]/);
         if (!jsonMatch) {
           logWarning(`Failed to extract JSON from Gemini suggestion response: ${responseText.substring(0, 100)}`);
           // Fall back to local suggestions if Gemini doesn't return valid JSON
@@ -535,6 +535,10 @@ export async function verifyCompanyIdentity(
           
           try {
             const supabase = createServiceClient();
+            if (!supabase) {
+              logError('Failed to create Supabase client for updating cache with new suggestions');
+              return updatedResult;
+            }
             const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
             await supabase
               .from(SUPABASE_CACHE_TABLE)
@@ -555,8 +559,16 @@ export async function verifyCompanyIdentity(
     }
     
     // Try to get from Supabase cache
-    const supabase = createServiceClient();
-    const { data: supabaseCache, error: supabaseError } = await supabase
+    const supabaseForRetrieval = createServiceClient();
+    if (!supabaseForRetrieval) {
+      logError('Failed to create Supabase client for retrieving company cache');
+      // Return a minimal result that indicates we couldn't verify
+      return {
+        exists: false,
+        isRateLimited: true
+      };
+    }
+    const { data: supabaseCache, error: supabaseError } = await supabaseForRetrieval
       .from(SUPABASE_CACHE_TABLE)
       .select('*')
       .eq('id', cacheKey)
@@ -595,7 +607,12 @@ export async function verifyCompanyIdentity(
           
           // Update Supabase cache
           try {
-            await supabase
+            const supabaseForStorage = createServiceClient();
+            if (!supabaseForStorage) {
+              logError('Failed to create Supabase client for updating cache with new suggestions');
+              return updatedResult;
+            }
+            await supabaseForStorage
               .from(SUPABASE_CACHE_TABLE)
               .upsert({
                 id: cacheKey,
@@ -678,14 +695,20 @@ Important: I'm specifically looking for "${sanitizedCompanyName}" and not anothe
       cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
       
       // Store in Supabase cache
+      const supabaseForStorage = createServiceClient();
       const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
-      await supabase
-        .from(SUPABASE_CACHE_TABLE)
-        .upsert({
-          id: cacheKey,
-          data: result,
-          expires_at: expiresAt.toISOString()
-        }, { onConflict: 'id' });
+      const supabaseClient = supabaseForStorage || createServiceClient();
+      if (supabaseClient) {
+        await supabaseClient
+          .from(SUPABASE_CACHE_TABLE)
+          .upsert({
+            id: cacheKey,
+            data: result,
+            expires_at: expiresAt.toISOString()
+          }, { onConflict: 'id' });
+      } else {
+        logError('Failed to create Supabase client for storing company verification cache');
+      }
       
       return result;
     }
@@ -721,14 +744,20 @@ Important: I'm specifically looking for "${sanitizedCompanyName}" and not anothe
     cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
     
     // Store in Supabase cache
+    const supabaseForStorage = createServiceClient();
     const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
-    await supabase
-      .from(SUPABASE_CACHE_TABLE)
-      .upsert({
-        id: cacheKey,
-        data: result,
-        expires_at: expiresAt.toISOString()
-      }, { onConflict: 'id' });
+    const supabaseClient = supabaseForStorage || createServiceClient();
+    if (supabaseClient) {
+      await supabaseClient
+        .from(SUPABASE_CACHE_TABLE)
+        .upsert({
+          id: cacheKey,
+          data: result,
+          expires_at: expiresAt.toISOString()
+        }, { onConflict: 'id' });
+    } else {
+      logError('Failed to create Supabase client for storing company verification cache');
+    }
     
     return result;
     
@@ -816,8 +845,18 @@ export async function getCompanyInformation(
       }
       
       // Try to get from Supabase cache
-      const supabase = createServiceClient();
-      const { data: supabaseCache, error: supabaseError } = await supabase
+      const supabaseForRetrieval = createServiceClient();
+      if (!supabaseForRetrieval) {
+        logError('Failed to create Supabase client for retrieving company cache');
+        // Return a minimal result that indicates we couldn't fetch
+        return {
+          companyInfo: 'Database connection error',
+          citations: [],
+          lastUpdated: new Date(),
+          isRateLimited: true
+        };
+      }
+      const { data: supabaseCache, error: supabaseError } = await supabaseForRetrieval
         .from(SUPABASE_CACHE_TABLE)
         .select('*')
         .eq('id', cacheKey)
@@ -903,15 +942,20 @@ Format the information in clear sections and be factual. If you can't find relia
     cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
     
     // Store in Supabase cache
-    const supabase = createServiceClient();
+    const supabaseForStorage = createServiceClient();
     const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
-    await supabase
-      .from(SUPABASE_CACHE_TABLE)
-      .upsert({
-        id: cacheKey,
-        data: result,
-        expires_at: expiresAt.toISOString()
-      }, { onConflict: 'id' });
+    const supabaseClient = supabaseForStorage || createServiceClient();
+    if (supabaseClient) {
+      await supabaseClient
+        .from(SUPABASE_CACHE_TABLE)
+        .upsert({
+          id: cacheKey,
+          data: result,
+          expires_at: expiresAt.toISOString()
+        }, { onConflict: 'id' });
+    } else {
+      logError('Failed to create Supabase client for storing company information cache');
+    }
     
     return result;
     

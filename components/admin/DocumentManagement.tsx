@@ -55,6 +55,23 @@ interface DocumentMetadataForm {
   [key: string]: any;
 }
 
+/**
+ * DocumentManagement Component
+ * 
+ * This component provides a comprehensive interface for managing documents in the knowledge base.
+ * It includes functionality for:
+ * - Viewing a paginated list of documents with filtering and search
+ * - Editing document metadata (title, source, category, summary, keywords)
+ * - Deleting documents and their associated chunks
+ * - Navigating to view document chunks
+ * 
+ * UI features:
+ * - Responsive grid layout that adapts to different screen sizes
+ * - Accessible buttons with clear labels and tooltips
+ * - Visual feedback for button interactions with hover states
+ * - Clear toggle button for switching between title/source and content search
+ * - Comprehensive document preview with metadata
+ */
 const DocumentManagement: React.FC = () => {
   // State for documents and loading status
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -375,30 +392,34 @@ const DocumentManagement: React.FC = () => {
       renderCell: (row: Document) => (
         <div className="flex space-x-2">
           <button
-            className="p-1 text-blue-600 hover:bg-blue-50 rounded"
+            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
             onClick={() => handleViewDocument(row)}
-            title="View"
+            title="View Document Details"
+            aria-label="View Document Details"
           >
             <Visibility size={18} />
           </button>
           <button
-            className="p-1 text-indigo-600 hover:bg-indigo-50 rounded"
+            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
             onClick={() => handleEditDocument(row)}
-            title="Edit"
+            title="Edit Document"
+            aria-label="Edit Document"
           >
             <Edit size={18} />
           </button>
           <button
-            className="p-1 text-red-600 hover:bg-red-50 rounded"
+            className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
             onClick={() => handleDeleteDocument(row)}
-            title="Delete"
+            title="Delete Document"
+            aria-label="Delete Document"
           >
             <Delete size={18} />
           </button>
           <button
-            className="p-1 text-purple-600 hover:bg-purple-50 rounded"
+            className="p-1.5 text-purple-600 hover:bg-purple-50 rounded transition-colors"
             onClick={() => handleNavigateToChunks(row.id)}
-            title="View Chunks"
+            title="View Document Chunks"
+            aria-label="View Document Chunks"
           >
             <ViewComfy size={18} />
           </button>
@@ -410,6 +431,11 @@ const DocumentManagement: React.FC = () => {
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-4">Document Management</h1>
+      
+      <div className="bg-blue-50 border-l-4 border-blue-500 p-3 mb-4 text-sm text-blue-700">
+        <h4 className="font-medium mb-1">Document Management Overview:</h4>
+        <p>This interface allows you to manage all documents in the knowledge base. You can view, edit, and delete documents, as well as navigate to their associated chunks. The document metadata (including title, source, category, summary, and keywords) can be edited to improve search relevance and accuracy.</p>
+      </div>
       
       <div className="bg-white p-4 rounded-lg shadow mb-6">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
@@ -497,9 +523,9 @@ const DocumentManagement: React.FC = () => {
                  fetchDocuments(); 
               }}
               className="w-full h-10"
-              title={searchByContent ? "Searching document content" : "Click to search document content instead of title/source"}
+              title={searchByContent ? "Currently searching in document content - Click to search in titles and sources only" : "Currently searching in titles and sources - Click to search in document content"}
             >
-              {searchByContent ? "Search Content" : "Search Title/Src"}
+              {searchByContent ? "Searching Content" : "Searching Title/Src"}
             </Button>
           </div>
         </div>
@@ -724,6 +750,11 @@ const DocumentManagement: React.FC = () => {
               </div>
             </div>
             
+            <div className="border-t border-gray-200 py-2 mb-2">
+              <h3 className="text-sm font-medium text-gray-500">Document ID</h3>
+              <p className="font-mono text-xs">{selectedDocument.id}</p>
+            </div>
+            
             <div className="border-t border-b border-gray-200 py-4 mb-4">
               <h3 className="text-sm font-medium text-gray-500 mb-2">Summary</h3>
               <p className="whitespace-pre-line">{selectedDocument.metadata?.summary || 'No summary available'}</p>
@@ -765,6 +796,8 @@ const DocumentManagement: React.FC = () => {
                   setViewDialogOpen(false);
                   handleNavigateToChunks(selectedDocument.id);
                 }}
+                className="transition-colors"
+                aria-label="View Chunks of This Document"
               >
                 View Chunks
               </Button>
@@ -778,6 +811,8 @@ const DocumentManagement: React.FC = () => {
                     setViewDialogOpen(false);
                     handleEditDocument(selectedDocument);
                   }}
+                  className="transition-colors"
+                  aria-label="Edit This Document"
                 >
                   Edit
                 </Button>
@@ -789,6 +824,8 @@ const DocumentManagement: React.FC = () => {
                     setViewDialogOpen(false);
                     handleDeleteDocument(selectedDocument);
                   }}
+                  className="transition-colors"
+                  aria-label="Delete This Document"
                 >
                   Delete
                 </Button>

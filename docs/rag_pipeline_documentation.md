@@ -90,15 +90,33 @@ The system uses Supabase as a vector database:
 The `hybridSearch` function combines multiple search techniques:
 - **Vector Search**: Semantic similarity via vector embeddings
 - **Keyword Search**: PostgreSQL full-text search capabilities
+- **URL Path Segment Filtering**: Direct filtering based on URL path components
 - **Metadata Filtering**: Category-based and entity-based filtering
 
 ### Query Processing
 
 User queries undergo several processing steps:
+- **Query Analysis**: LLM-based analysis of query intent, categories, entities, and technical level
 - **Text Cleaning**: Identical cleaning to document processing (`query.replace(/\s+/g, ' ').trim()`)
 - **Embedding Generation**: Converting query to vector embedding
+- **Category Assignment**: Forced selection of primary and secondary categories
 - **Parameter Optimization**: Balancing vector and keyword weights
-- **Filter Generation**: Converting user context to metadata filters
+- **Filter Generation**: Converting user context to metadata filters, including URL path segments
+
+### Category-Based Filtering
+
+The system uses LLM-assigned categories to filter search results:
+- **Primary Category**: Single most relevant category that should contain the answer
+- **Secondary Categories**: 1-3 additional categories that may have relevant information
+- **Category Forcing**: The LLM is instructed to always assign specific categories from our predefined list
+- **Fallback Logic**: If category-filtered results are empty, the system automatically retries without filters
+
+### URL Path Segment Filtering
+
+The system can filter based on URL path segments:
+- **Direct Path Matching**: Filter documents by their exact URL path segments
+- **Entity-to-Path Mapping**: Entities detected in queries can be mapped to relevant URL paths
+- **Indexed Efficiency**: URL path segments are indexed with a GIN index for fast filtering
 
 ### Faceted Search
 
@@ -157,6 +175,20 @@ The system includes robust error handling:
 - **Detailed Logging**: All steps have diagnostic logging
 - **Graceful Degradation**: Falling back to simpler search methods
 - **User Feedback Mechanisms**: Capturing quality issues for improvement
+
+## Performance Monitoring and Analytics
+
+The RAG pipeline includes comprehensive performance monitoring and analytics capabilities:
+
+### System Metrics API
+
+The `/api/system-metrics` endpoint provides system-level statistics including:
+- Document and chunk counts in the vector store
+- Query volumes (24h and 7d)
+- Average response times
+- API call statistics with success/error rates
+- Estimated API costs
+- Cache hit rates
 
 ## Conclusion
 

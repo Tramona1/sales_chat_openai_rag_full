@@ -4,7 +4,8 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
+// Using require instead of import for dotenv as it has no default export
+const dotenv = require('dotenv');
 import { logError, logInfo, logDebug, logWarning } from './logger';
 import { VectorStoreItem } from './vectorStore'; // Assuming vectorStore.ts exports this
 

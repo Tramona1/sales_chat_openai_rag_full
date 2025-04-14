@@ -352,6 +352,12 @@ Assign a score from 0-10 for each result based on how well it DIRECTLY and COMPL
 2.  **Completeness & Specificity:** For questions asking "Who...", "What...", "List...", "How many...", or seeking specific details, documents that provide explicit lists, names, numbers, or the requested details are significantly more relevant than those offering only vague descriptions or single examples. Prefer completeness.
 3.  **Query Intent:** Consider the implied intent. A "How to..." query requires procedural steps. A "Why..." query requires explanations. A "Compare..." query needs information on both items being compared. Rank based on how well the document fulfills that specific intent.
 
+**SALES-FOCUSED CONTENT EVALUATION:**
+- For queries about pricing, ROI, or competitive comparisons, prioritize content tagged with PRICING_INFORMATION, ROI_CALCULATOR, COMPETITIVE_ANALYSIS, or PRODUCT_COMPARISON categories.
+- For queries about implementation or customer success, prioritize content tagged with IMPLEMENTATION_PROCESS, CASE_STUDIES, or CUSTOMER_SUCCESS_STORIES.
+- When the primaryCategory or secondaryCategories includes sales-focused content, give an additional boost to relevance (1-2 points) as this content is specifically designed for sales queries.
+- Pay special attention to URL path segments that indicate sales content (like "/pricing", "/compare", "/case-studies").
+
 **DOWN-RANKING / SPECIAL CASES:**
 - Job Postings: Check the 'Category'. If 'HIRING' or 'JOB_POSTING', significantly lower its score (e.g., subtract 3-5 points or cap at 3) UNLESS the query explicitly asks about jobs/hiring/careers/titles/locations in a hiring context.
 - Boilerplate/Navigation: Documents consisting primarily of navigation links, footers, or repetitive boilerplate with only keyword mentions should receive very low scores (0-2).
@@ -368,6 +374,11 @@ ${queryHasVisualFocus ? `
 }
 - Visual Content Evaluation Guidelines: Evaluate relevance of visual descriptions, charts/diagrams/tables data, and image content to the query.
 - Scoring Adjustments: Apply scoring adjustments for visuals AFTER establishing the core relevance score based on the directness/completeness of the answer to the query intent.
+
+**URL PATH SEGMENT EVALUATION:**
+- When document metadata contains urlPathSegments, these provide strong signals about content categorization.
+- For example, if the query is about pricing and a document has '/pricing' in its URL path segments, this is a very strong relevance signal.
+- Give documents with URL paths that directly match the query intent a 1-2 point boost in relevance.
 
 **OUTPUT FORMAT:**
 IMPORTANT: Your response must be a valid JSON array of objects, where each object has 'id', 'score', and 'reason' properties. The 'reason' should briefly justify the score based on the principles above (directness, completeness, intent, quality, visual relevance).
