@@ -67,9 +67,28 @@ export const STANDARD_CATEGORIES = [
   { value: 'CUSTOMER_SUPPORT_INTEGRATION', label: 'Customer Support Integration' }, // e.g., Zendesk
   { value: 'JOB_BOARD_INTEGRATIONS', label: 'Job Board Integrations' }, // e.g., Indeed, ZipRecruiter
   { value: 'CALENDAR_INTEGRATIONS', label: 'Calendar Integrations' }, // e.g., Google Calendar
+  { value: 'INDUSTRY_SPECIFIC', label: 'Industry-Specific Solutions' },
+  { value: 'INTEGRATIONS', label: 'Integrations Marketplace' },
+  
+  // Sales-focused Categories
+  { value: 'CASE_STUDIES', label: 'Case Studies' },
+  { value: 'CUSTOMER_TESTIMONIALS', label: 'Customer Testimonials' },
+  { value: 'ROI_CALCULATOR', label: 'ROI Calculator' },
+  { value: 'PRICING_INFORMATION', label: 'Pricing Information' },
+  { value: 'COMPETITIVE_ANALYSIS', label: 'Competitive Analysis' },
+  { value: 'PRODUCT_COMPARISON', label: 'Product Comparison' },
+  { value: 'FEATURE_BENEFITS', label: 'Feature Benefits' },
+  { value: 'SALES_ENABLEMENT', label: 'Sales Enablement' },
+  { value: 'IMPLEMENTATION_PROCESS', label: 'Implementation Process' },
+  { value: 'CONTRACT_TERMS', label: 'Contract Terms' },
+  { value: 'CUSTOMER_SUCCESS_STORIES', label: 'Customer Success Stories' },
+  { value: 'PRODUCT_ROADMAP', label: 'Product Roadmap' },
+  { value: 'INDUSTRY_INSIGHTS', label: 'Industry Insights' },
+  { value: 'COST_SAVINGS_ANALYSIS', label: 'Cost Savings Analysis' },
+  { value: 'DEMO_MATERIALS', label: 'Demo Materials' },
 
   // Foundational / Other
-  { value: 'GENERAL', label: 'General / Other' } // Catch-all
+  { value: 'GENERAL', label: 'General Information' } // Catch-all
 ];
 
 /**

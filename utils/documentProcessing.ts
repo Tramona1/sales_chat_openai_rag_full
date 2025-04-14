@@ -185,6 +185,9 @@ export function splitIntoChunks(
   // Remove excess whitespace
   const cleanedText = text.replace(/\s+/g, ' ').trim();
   
+  // Ensure source is treated as a string for checks below
+  const sourceString = typeof source === 'string' ? source : ''; // Default to empty string if not a string
+  
   if (cleanedText.length <= chunkSize) {
     // For small text, check if it contains structured information
     const structuredInfo = detectStructuredInfo(cleanedText);
@@ -213,12 +216,12 @@ export function splitIntoChunks(
   }
 
   // If this is a careers or about page, we may need special handling
-  const isAboutPage = source?.includes('/about') || source?.toLowerCase().includes('about us');
-  const isCareersPage = source?.includes('/careers') || source?.toLowerCase().includes('careers');
+  const isAboutPage = sourceString.includes('/about') || sourceString.toLowerCase().includes('about us');
+  const isCareersPage = sourceString.includes('/careers') || sourceString.toLowerCase().includes('careers');
   
   // For career and about pages, try to locate sections for special handling
   if (isAboutPage || isCareersPage) {
-    return splitStructuredContent(cleanedText, chunkSize, source);
+    return splitStructuredContent(cleanedText, chunkSize, sourceString);
   }
 
   // Standard chunking for other content
@@ -385,89 +388,80 @@ function identifySections(text: string): Array<{ text: string; type?: string }> 
 }
 
 /**
- * Split text using the standard chunking algorithm
- * @param text Text to split
- * @param chunkSize Target size for each chunk
- * @returns Array of text chunks
+ * Split regular non-structured content into chunks of appropriate size
+ * Enhanced to prioritize paragraph breaks for chunk boundaries
  */
 function splitRegularContent(
   text: string,
   chunkSize: number
 ): Array<{ text: string; metadata?: { isStructured?: boolean; infoType?: string; } }> {
+  // Initial cleaning
+  const cleanedText = text.replace(/\s+/g, ' ').trim();
+  
+  // If the text is already small enough, return it as-is
+  if (cleanedText.length <= chunkSize) {
+    return [{ text: cleanedText }];
+  }
+  
   const chunks: Array<{ text: string; metadata?: { isStructured?: boolean; infoType?: string; } }> = [];
   
-  let currentIndex = 0;
-  while (currentIndex < text.length) {
-    // Get a chunk of approximately the target size
-    let chunk = text.substring(currentIndex, currentIndex + chunkSize);
+  // First, try to split on double newlines (paragraph breaks)
+  const paragraphs = text.split(/\n\s*\n+/);
+  let currentChunk = '';
+  
+  for (const paragraph of paragraphs) {
+    // Clean the paragraph
+    const cleanedParagraph = paragraph.replace(/\s+/g, ' ').trim();
     
-    // If we're not at the end of the text, try to break at a natural boundary
-    if (currentIndex + chunkSize < text.length) {
-      // Look for paragraph breaks first (ideal breaking point)
-      const paragraphBreak = chunk.lastIndexOf('\n\n');
-      
-      // Then look for the last sentence break in this chunk
-      const sentenceBreaks = [
-        chunk.lastIndexOf('. '),
-        chunk.lastIndexOf('? '),
-        chunk.lastIndexOf('! '),
-        chunk.lastIndexOf('.\n'),
-        chunk.lastIndexOf('?\n'),
-        chunk.lastIndexOf('!\n')
-      ];
-      const lastSentenceBreak = Math.max(...sentenceBreaks);
-      
-      // Use paragraph break if available and reasonable, otherwise use sentence break
-      if (paragraphBreak > chunkSize * 0.5) {
-        chunk = chunk.substring(0, paragraphBreak);
-      } else if (lastSentenceBreak > chunkSize * 0.3) {
-        // If the sentence break is at least 30% through the chunk
-        const breakType = sentenceBreaks.indexOf(lastSentenceBreak);
-        // Add 2 to include the period and space/newline
-        chunk = chunk.substring(0, lastSentenceBreak + (breakType >= 3 ? 2 : 2));
-      }
-    }
+    if (!cleanedParagraph) continue; // Skip empty paragraphs
     
-    // Create chunkObj with proper type that includes optional metadata
-    const chunkObj: { text: string; metadata?: { isStructured: boolean; infoType?: string } } = { 
-      text: chunk.trim() 
-    };
-    
-    const structuredInfo = detectStructuredInfo(chunk);
-    
-    if (structuredInfo.hasCompanyValues || structuredInfo.hasInvestors || structuredInfo.hasLeadership ||
-        structuredInfo.hasPricing || structuredInfo.hasProductFeatures || structuredInfo.hasSalesInfo) {
-      const metadata: { isStructured: boolean; infoType?: string } = { isStructured: true };
-      
-      if (structuredInfo.hasCompanyValues) {
-        metadata.infoType = 'company_values';
-      } else if (structuredInfo.hasInvestors) {
-        metadata.infoType = 'investors';
-      } else if (structuredInfo.hasLeadership) {
-        metadata.infoType = 'leadership';
-      } else if (structuredInfo.hasPricing) {
-        metadata.infoType = 'pricing';
-      } else if (structuredInfo.hasProductFeatures) {
-        metadata.infoType = 'product_features';
-      } else if (structuredInfo.hasSalesInfo) {
-        metadata.infoType = 'sales_info';
+    // If adding this paragraph exceeds the chunk size and we already have content in the chunk
+    if (currentChunk.length > 0 && (currentChunk.length + cleanedParagraph.length + 1) > chunkSize) {
+      // Save the current chunk
+      chunks.push({ text: currentChunk });
+      currentChunk = cleanedParagraph;
+    } 
+    // If this single paragraph is larger than the chunk size
+    else if (cleanedParagraph.length > chunkSize) {
+      // If we have content in the current chunk, save it first
+      if (currentChunk.length > 0) {
+        chunks.push({ text: currentChunk });
+        currentChunk = '';
       }
       
-      chunkObj.metadata = metadata;
-    }
-    
-    chunks.push(chunkObj);
-    currentIndex += chunk.length;
-    
-    // Add slight overlap for context if needed
-    if (currentIndex < text.length) {
-      const lastSentence = findLastSentence(chunk);
-      if (lastSentence && lastSentence.length < chunkSize * 0.2) {
-        currentIndex -= lastSentence.length;
+      // Split the large paragraph on sentence boundaries
+      const sentences = cleanedParagraph.match(/[^.!?]+[.!?]+/g) || [cleanedParagraph];
+      let sentenceChunk = '';
+      
+      for (const sentence of sentences) {
+        if (sentenceChunk.length + sentence.length + 1 <= chunkSize || sentenceChunk.length === 0) {
+          sentenceChunk += (sentenceChunk ? ' ' : '') + sentence;
+        } else {
+          chunks.push({ text: sentenceChunk });
+          sentenceChunk = sentence;
+        }
       }
+      
+      // Add any remaining sentence chunk
+      if (sentenceChunk) {
+        if (currentChunk.length + sentenceChunk.length + 1 <= chunkSize) {
+          currentChunk += (currentChunk ? ' ' : '') + sentenceChunk;
+        } else {
+          chunks.push({ text: sentenceChunk });
+        }
+      }
+    } 
+    // Otherwise, add the paragraph to the current chunk
+    else {
+      currentChunk += (currentChunk ? ' ' : '') + cleanedParagraph;
     }
   }
-
+  
+  // Add the last chunk if there's any content left
+  if (currentChunk) {
+    chunks.push({ text: currentChunk });
+  }
+  
   return chunks;
 }
 

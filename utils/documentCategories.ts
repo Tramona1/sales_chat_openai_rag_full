@@ -59,6 +59,23 @@ export enum DocumentCategoryType {
   INDUSTRY_SPECIFIC = 'INDUSTRY_SPECIFIC',
   INTEGRATIONS = 'INTEGRATIONS',
 
+  // Sales-focused Categories
+  CASE_STUDIES = 'CASE_STUDIES',
+  CUSTOMER_TESTIMONIALS = 'CUSTOMER_TESTIMONIALS',
+  ROI_CALCULATOR = 'ROI_CALCULATOR',
+  PRICING_INFORMATION = 'PRICING_INFORMATION',
+  COMPETITIVE_ANALYSIS = 'COMPETITIVE_ANALYSIS',
+  PRODUCT_COMPARISON = 'PRODUCT_COMPARISON',
+  FEATURE_BENEFITS = 'FEATURE_BENEFITS',
+  SALES_ENABLEMENT = 'SALES_ENABLEMENT',
+  IMPLEMENTATION_PROCESS = 'IMPLEMENTATION_PROCESS',
+  CONTRACT_TERMS = 'CONTRACT_TERMS',
+  CUSTOMER_SUCCESS_STORIES = 'CUSTOMER_SUCCESS_STORIES',
+  PRODUCT_ROADMAP = 'PRODUCT_ROADMAP',
+  INDUSTRY_INSIGHTS = 'INDUSTRY_INSIGHTS',
+  COST_SAVINGS_ANALYSIS = 'COST_SAVINGS_ANALYSIS',
+  DEMO_MATERIALS = 'DEMO_MATERIALS',
+
   // Foundational / Other
   GENERAL = 'GENERAL'
 }
@@ -337,12 +354,104 @@ export const CATEGORY_ATTRIBUTES: Record<DocumentCategoryType, CategoryAttribute
     potentiallySensitive: false, requiresApproval: false, color: '#BDBDBD', routingPriority: 2
   },
 
+  // Sales-focused Categories
+  [DocumentCategoryType.CASE_STUDIES]: {
+    displayName: 'Case Studies',
+    description: 'Detailed customer success stories showing implementation and results.',
+    associatedKeywords: ['case study', 'success story', 'customer story', 'implementation', 'results', 'roi'],
+    potentiallySensitive: false, requiresApproval: false, color: '#42A5F5', routingPriority: 2
+  },
+  [DocumentCategoryType.CUSTOMER_TESTIMONIALS]: {
+    displayName: 'Customer Testimonials',
+    description: 'Quotes and statements from customers about their experience.',
+    associatedKeywords: ['testimonial', 'customer quote', 'review', 'feedback', 'endorsement'],
+    potentiallySensitive: false, requiresApproval: false, color: '#5C6BC0', routingPriority: 2
+  },
+  [DocumentCategoryType.ROI_CALCULATOR]: {
+    displayName: 'ROI Calculator',
+    description: 'Tools and information for calculating return on investment.',
+    associatedKeywords: ['roi', 'calculator', 'return on investment', 'cost savings', 'financial impact', 'benefits'],
+    potentiallySensitive: false, requiresApproval: false, color: '#66BB6A', routingPriority: 1
+  },
+  [DocumentCategoryType.PRICING_INFORMATION]: {
+    displayName: 'Pricing Information',
+    description: 'Pricing details, plans, and package information.',
+    associatedKeywords: ['pricing', 'cost', 'plans', 'packages', 'subscription', 'fees', 'payment', 'tiers'],
+    potentiallySensitive: true, requiresApproval: true, color: '#26A69A', routingPriority: 1
+  },
+  [DocumentCategoryType.COMPETITIVE_ANALYSIS]: {
+    displayName: 'Competitive Analysis',
+    description: 'Information comparing the product to competitors.',
+    associatedKeywords: ['competitor', 'competition', 'comparison', 'vs', 'alternative', 'differentiator'],
+    potentiallySensitive: true, requiresApproval: true, color: '#EC407A', routingPriority: 1
+  },
+  [DocumentCategoryType.PRODUCT_COMPARISON]: {
+    displayName: 'Product Comparison',
+    description: 'Direct comparisons between different products or plans.',
+    associatedKeywords: ['comparison', 'versus', 'different plans', 'features comparison', 'side by side'],
+    potentiallySensitive: false, requiresApproval: false, color: '#AB47BC', routingPriority: 2
+  },
+  [DocumentCategoryType.FEATURE_BENEFITS]: {
+    displayName: 'Feature Benefits',
+    description: 'Detailed benefits and value propositions of specific features.',
+    associatedKeywords: ['benefits', 'features', 'value', 'advantage', 'solution', 'capabilities'],
+    potentiallySensitive: false, requiresApproval: false, color: '#7E57C2', routingPriority: 2
+  },
+  [DocumentCategoryType.SALES_ENABLEMENT]: {
+    displayName: 'Sales Enablement',
+    description: 'Materials specifically created to support the sales process.',
+    associatedKeywords: ['sales', 'selling', 'pitch', 'objection handling', 'sales process', 'value prop'],
+    potentiallySensitive: true, requiresApproval: true, color: '#EF5350', routingPriority: 1
+  },
+  [DocumentCategoryType.IMPLEMENTATION_PROCESS]: {
+    displayName: 'Implementation Process',
+    description: 'Information about how the product is implemented and onboarded.',
+    associatedKeywords: ['implementation', 'onboarding', 'setup', 'rollout', 'timeline', 'deployment'],
+    potentiallySensitive: false, requiresApproval: false, color: '#29B6F6', routingPriority: 2
+  },
+  [DocumentCategoryType.CONTRACT_TERMS]: {
+    displayName: 'Contract Terms',
+    description: 'Information about contracts, agreements, and terms of service.',
+    associatedKeywords: ['contract', 'terms', 'agreement', 'service level', 'sla', 'legal', 'commitment'],
+    potentiallySensitive: true, requiresApproval: true, color: '#9E9E9E', routingPriority: 2
+  },
+  [DocumentCategoryType.CUSTOMER_SUCCESS_STORIES]: {
+    displayName: 'Customer Success Stories',
+    description: 'Stories and examples of successful customer implementations.',
+    associatedKeywords: ['success story', 'customer', 'result', 'implementation', 'outcome', 'achievement'],
+    potentiallySensitive: false, requiresApproval: false, color: '#26C6DA', routingPriority: 2
+  },
+  [DocumentCategoryType.PRODUCT_ROADMAP]: {
+    displayName: 'Product Roadmap',
+    description: 'Information about future product plans and development.',
+    associatedKeywords: ['roadmap', 'future', 'upcoming', 'development', 'releases', 'plans', 'vision'],
+    potentiallySensitive: true, requiresApproval: true, color: '#7CB342', routingPriority: 1
+  },
+  [DocumentCategoryType.INDUSTRY_INSIGHTS]: {
+    displayName: 'Industry Insights',
+    description: 'Knowledge and information about industry trends and challenges.',
+    associatedKeywords: ['industry', 'trends', 'insights', 'research', 'challenges', 'market'],
+    potentiallySensitive: false, requiresApproval: false, color: '#8D6E63', routingPriority: 3
+  },
+  [DocumentCategoryType.COST_SAVINGS_ANALYSIS]: {
+    displayName: 'Cost Savings Analysis',
+    description: 'Analysis of potential cost savings from using the product.',
+    associatedKeywords: ['cost savings', 'roi', 'reduction', 'efficiency', 'financial impact', 'value'],
+    potentiallySensitive: false, requiresApproval: false, color: '#78909C', routingPriority: 1
+  },
+  [DocumentCategoryType.DEMO_MATERIALS]: {
+    displayName: 'Demo Materials',
+    description: 'Resources and information for demonstrating the product.',
+    associatedKeywords: ['demo', 'demonstration', 'showcase', 'walkthrough', 'presentation', 'example'],
+    potentiallySensitive: false, requiresApproval: false, color: '#FF8A65', routingPriority: 2
+  },
+
   // Foundational / Other
   [DocumentCategoryType.GENERAL]: {
-    displayName: 'General / Other',
-    description: 'General information, company overview, or content that doesn\'t fit other specific categories.',
-    associatedKeywords: ['general', 'information', 'about', 'misc', 'other', 'uncategorized', 'overview', 'company'],
-    potentiallySensitive: false, requiresApproval: false, color: '#9E9E9E', routingPriority: 5
+    displayName: 'General Information',
+    description: 'General or uncategorized information that doesn\'t fit other categories.',
+    associatedKeywords: ['general', 'overview', 'introduction', 'about', 'information', 'misc'],
+    potentiallySensitive: false, requiresApproval: false, color: '#BDBDBD', routingPriority: 5
   }
 };
 

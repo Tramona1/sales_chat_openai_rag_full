@@ -6,7 +6,7 @@
  */
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import { logError } from './logger';
+import { logError, logDebug } from './logger';
 import dotenv from 'dotenv';
 import { parseAndRepairJson } from './jsonRepairUtils.js';
 
@@ -333,6 +333,9 @@ export async function generateGeminiChatCompletion(
   try {
     // Get model configuration from the central config
     const modelConfig = await getModelForTask(undefined, 'chat');
+
+    // <<< ADDED LOGGING >>>
+    logDebug(`[generateGeminiChatCompletion] Using model name from config: ${modelConfig.model}`);
 
     // Create a Gemini model instance
     const model = genAI.getGenerativeModel({

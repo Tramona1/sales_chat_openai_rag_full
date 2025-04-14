@@ -146,7 +146,7 @@ ${text}
 Provide a detailed analysis in the following JSON format:
 {
   "summary": "A concise summary of the document (max 150 words)",
-  "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitors, other]",
+  "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitors, sales, other]",
   "primaryCategory": "The main category of this document. Must be one of the following standardized values: ${categoryValues}",
   "secondaryCategories": ["Other relevant categories from the same standardized list: ${categoryValues} (0-3 categories recommended)"],
   "technicalLevel": "A number from 1 to 10 indicating technical complexity (1=very basic, 10=highly technical/expert)",
@@ -168,6 +168,23 @@ Provide a detailed analysis in the following JSON format:
 Be as accurate and comprehensive as possible. If information is not present, use empty arrays or null values rather than inventing information.
 
 IMPORTANT: For the primaryCategory and secondaryCategories fields, you MUST use ONLY values from this standardized list: ${categoryValues}. Do not invent new categories.
+
+Pay special attention to these sales-focused categories when they apply:
+- CASE_STUDIES: Documents that provide detailed customer success stories
+- CUSTOMER_TESTIMONIALS: Documents featuring customer quotes and feedback
+- ROI_CALCULATOR: Tools or content that calculate return on investment
+- PRICING_INFORMATION: Details about pricing, plans, or packages
+- COMPETITIVE_ANALYSIS: Information comparing the product to competitors
+- PRODUCT_COMPARISON: Direct comparisons between different products or plans
+- FEATURE_BENEFITS: Detailed benefits of specific features
+- SALES_ENABLEMENT: Materials created to support the sales process
+- IMPLEMENTATION_PROCESS: Information about implementation and onboarding
+- CONTRACT_TERMS: Information about contracts and agreements
+- CUSTOMER_SUCCESS_STORIES: Stories of successful customer implementations
+- PRODUCT_ROADMAP: Information about future product plans
+- INDUSTRY_INSIGHTS: Knowledge about industry trends and challenges
+- COST_SAVINGS_ANALYSIS: Analysis of potential cost savings
+- DEMO_MATERIALS: Resources for product demonstrations
 `;
 }
 
@@ -189,7 +206,7 @@ ${text}
 Provide a detailed analysis in the following JSON format:
 {
   "summary": "A concise summary of the document (max 150 words)",
-  "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitor, partner, market, training, legal, policy, other]",
+  "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitor, partner, market, training, legal, policy, sales, other]",
   
   "primaryCategory": "The main category of this document. Must be one of the following standardized values: ${categoryValues}",
   "secondaryCategories": ["Other relevant categories from the same standardized list: ${categoryValues} (0-3 categories recommended)"],
@@ -259,6 +276,35 @@ Provide a detailed analysis in the following JSON format:
 }
 
 Be as detailed and accurate as possible, but do not invent information not present in the document. If information is not available, use empty arrays or null values.
+
+IMPORTANT: For the primaryCategory and secondaryCategories fields, you MUST use ONLY values from this standardized list: ${categoryValues}. Do not invent new categories.
+
+Pay special attention to these sales-focused categories when they apply:
+- CASE_STUDIES: Documents that provide detailed customer success stories
+- CUSTOMER_TESTIMONIALS: Documents featuring customer quotes and feedback
+- ROI_CALCULATOR: Tools or content that calculate return on investment
+- PRICING_INFORMATION: Details about pricing, plans, or packages
+- COMPETITIVE_ANALYSIS: Information comparing the product to competitors
+- PRODUCT_COMPARISON: Direct comparisons between different products or plans
+- FEATURE_BENEFITS: Detailed benefits of specific features
+- SALES_ENABLEMENT: Materials created to support the sales process
+- IMPLEMENTATION_PROCESS: Information about implementation and onboarding
+- CONTRACT_TERMS: Information about contracts and agreements
+- CUSTOMER_SUCCESS_STORIES: Stories of successful customer implementations
+- PRODUCT_ROADMAP: Information about future product plans
+- INDUSTRY_INSIGHTS: Knowledge about industry trends and challenges
+- COST_SAVINGS_ANALYSIS: Analysis of potential cost savings
+- DEMO_MATERIALS: Resources for product demonstrations
+
+Also look for sales-related entities such as:
+- Value propositions
+- ROI figures
+- Pricing tiers
+- Competitive advantages
+- Customer pain points
+- Target industries or segments
+- Conversion metrics
+- Sales cycle information
 `;
 }
 

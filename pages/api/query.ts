@@ -7,7 +7,7 @@ import * as modelConfig from '../../utils/modelConfig';
 // import { isFeatureEnabled } from '../../utils/featureFlags';
 import { recordMetric } from '../../utils/performanceMonitoring';
 import { MultiModalVectorStoreItem } from '../../types/vectorStore';
-import { testSupabaseConnection } from '../../utils/supabaseClient';
+import { getSupabaseAdmin, testSupabaseConnection } from '../../utils/supabaseClient';
 import { DocumentCategoryType } from '../../utils/documentCategories';
 import { analyzeVisualQuery } from '../../utils/queryAnalysis';
 import { MultiModalSearchResult, RankedSearchResult, MultiModalRerankOptions } from '../../utils/reranking';
@@ -82,6 +82,7 @@ async function importModules(): Promise<DynamicModules> {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const startTime = Date.now();
+  let queryLogId: string | null = null; // Variable to store the ID of the created query log
 
   // Only allow POST method
   if (req.method !== 'POST') {
@@ -101,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Load modules dynamically
     const modules = await importModules();
 
-    // Extract query parameters
+    // Extract query parameters, including sessionId
     const {
       query,
       limit = 5,
@@ -111,7 +112,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       conversationHistory = '',
       searchMode = 'hybrid',
       includeVisualContent = false,
-      visualTypes = []
+      visualTypes = [],
+      sessionId // Extract sessionId from request body
     } = req.body;
 
     // Validate query
@@ -120,8 +122,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Query is required and must be a string' });
     }
 
-    // Track query timing
-    const retrievalStartTime = Date.now();
+    // <<< Initialize timing variables HERE >>>
+    let retrievalDuration = 0;
+    let rerankDuration = 0;
+    let answerDuration = 0;
+    const retrievalStartTime = Date.now(); // Start retrieval timer
 
     // Analyze query and determine the best search strategy
     const queryAnalysis = await modules.analyzeQuery(query);
@@ -151,6 +156,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let searchResultsResponse: any;
     let searchError = null;
+    let actualSearchResults: any[] = []; // Initialize as empty array
 
     logInfo(`Performing ${searchMode} search for query: "${query}"`);
 
@@ -174,6 +180,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const keywordWeight = searchMode === 'vector' ? 0.0 : 0.7;
         const matchThreshold = 0.2;
 
+        // <<< ADDED LOGGING >>>
+        logInfo(`[QueryAPI] Preparing to call hybridSearch (explicit hybrid/vector mode). Query: "${query}", Mode: ${searchMode}`);
         searchResultsResponse = await modules.hybridSearch(query, {
           limit: Math.max(limit * 3, 15),
           vectorWeight,
@@ -193,6 +201,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       } else {
         // Default to hybrid search (with consistent parameters)
+        // <<< ADDED LOGGING >>>
+        logInfo(`[QueryAPI] Preparing to call hybridSearch (default mode). Query: "${query}", Mode: ${searchMode}`);
         searchResultsResponse = await modules.hybridSearch(query, {
           limit: Math.max(limit * 3, 15),
           vectorWeight: 0.3, // Emphasis on keywords for consistent retrieval
@@ -218,11 +228,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         searchResultsResponse = { results: [] }; // Ensure it's an object with empty results
       }
     }
-
-    const retrievalDuration = Date.now() - retrievalStartTime;
-
-    // Extract the actual results array from the response object
-    const actualSearchResults = searchResultsResponse?.results || [];
+    // <<< Assign retrievalDuration *after* try/catch for search >>>
+    retrievalDuration = Date.now() - retrievalStartTime; 
+    retrievalDuration = Date.now() - retrievalStartTime;
+    actualSearchResults = searchResultsResponse?.results || []; // Ensure results array exists
 
     // *** NEW LOGGING POINT 3 ***
     logInfo(`[QueryAPI] routeQuery returned. Results array length: ${actualSearchResults?.length ?? 'undefined/null'}`);
@@ -324,7 +333,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }));
     }
 
-    const rerankDuration = Date.now() - rerankStartTime;
+    // <<< Ensure only assignment, no re-declaration >>>
+    rerankDuration = Date.now() - rerankStartTime;
 
     // Generate an answer from the results
     const answerStartTime = Date.now();
@@ -413,7 +423,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     );
 
-    const answerDuration = Date.now() - answerStartTime;
+    // <<< Ensure only assignment, no re-declaration >>>
+    answerDuration = Date.now() - answerStartTime;
     const totalDuration = Date.now() - startTime;
 
     // Record success metrics
@@ -425,9 +436,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       answerDuration
     });
 
+    // --- >>> Log Query to Supabase <<< ---
+    const supabase = getSupabaseAdmin();
+    if (supabase) {
+      try {
+        const initialResultIds = actualSearchResults.map((r: any) => r?.id).filter(Boolean);
+        const finalResultIds = rerankedResults.map((r: any) => r?.item?.id).filter(Boolean);
+
+        const logData = {
+          session_id: sessionId, // Use sessionId from request
+          query: query, // Changed column name to just 'query'
+          // query_embedding: null, // Leave null for now
+          // response_text: answer, // Optional: Log the generated answer text? Maybe too verbose.
+          retrieved_chunk_ids: initialResultIds,
+          reranked_chunk_ids: finalResultIds, // Use final results for both reranked and final
+          final_chunk_ids: finalResultIds,
+          hybrid_ratio: searchMode === 'hybrid' ? (req.body.vectorWeight !== undefined ? req.body.vectorWeight : 0.3) : (searchMode === 'vector' ? 1.0 : 0.0), // Approximate based on mode/params
+          initial_candidates_count: actualSearchResults.length,
+          reranked_candidates_count: rerankedResults.length,
+          execution_time_ms: totalDuration,
+          retrieval_time_ms: retrievalDuration,
+          rerank_time_ms: rerankDuration,
+          generation_time_ms: answerDuration,
+          contextual_retrieval_used: contextualRetrievalEnabled,
+          multi_modal_query: useMultiModal,
+          metadata: { // Store other useful info
+            searchMode: searchMode,
+            limitRequested: limit,
+            queryAnalysis: queryAnalysis // Store the analysis output
+          }
+        };
+
+        logInfo('[QueryAPI] Inserting record into query_logs...');
+        const { data: logInsertData, error: logInsertError } = await supabase
+          .from('query_logs')
+          .insert(logData)
+          .select('id') // Select the ID of the newly created log
+          .single(); // Expect a single row back
+
+        if (logInsertError) {
+          logError('[QueryAPI] Failed to insert into query_logs:', logInsertError);
+        } else if (logInsertData && logInsertData.id) {
+            queryLogId = logInsertData.id; // Store the ID
+            logInfo(`[QueryAPI] Successfully logged query with ID: ${queryLogId}`);
+        } else {
+            logWarning('[QueryAPI] Query log inserted but failed to retrieve ID.');
+        }
+      } catch (dbError) {
+        logError('[QueryAPI] Error during query_logs insertion:', dbError);
+      }
+    } else {
+        logWarning('[QueryAPI] Supabase client not available, skipping query_logs insert.');
+    }
+    // --- >>> End Query Logging <<< ---
+
     // Prepare the response
-    const response = {
-      answer, // Assign the string directly
+    const response: any = { // Use 'any' temporarily to allow adding queryLogId
+      answer,
       query,
       timings: {
         totalMs: totalDuration,
@@ -437,22 +502,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     };
 
+    // Add queryLogId to the response for feedback linking
+    if (queryLogId) {
+      response.queryLogId = queryLogId;
+    }
+
     // Add source documents if requested
     if (includeSourceDocuments) {
       // Add source documents to the response
-      Object.assign(response, {
-        sourceDocuments: rerankedResults.map((result: any) => {
-          const item = result.item || result;
-          return {
-            text: item.text || item.content || '',
-            source: item.metadata?.source || item.source || 'Unknown',
-            score: result.score,
-            metadata: item.metadata || {}
-          };
-        })
+      response.sourceDocuments = rerankedResults.map((result: any) => {
+        const item = result.item || result;
+        return {
+          text: item.text || item.content || '',
+          source: item.metadata?.source || item.source || 'Unknown',
+          score: result.score,
+          metadata: item.metadata || {}
+        };
       });
     }
 
+    logInfo('[QueryAPI] Successfully processed query, returning response.');
     return res.status(200).json(response);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error processing query';

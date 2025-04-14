@@ -27,8 +27,23 @@ import {
   Target,
   BarChart2,
   AlertTriangle as FileWarning, // Using AlertTriangle as a replacement for FileWarning
-  Cpu as BrainCircuit // Using Cpu as a replacement for BrainCircuit
-} from 'react-feather';
+  Cpu, // Using Cpu directly without an alias
+  CheckCircle,
+  Clock,
+  Percent,
+  CheckSquare,
+  XSquare,
+  DollarSign,
+  Edit, // Use for Answer Generation?
+  Filter, // Use for Reranking?
+  Check,
+  Sliders,
+  Layers3,
+  Users,
+  MessageCircleIcon,
+  ClipboardCheck,
+  Sparkles
+} from 'lucide-react';
 import Button from '../components/ui/Button';
 import SystemMetrics from '../components/SystemMetrics';
 import PendingDocuments from '../components/admin/PendingDocuments';
@@ -88,15 +103,14 @@ export const getServerSideProps: GetServerSideProps = async () => {
 
 // Define Tab Type
 type AdminTabId = 
-  | 'overview'
-  | 'queryInsights'
+  | 'insights'
   | 'contentPerformance'
-  | 'salesInsights'
   | 'documentManagement'
   | 'pendingDocuments'
+  | 'chunkManagement'
   | 'generalSessions'
   | 'companySessions'
-  | 'chunkManagement';
+  | 'systemStatus';
 
 interface AdminTab {
   id: AdminTabId;
@@ -104,17 +118,16 @@ interface AdminTab {
   icon: React.ElementType;
 }
 
-// Define Tabs
+// Define Tabs - Reordered and Renamed
 const adminTabs: AdminTab[] = [
-  { id: 'overview', label: 'Overview', icon: Home },
-  { id: 'queryInsights', label: 'Query Insights', icon: Search },
+  { id: 'insights', label: 'Insights', icon: BarChart2 }, 
   { id: 'contentPerformance', label: 'Content Performance', icon: BarChart },
-  { id: 'salesInsights', label: 'Sales Insights', icon: TrendingUp },
   { id: 'documentManagement', label: 'Document Management', icon: Database },
   { id: 'pendingDocuments', label: 'Pending Documents', icon: AlertCircle },
   { id: 'chunkManagement', label: 'Chunk Management', icon: Layers },
   { id: 'generalSessions', label: 'General Sessions', icon: MessageSquare },
   { id: 'companySessions', label: 'Company Sessions', icon: Briefcase },
+  { id: 'systemStatus', label: 'System Status', icon: Settings },
 ];
 
 // Define TypeScript interfaces for Query Insights data structures
@@ -150,68 +163,110 @@ interface QueryInsightsData {
   };
 }
 
+// --- ADD Interface for SystemStatusTab data --- 
+interface SystemStatusData {
+  totalDocuments: number;
+  totalChunks: number;
+  queriesLast24h: number;
+  queriesLast7d: number;
+  avgResponseTime: number; // Provided by API, but might be 0 if not implemented
+  perplexityCacheHits: number;
+  perplexityCacheHitRate: number;
+  // ADDED: Structure for API call stats
+  apiCalls: {
+    geminiChatSuccess?: number; // Make optional for safety during initial fetch
+    geminiChatError?: number;
+    totalGeminiChatCalls?: number; // ADDED total
+    geminiEmbeddingSuccess?: number; // ADDED
+    geminiEmbeddingError?: number;   // ADDED
+    totalGeminiEmbeddingCalls?: number; // ADDED
+    // Add other API calls here later (e.g., embeddingSuccess)
+    estimatedChatCost?: number;
+    estimatedEmbeddingCost?: number;
+    totalEstimatedCost?: number;
+    // ADDED: Query Analysis
+    geminiQueryAnalysisSuccess?: number;
+    geminiQueryAnalysisError?: number;
+    totalGeminiQueryAnalysisCalls?: number;
+    estimatedAnalysisCost?: number;
+    // ADDED: Answer Generation
+    geminiAnswerGenerationSuccess?: number;
+    geminiAnswerGenerationError?: number;
+    totalGeminiAnswerGenerationCalls?: number;
+    estimatedAnswerGenCost?: number;
+    // ADDED: Reranking
+    geminiRerankingSuccess?: number;
+    geminiRerankingError?: number;
+    totalGeminiRerankingCalls?: number;
+    estimatedRerankCost?: number;
+  };
+}
+
 // --- Placeholder Components for New Tabs ---
-const OverviewTab = () => {
-  const [statsData, setStatsData] = useState({
-    // Chat Stats
-    totalSessions: 157,
-    companySessions: 89,
-    generalSessions: 68,
-    totalMessages: 2354,
-    
-    // Document Stats
-    totalDocuments: 42,
-    pendingDocuments: 7,
-    approvedDocuments: 35,
-    totalChunks: 1285,
-    
-    // Query Stats
-    queriesLast24h: 128,
-    queriesLast7d: 847,
-    avgResponseTime: 0.42, // seconds
-    feedbackRate: 23, // percentage
-    
-    // API Stats
-    perplexityCalls: 104,
-    perplexityCacheHits: 67,
-    perplexityCacheHitRate: 64.4, // percentage
-    systemStatus: 'Healthy'
-  });
-  
-  // Refresh stats every 30 seconds
+const SystemStatusTab = () => {
+  const [statsData, setStatsData] = useState<SystemStatusData | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
-    // In the future, fetch real data here from the /api/system-metrics endpoint
     const fetchSystemMetrics = async () => {
+      setError(null);
       try {
         const response = await fetch('/api/system-metrics');
-        if (response.ok) {
-          const data = await response.json();
-          // Transform the API response into our stats format
-          setStatsData(prev => ({
-            ...prev,
-            totalChunks: data.vectorStore?.chunks || prev.totalChunks,
-            totalDocuments: data.vectorStore?.documents || prev.totalDocuments,
-            queriesLast24h: data.queries?.last24Hours || prev.queriesLast24h,
-            queriesLast7d: data.queries?.last7Days || prev.queriesLast7d,
-            // Add more mappings as the API evolves
-          }));
+        if (!response.ok) {
+          throw new Error(`API Error: ${response.status} ${response.statusText}`);
         }
-      } catch (error) {
-        console.error('Error fetching system metrics:', error);
+          const data = await response.json();
+        console.debug("[SystemStatusTab] Fetched metrics:", data);
+
+        // Map data to state, including all nested apiCalls fields
+        setStatsData({
+          totalDocuments: data.vectorStore?.documents ?? 0,
+          totalChunks: data.vectorStore?.chunks ?? 0,
+          queriesLast24h: data.queries?.last24Hours ?? 0,
+          queriesLast7d: data.queries?.last7Days ?? 0,
+          avgResponseTime: data.performance?.averageQueryTime ?? 0,
+          perplexityCacheHits: data.caching?.hits ?? 0,
+          perplexityCacheHitRate: data.caching?.hitRate ?? 0,
+          apiCalls: {
+            geminiChatSuccess: data.apiCalls?.geminiChatSuccess ?? 0,
+            geminiChatError: data.apiCalls?.geminiChatError ?? 0,
+            totalGeminiChatCalls: data.apiCalls?.totalGeminiChatCalls ?? 0,
+            estimatedChatCost: data.apiCalls?.estimatedChatCost ?? 0,
+            geminiEmbeddingSuccess: data.apiCalls?.geminiEmbeddingSuccess ?? 0,
+            geminiEmbeddingError: data.apiCalls?.geminiEmbeddingError ?? 0,
+            totalGeminiEmbeddingCalls: data.apiCalls?.totalGeminiEmbeddingCalls ?? 0,
+            estimatedEmbeddingCost: data.apiCalls?.estimatedEmbeddingCost ?? 0,
+            geminiQueryAnalysisSuccess: data.apiCalls?.geminiQueryAnalysisSuccess ?? 0,
+            geminiQueryAnalysisError: data.apiCalls?.geminiQueryAnalysisError ?? 0,
+            totalGeminiQueryAnalysisCalls: data.apiCalls?.totalGeminiQueryAnalysisCalls ?? 0,
+            estimatedAnalysisCost: data.apiCalls?.estimatedAnalysisCost ?? 0,
+            geminiAnswerGenerationSuccess: data.apiCalls?.geminiAnswerGenerationSuccess ?? 0,
+            geminiAnswerGenerationError: data.apiCalls?.geminiAnswerGenerationError ?? 0,
+            totalGeminiAnswerGenerationCalls: data.apiCalls?.totalGeminiAnswerGenerationCalls ?? 0,
+            estimatedAnswerGenCost: data.apiCalls?.estimatedAnswerGenCost ?? 0,
+            geminiRerankingSuccess: data.apiCalls?.geminiRerankingSuccess ?? 0,
+            geminiRerankingError: data.apiCalls?.geminiRerankingError ?? 0,
+            totalGeminiRerankingCalls: data.apiCalls?.totalGeminiRerankingCalls ?? 0,
+            estimatedRerankCost: data.apiCalls?.estimatedRerankCost ?? 0,
+            totalEstimatedCost: data.apiCalls?.totalEstimatedCost ?? 0
+          }
+        });
+
+      } catch (error: any) {
+        console.error('[SystemStatusTab] Error fetching system metrics:', error);
+        setError(error.message || 'Failed to load system metrics.');
+        setStatsData(null);
+      } finally {
+        // Ensure loading is set false only after first attempt
+        if (loading) setLoading(false);
       }
     };
 
-    // Initial fetch
     fetchSystemMetrics();
-    
-    // Set up refresh interval
-    const interval = setInterval(() => {
-      console.log('Refreshing Overview stats...');
-      fetchSystemMetrics();
-    }, 30000);
-    
+    const interval = setInterval(fetchSystemMetrics, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loading]); // Rerun effect only if loading state changes (relevant on initial load)
   
   // Define StatCard prop types
   interface StatCardProps {
@@ -244,652 +299,133 @@ const OverviewTab = () => {
     </div>
   );
   
+  // Conditional Rendering for Loading/Error states
+  if (loading) {
+    return <div className="p-6 text-center">Loading system status...</div>;
+  }
+  
+  if (error) {
+    return <div className="p-6 text-center text-red-600">Error loading system status: {error}</div>;
+  }
+  
+  // If data fetch failed but no specific error message, or data is null
+  if (!statsData) {
+    return <div className="p-6 text-center">System status data unavailable.</div>;
+  }
+
+  // No derived stats needed as placeholders are removed
+
+  // Render ONLY the cards for which we have real data
   return (
     <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-semibold text-gray-900">Dashboard Overview</h2>
-        <p className="text-sm text-gray-500">Last updated: {new Date().toLocaleString()}</p>
-      </div>
+      <h2 className="text-2xl font-semibold mb-4">System Status & Metrics</h2>
       
-      {/* Chat Activity Section */}
-      <section className="mb-8">
-        <h3 className="text-lg font-medium mb-4 text-gray-800 border-b border-gray-200 pb-2">Chat Activity</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard 
-            title="Total Chat Sessions" 
-            value={statsData.totalSessions} 
-            icon={MessageSquare} 
-            description="All-time sessions"
-            colorClass="bg-blue-700"
-          />
-          <StatCard 
-            title="Company Sessions" 
-            value={statsData.companySessions} 
-            icon={Clipboard} 
-            description={`${Math.round(statsData.companySessions / statsData.totalSessions * 100)}% of total`}
-            colorClass="bg-blue-600"
-          />
-          <StatCard 
-            title="General Sessions" 
-            value={statsData.generalSessions} 
-            icon={MessageSquare} 
-            description={`${Math.round(statsData.generalSessions / statsData.totalSessions * 100)}% of total`}
-            colorClass="bg-blue-500"
-          />
-          <StatCard 
-            title="Total Messages" 
-            value={statsData.totalMessages} 
-            icon={MessageSquare} 
-            description={`Avg ${Math.round(statsData.totalMessages / statsData.totalSessions)} per session`}
-            colorClass="bg-blue-400"
-          />
-        </div>
-      </section>
-      
-      {/* Knowledge Base Section */}
-      <section className="mb-8">
-        <h3 className="text-lg font-medium mb-4 text-gray-800 border-b border-gray-200 pb-2">Knowledge Base</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Section for General Metrics */}
+      <h3 className="text-lg font-medium mb-3 text-gray-700">Knowledge & Performance</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <StatCard 
             title="Total Documents" 
             value={statsData.totalDocuments} 
             icon={FileText} 
-            description="All documents in the database"
-            colorClass="bg-indigo-600"
+          description="Total indexed documents"
+          colorClass="bg-blue-600"
           />
           <StatCard 
-            title="Pending Documents" 
-            value={statsData.pendingDocuments} 
-            icon={FileWarning} 
-            description="Awaiting approval"
-            colorClass="bg-amber-500"
-          />
+          title="Total Chunks"
+          value={statsData.totalChunks}
+          icon={Database}
+          description="Total indexed text chunks"
+          colorClass="bg-blue-700"
+        />
+        
+        {/* Query Stats */}
           <StatCard 
-            title="Approved Documents" 
-            value={statsData.approvedDocuments} 
-            icon={FileText} 
-            description={`${Math.round(statsData.approvedDocuments / statsData.totalDocuments * 100)}% of total`}
-            colorClass="bg-emerald-600"
-          />
-          <StatCard 
-            title="Content Chunks" 
-            value={statsData.totalChunks.toLocaleString()} 
-            icon={Layers} 
-            description="Vector embeddings in DB"
-            colorClass="bg-indigo-500"
-          />
-        </div>
-      </section>
-      
-      {/* Query Performance Section */}
-      <section className="mb-8">
-        <h3 className="text-lg font-medium mb-4 text-gray-800 border-b border-gray-200 pb-2">Query Performance</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard 
-            title="Queries (24h)" 
+          title="Queries (Last 24h)"
             value={statsData.queriesLast24h} 
-            icon={Search} 
-            description="Last 24 hours"
-            colorClass="bg-blue-700"
+          icon={Activity}
+          description="Queries received in the last 24 hours"
+          colorClass="bg-green-600"
           />
           <StatCard 
-            title="Queries (7d)" 
+          title="Queries (Last 7d)"
             value={statsData.queriesLast7d} 
-            icon={BarChart2} 
-            description="Last 7 days"
-            colorClass="bg-blue-700"
+          icon={TrendingUp}
+          description="Queries received in the last 7 days"
+          colorClass="bg-green-700"
           />
           <StatCard 
-            title="Avg Response Time" 
-            value={`${statsData.avgResponseTime}s`} 
-            icon={Activity} 
-            description="Average response latency"
-            colorClass="bg-blue-700"
-          />
-          <StatCard 
-            title="Feedback Rate" 
-            value={`${statsData.feedbackRate}%`} 
-            icon={MessageSquare} 
-            description="User feedback percentage"
-            colorClass="bg-blue-700"
-          />
-        </div>
-      </section>
-      
-      {/* API Usage & System Health */}
-      <section className="mb-8">
-        <h3 className="text-lg font-medium mb-4 text-gray-800 border-b border-gray-200 pb-2">API Usage & System Health</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard 
-            title="Perplexity API Calls" 
-            value={statsData.perplexityCalls} 
-            icon={BrainCircuit} 
-            description="Total API calls"
-            colorClass="bg-blue-700"
-          />
+          title="Avg Response Time (s)"
+          value={statsData.avgResponseTime.toFixed(2)} // Format to 2 decimal places
+          icon={Clock}
+          description="Average query processing time (API data)" // Indicate source
+          colorClass="bg-yellow-600"
+        />
+
+        {/* Caching Stats */}
           <StatCard 
             title="Cache Hits" 
             value={statsData.perplexityCacheHits} 
-            icon={Layers} 
-            description={`${statsData.perplexityCacheHitRate}% hit rate`}
-            colorClass="bg-blue-700"
+          icon={CheckCircle}
+          description="Total cache hits (Query Analysis)"
+          colorClass="bg-purple-600"
           />
           <StatCard 
-            title="System Status" 
-            value={statsData.systemStatus} 
-            icon={Settings} 
-            description="All systems operational"
-            colorClass="bg-emerald-600"
-          />
-          <StatCard 
-            title="Cache Efficiency" 
-            value={`${statsData.perplexityCacheHitRate}%`} 
-            icon={Target} 
-            description="Cache hit percentage"
-            colorClass="bg-blue-700"
+          title="Cache Hit Rate (%)"
+          value={statsData.perplexityCacheHitRate.toFixed(1)} // Format to 1 decimal place
+          icon={Percent}
+          description="Cache hit percentage (Query Analysis)"
+          colorClass="bg-purple-700"
           />
         </div>
-      </section>
-    </div>
-  );
-};
 
-const QueryInsightsTab = () => {
-  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [queryData, setQueryData] = useState<QueryInsightsData | null>(null);
-  const [activeTab, setActiveTab] = useState<'volume' | 'top' | 'no-results' | 'negative'>('volume');
-
-  // Mock data for development until API is implemented
-  const mockVolumeData = {
-    daily: Array.from({ length: 7 }, (_, i) => {
-      const date = new Date();
-      date.setDate(date.getDate() - (6 - i));
-      return {
-        date: date.toISOString().split('T')[0],
-        count: Math.floor(Math.random() * 100) + 50
-      };
-    }),
-    hourly: Array.from({ length: 24 }, (_, i) => {
-      const date = new Date();
-      date.setHours(date.getHours() - (23 - i));
-      return {
-        date: `${date.getHours()}:00`,
-        count: Math.floor(Math.random() * 20) + 5
-      };
-    })
-  };
-
-  const mockTopQueries = Array.from({ length: 10 }, (_, i) => ({
-    id: `q-${i + 1}`,
-    text: [
-      "How do I integrate with Salesforce?",
-      "What are the main features?",
-      "Is there a free trial available?",
-      "How to export data?",
-      "Pricing for enterprise",
-      "Technical documentation",
-      "API integration guide",
-      "How to reset my password",
-      "Mobile app features",
-      "Help with onboarding"
-    ][i],
-    count: Math.floor(Math.random() * 100) + (100 - i * 10),
-    avgResponseTime: Number((Math.random() * 2 + 0.5).toFixed(2)),
-    feedbackRate: Math.floor(Math.random() * 30) + 10,
-    positiveRate: Math.floor(Math.random() * 80) + 20,
-    negativeRate: Math.floor(Math.random() * 20),
-    lastUsed: new Date(Date.now() - Math.random() * 86400000 * 3).toISOString()
-  }));
-
-  const mockNoResultQueries = Array.from({ length: 5 }, (_, i) => ({
-    id: `nq-${i + 1}`,
-    text: [
-      "Compatibility with legacy systems",
-      "International compliance requirements",
-      "Workstream integration details",
-      "Hardware requirements for on-premises",
-      "SLA for enterprise customers"
-    ][i],
-    count: Math.floor(Math.random() * 20) + 5,
-    lastUsed: new Date(Date.now() - Math.random() * 86400000 * 5).toISOString()
-  }));
-
-  const mockNegativeQueries = Array.from({ length: 5 }, (_, i) => ({
-    id: `neg-${i + 1}`,
-    text: [
-      "How to cancel subscription",
-      "Refund policy details",
-      "Why is system so slow",
-      "Missing features comparison",
-      "Complex workflow explanation"
-    ][i],
-    count: Math.floor(Math.random() * 15) + 3,
-    negativeRate: Math.floor(Math.random() * 50) + 50,
-    lastUsed: new Date(Date.now() - Math.random() * 86400000 * 4).toISOString()
-  }));
-
-  const mockStats = {
-    totalQueries: 1248,
-    avgQueryLength: 8.3,
-    avgResponseTime: 0.82,
-    noResultRate: 4.2
-  };
-
-  useEffect(() => {
-    // Load mock data initially, replace with API call when available
-    setLoading(true);
-    // Simulate network delay
-    setTimeout(() => {
-      try {
-        setQueryData({
-          volumeData: mockVolumeData,
-          topQueries: mockTopQueries,
-          noResultQueries: mockNoResultQueries,
-          negativeQueries: mockNegativeQueries,
-          stats: mockStats
-        });
-        setLoading(false);
-      } catch (err) {
-        setError('Failed to load query data');
-        setLoading(false);
-      }
-    }, 800);
-  }, [timeRange]);
-
-  // Future real API fetch implementation
-  const fetchQueryData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      // Replace with actual API call when implemented
-      // const response = await fetch(`/api/admin/query-insights?timeRange=${timeRange}`);
-      // if (!response.ok) throw new Error('Failed to fetch query insights data');
-      // const data = await response.json();
-      // setQueryData(data);
-
-      // For now, just use mock data
-      setQueryData({
-        volumeData: mockVolumeData,
-        topQueries: mockTopQueries,
-        noResultQueries: mockNoResultQueries,
-        negativeQueries: mockNegativeQueries,
-        stats: mockStats
-      });
-    } catch (err: any) {
-      setError(err.message || 'An error occurred');
-      console.error('Error fetching query insights:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Filter queries based on search term
-  const filterQueries = (queries: QueryItem[]): QueryItem[] => {
-    if (!searchTerm) return queries;
-    return queries.filter(q => q.text.toLowerCase().includes(searchTerm.toLowerCase()));
-  };
-
-  // Format date for display
-  const formatDate = (dateString: string): string => {
-    return new Date(dateString).toLocaleString();
-  };
-
-  // Render volume chart section
-  const renderVolumeSection = () => {
-    if (!queryData) return <div>No data available</div>;
-    
-    return (
-      <div className="bg-white p-6 rounded-lg shadow-sm mb-6">
-        <h3 className="text-lg font-medium mb-4 text-gray-800">Query Volume ({timeRange})</h3>
-        
-        {/* Chart placeholder - Replace with actual chart component when available */}
-        <div className="h-64 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-center mb-4">
-          <div className="text-gray-500">
-            {loading ? (
-              <div className="flex flex-col items-center">
-                <svg className="animate-spin h-8 w-8 text-blue-600 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span>Loading chart data...</span>
-              </div>
-            ) : (
-              <div>
-                <p>Chart visualization would go here.</p>
-                <p className="text-sm">Bar chart showing query volume over time.</p>
-                <p className="text-xs mt-2">Data: {timeRange === '24h' ? 'Last 24 hours' : 'Last 7 days'}</p>
-              </div>
-            )}
-          </div>
-        </div>
-        
-        {/* Stats cards section */}
+      {/* Section for API Calls & Costs */}
+      <h3 className="text-lg font-medium mb-3 text-gray-700">Gemini API Usage & Estimated Costs</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Total Queries</h3>
-              <div className="p-2 rounded-md bg-blue-700">
-                <Search className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{queryData.stats.totalQueries}</span>
-              <span className="text-xs text-gray-500 mt-1">In selected period</span>
-            </div>
-          </div>
-          
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Avg Response Time</h3>
-              <div className="p-2 rounded-md bg-blue-700">
-                <Activity className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{queryData.stats.avgResponseTime}s</span>
-              <span className="text-xs text-gray-500 mt-1">Average query response time</span>
-            </div>
-          </div>
-          
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">No Results Rate</h3>
-              <div className="p-2 rounded-md bg-amber-500">
-                <FileWarning className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{queryData.stats.noResultRate}%</span>
-              <span className="text-xs text-gray-500 mt-1">Queries with no relevant results</span>
-            </div>
-          </div>
-          
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Avg Query Length</h3>
-              <div className="p-2 rounded-md bg-blue-700">
-                <FileText className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{queryData.stats.avgQueryLength}</span>
-              <span className="text-xs text-gray-500 mt-1">Words per query</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Render top queries table section
-  const renderTopQueriesSection = () => {
-    if (!queryData) return <div>No data available</div>;
-    
-    const filteredQueries = filterQueries(queryData.topQueries);
-    
-    return (
-      <div className="bg-white p-6 rounded-lg shadow-sm">
-        <h3 className="text-lg font-medium mb-4 text-gray-800">Most Frequent Queries</h3>
+        {/* --- Total Estimated Cost --- */}
+        <StatCard 
+          title="Total Estimated Cost"
+          value={`$${statsData.apiCalls?.totalEstimatedCost?.toFixed(2) ?? '0.00'}`} 
+          icon={DollarSign}
+          description="All Gemini API calls (Approx.)"
+          colorClass="bg-orange-600" 
+        />
+        {/* Filler card for alignment or add another high-level metric? */}
+        <div /> 
+        <div /> 
+        <div /> 
         
-        {filteredQueries.length === 0 ? (
-          <div className="text-center py-6 text-gray-500">No matching queries found</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Query Text</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Avg Response</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Feedback</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Used</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredQueries.map((query) => (
-                  <tr key={query.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900">{query.text}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{query.count}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{query.avgResponseTime}s</td>
-                    <td className="px-4 py-3 text-sm">
-                      <div className="flex space-x-1 items-center">
-                        <span className="text-green-600">{query.positiveRate}%</span>
-                        <span className="text-gray-300">|</span>
-                        <span className="text-red-500">{query.negativeRate}%</span>
+        {/* --- Chat --- */}
+        <StatCard title="Chat Calls (Total)" value={statsData.apiCalls?.totalGeminiChatCalls ?? 0} icon={MessageSquare} description="Success + Error" colorClass="bg-sky-600" />
+        <StatCard title="Chat Calls (Success)" value={statsData.apiCalls?.geminiChatSuccess ?? 0} icon={CheckCircle} description="Successful calls" colorClass="bg-teal-600" />
+        <StatCard title="Chat Calls (Error)" value={statsData.apiCalls?.geminiChatError ?? 0} icon={AlertCircle} description="Failed calls" colorClass="bg-red-500" />
+        <StatCard title="Chat Calls (Est. Cost)" value={`$${statsData.apiCalls?.estimatedChatCost?.toFixed(2) ?? '0.00'}`} icon={DollarSign} description="Approx. cost" colorClass="bg-orange-400" />
+        
+        {/* --- Embedding --- */}
+        <StatCard title="Embedding Calls (Total)" value={statsData.apiCalls?.totalGeminiEmbeddingCalls ?? 0} icon={Database} description="Success + Error" colorClass="bg-indigo-600" />
+        <StatCard title="Embedding Calls (Success)" value={statsData.apiCalls?.geminiEmbeddingSuccess ?? 0} icon={CheckSquare} description="Successful calls" colorClass="bg-indigo-500" />
+        <StatCard title="Embedding Calls (Error)" value={statsData.apiCalls?.geminiEmbeddingError ?? 0} icon={XSquare} description="Failed calls" colorClass="bg-rose-500" />
+        <StatCard title="Embedding Calls (Est. Cost)" value={`$${statsData.apiCalls?.estimatedEmbeddingCost?.toFixed(2) ?? '0.00'}`} icon={DollarSign} description="Approx. cost" colorClass="bg-orange-400" />
+
+        {/* --- Query Analysis --- */}
+        <StatCard title="Query Analysis Calls (Total)" value={statsData.apiCalls?.totalGeminiQueryAnalysisCalls ?? 0} icon={Cpu} description="Success + Error" colorClass="bg-cyan-600" />
+        <StatCard title="Query Analysis (Success)" value={statsData.apiCalls?.geminiQueryAnalysisSuccess ?? 0} icon={CheckCircle} description="Successful calls" colorClass="bg-cyan-500" />
+        <StatCard title="Query Analysis (Error)" value={statsData.apiCalls?.geminiQueryAnalysisError ?? 0} icon={AlertCircle} description="Failed calls" colorClass="bg-red-500" />
+        <StatCard title="Query Analysis (Est. Cost)" value={`$${statsData.apiCalls?.estimatedAnalysisCost?.toFixed(2) ?? '0.00'}`} icon={DollarSign} description="Approx. cost" colorClass="bg-orange-400" />
+        
+        {/* --- Answer Generation --- */}
+        <StatCard title="Answer Gen Calls (Total)" value={statsData.apiCalls?.totalGeminiAnswerGenerationCalls ?? 0} icon={Edit} description="Success + Error (incl. Summaries)" colorClass="bg-lime-600" />
+        <StatCard title="Answer Gen (Success)" value={statsData.apiCalls?.geminiAnswerGenerationSuccess ?? 0} icon={CheckCircle} description="Successful calls" colorClass="bg-lime-500" />
+        <StatCard title="Answer Gen (Error)" value={statsData.apiCalls?.geminiAnswerGenerationError ?? 0} icon={AlertCircle} description="Failed calls" colorClass="bg-red-500" />
+        <StatCard title="Answer Gen (Est. Cost)" value={`$${statsData.apiCalls?.estimatedAnswerGenCost?.toFixed(2) ?? '0.00'}`} icon={DollarSign} description="Approx. cost" colorClass="bg-orange-400" />
+        
+        {/* --- Reranking --- */}
+        <StatCard title="Reranking Calls (Total)" value={statsData.apiCalls?.totalGeminiRerankingCalls ?? 0} icon={Filter} description="Success + Error" colorClass="bg-fuchsia-600" />
+        <StatCard title="Reranking Calls (Success)" value={statsData.apiCalls?.geminiRerankingSuccess ?? 0} icon={CheckCircle} description="Successful calls" colorClass="bg-fuchsia-500" />
+        <StatCard title="Reranking Calls (Error)" value={statsData.apiCalls?.geminiRerankingError ?? 0} icon={AlertCircle} description="Failed calls" colorClass="bg-red-500" />
+        <StatCard title="Reranking Calls (Est. Cost)" value={`$${statsData.apiCalls?.estimatedRerankCost?.toFixed(2) ?? '0.00'}`} icon={DollarSign} description="Approx. cost" colorClass="bg-orange-400" />
+
                       </div>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{formatDate(query.lastUsed || '')}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Render no results queries section
-  const renderNoResultsSection = () => {
-    if (!queryData) return <div>No data available</div>;
-    
-    const filteredQueries = filterQueries(queryData.noResultQueries);
-    
-    return (
-      <div className="bg-white p-6 rounded-lg shadow-sm">
-        <h3 className="text-lg font-medium mb-4 text-gray-800">Queries with No Results</h3>
-        
-        {filteredQueries.length === 0 ? (
-          <div className="text-center py-6 text-gray-500">No matching queries found</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Query Text</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Occurrence</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredQueries.map((query) => (
-                  <tr key={query.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900">{query.text}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{query.count}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{formatDate(query.lastUsed || '')}</td>
-                    <td className="px-4 py-3 text-sm text-blue-600 hover:text-blue-800">
-                      <button className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-2 py-1 rounded">
-                        Add Content
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Render negative feedback queries section
-  const renderNegativeSection = () => {
-    if (!queryData) return <div>No data available</div>;
-    
-    const filteredQueries = filterQueries(queryData.negativeQueries);
-    
-    return (
-      <div className="bg-white p-6 rounded-lg shadow-sm">
-        <h3 className="text-lg font-medium mb-4 text-gray-800">Queries with Negative Feedback</h3>
-        
-        {filteredQueries.length === 0 ? (
-          <div className="text-center py-6 text-gray-500">No matching queries found</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Query Text</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Negative Rate</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Occurrence</th>
-                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredQueries.map((query) => (
-                  <tr key={query.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900">{query.text}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{query.count}</td>
-                    <td className="px-4 py-3 text-sm text-red-500">{query.negativeRate}%</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{formatDate(query.lastUsed || '')}</td>
-                    <td className="px-4 py-3 text-sm text-blue-600 hover:text-blue-800">
-                      <button className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-2 py-1 rounded">
-                        Review
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-semibold text-gray-900">Query Insights</h2>
-        
-        <div className="flex items-center space-x-4">
-          {/* Time range selector */}
-          <div className="flex border border-gray-200 rounded overflow-hidden">
-            <button
-              onClick={() => setTimeRange('24h')}
-              className={`px-3 py-1 text-sm ${timeRange === '24h' ? 'bg-blue-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-            >
-              24h
-            </button>
-            <button
-              onClick={() => setTimeRange('7d')}
-              className={`px-3 py-1 text-sm ${timeRange === '7d' ? 'bg-blue-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-            >
-              7d
-            </button>
-            <button
-              onClick={() => setTimeRange('30d')}
-              className={`px-3 py-1 text-sm ${timeRange === '30d' ? 'bg-blue-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-            >
-              30d
-            </button>
-            <button
-              onClick={() => setTimeRange('all')}
-              className={`px-3 py-1 text-sm ${timeRange === 'all' ? 'bg-blue-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-            >
-              All
-            </button>
-          </div>
-          
-          {/* Search input */}
-          <div className="relative">
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search queries..."
-              className="w-64 pl-8 pr-4 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-700 focus:border-blue-700"
-            />
-            <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
-          </div>
-          
-          {/* Refresh button */}
-          <button
-            onClick={fetchQueryData}
-            disabled={loading}
-            className="p-1 rounded-full hover:bg-gray-100 text-gray-600"
-            title="Refresh data"
-          >
-            {loading ? (
-              <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            )}
-          </button>
-        </div>
-      </div>
-      
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded mb-6">
-          {error}
-        </div>
-      )}
-      
-      {/* View selection tabs */}
-      <div className="mb-6 border-b border-gray-200">
-        <nav className="-mb-px flex space-x-6" aria-label="Tabs">
-          <button
-            onClick={() => setActiveTab('volume')}
-            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'volume' ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300'}`}
-          >
-            Query Volume
-          </button>
-          <button
-            onClick={() => setActiveTab('top')}
-            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'top' ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300'}`}
-          >
-            Top Queries
-          </button>
-          <button
-            onClick={() => setActiveTab('no-results')}
-            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'no-results' ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300'}`}
-          >
-            Queries with No Results
-          </button>
-          <button
-            onClick={() => setActiveTab('negative')}
-            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'negative' ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300'}`}
-          >
-            Negative Feedback
-          </button>
-        </nav>
-      </div>
-      
-      {/* Content based on active tab */}
-      {loading && !queryData ? (
-        <div className="flex justify-center items-center h-64">
-          <div className="flex flex-col items-center">
-            <svg className="animate-spin h-8 w-8 text-blue-600 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span className="text-gray-600">Loading query insights...</span>
-          </div>
-        </div>
-      ) : (
-        <>
-          {activeTab === 'volume' && renderVolumeSection()}
-          {activeTab === 'top' && renderTopQueriesSection()}
-          {activeTab === 'no-results' && renderNoResultsSection()}
-          {activeTab === 'negative' && renderNegativeSection()}
-        </>
-      )}
-      
-      {/* Note about data source */}
-      <div className="mt-6 text-xs text-gray-500 text-center">
-        <p>Note: Currently displaying mock data for development purposes.</p>
-        <p>Integration with the query logs API will be implemented once the backend infrastructure is ready.</p>
-      </div>
+      <p className="text-xs text-gray-500 mt-4 text-center">Note: API costs are estimates based on call counts and may not reflect exact billing.</p>
     </div>
   );
 };
@@ -1050,238 +586,215 @@ const ContentPerformanceTab = () => {
   );
 };
 
-// Replace with this implementation:
-// Define interfaces for Sales Insights tab
-interface CompanyResearchItem {
-  id: string;
-  companyName: string;
-  searchCount: number;
-  lastSearched: string;
+// --- NEW CONSOLIDATED INSIGHTS TAB COMPONENT (Skeleton) ---
+
+// Define interfaces for the new Consolidated Insights data structures
+interface ConsolidatedQueryStats {
+  totalQueries: number;
+  avgQueryLength: number;
+  avgResponseTime: number;
+  noResultRate: number;
+  avgFeedbackScore?: number; // Optional: Add later
 }
 
-interface SalesRepPerformance {
-  id: string;
-  name: string;
-  sessionCount: number;
-  companyResearchCount: number;
-  averageFeedbackScore: number;
+interface TopicInsight {
+  topic: string; // Could be raw query text, keyword, or extracted topic
+  count: number;
+  sessionTypes: { company: number; general: number }; // Breakdown by session type
+  avgResponseTime?: number;
+  feedback?: { positive: number; negative: number };
+  noResultCount?: number;
+  lastOccurrence: string;
 }
 
-interface SalesInsightsData {
-  topResearchedCompanies: CompanyResearchItem[];
-  salesReps: SalesRepPerformance[];
-  totalCompanySearches: number;
-  totalSalesSessions: number;
+interface ProductMentionInsight {
+  productName: string;
+  mentionCount: number;
+  relatedQueries?: string[]; // Top queries mentioning this product
 }
 
-const SalesCompanyInsightsTab = () => {
-  const [loading, setLoading] = useState<boolean>(false);
+interface ConsolidatedInsightsData {
+  stats: ConsolidatedQueryStats;
+  topTopics: TopicInsight[];
+  noResultTopics: TopicInsight[];
+  negativeFeedbackTopics: TopicInsight[];
+  productMentions?: ProductMentionInsight[]; // Optional: Add later
+}
+
+const InsightsTab = () => {
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [salesData, setSalesData] = useState<SalesInsightsData | null>(null);
-
-  // Mock data for development
-  const mockSalesData: SalesInsightsData = {
-    topResearchedCompanies: [
-      {
-        id: 'company-1',
-        companyName: 'Acme Corporation',
-        searchCount: 42,
-        lastSearched: new Date(Date.now() - 3600000 * 24).toISOString()
-      },
-      {
-        id: 'company-2',
-        companyName: 'Stark Industries',
-        searchCount: 38,
-        lastSearched: new Date(Date.now() - 3600000 * 48).toISOString()
-      },
-      {
-        id: 'company-3',
-        companyName: 'Wayne Enterprises',
-        searchCount: 29,
-        lastSearched: new Date(Date.now() - 3600000 * 72).toISOString()
-      },
-      {
-        id: 'company-4',
-        companyName: 'Umbrella Corporation',
-        searchCount: 24,
-        lastSearched: new Date(Date.now() - 3600000 * 96).toISOString()
-      },
-      {
-        id: 'company-5',
-        companyName: 'Globex Corporation',
-        searchCount: 19,
-        lastSearched: new Date(Date.now() - 3600000 * 120).toISOString()
-      }
-    ],
-    salesReps: [
-      {
-        id: 'rep-1',
-        name: 'John Smith',
-        sessionCount: 68,
-        companyResearchCount: 45,
-        averageFeedbackScore: 0.92
-      },
-      {
-        id: 'rep-2',
-        name: 'Sarah Johnson',
-        sessionCount: 52,
-        companyResearchCount: 38,
-        averageFeedbackScore: 0.87
-      },
-      {
-        id: 'rep-3',
-        name: 'Mike Williams',
-        sessionCount: 47,
-        companyResearchCount: 31,
-        averageFeedbackScore: 0.84
-      }
-    ],
-    totalCompanySearches: 342,
-    totalSalesSessions: 256
-  };
+  const [insightsData, setInsightsData] = useState<ConsolidatedInsightsData | null>(null);
+  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
+  const [sessionTypeFilter, setSessionTypeFilter] = useState<'all' | 'company' | 'general'>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
 
   useEffect(() => {
-    // Load mock data
-    setLoading(true);
-    setTimeout(() => {
-      setSalesData(mockSalesData);
-      setLoading(false);
-    }, 800);
-  }, []);
+    const fetchInsightsData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // Construct API URL with filters
+        const params = new URLSearchParams({
+          timeRange,
+          sessionType: sessionTypeFilter,
+          // search: searchTerm // Add search later if needed
+        });
+        const apiUrl = `/api/admin/consolidated-insights?${params.toString()}`;
+        console.log(`[InsightsTab] Fetching data from: ${apiUrl}`);
 
-  // Format date for display
+        const response = await fetch(apiUrl);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.message || `Failed to fetch insights data (Status: ${response.status})`);
+        }
+        const data: ConsolidatedInsightsData = await response.json();
+        setInsightsData(data);
+        console.log("[InsightsTab] Data fetched successfully:", data);
+      } catch (error: any) { // Catch any type
+        console.error("[InsightsTab] Error fetching insights:", error);
+        setError(error.message || 'Failed to load insights. Please try again later.');
+        setInsightsData(null); // Clear data on error
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInsightsData();
+  }, [timeRange, sessionTypeFilter]); // Refetch when filters change
+
+  // Helper function to format date (can be moved outside if reused)
   const formatDate = (dateString: string): string => {
-    return new Date(dateString).toLocaleString();
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return dateString || 'Invalid Date';
+      return date.toLocaleString(undefined, { /* Desired format options */ });
+    } catch (error) {
+      return dateString || 'Format Error';
+    }
   };
 
+  // --- UI Rendering --- (Placeholder structure)
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-semibold text-gray-900">Sales & Company Insights</h2>
-      </div>
-      
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded mb-6">
-          {error}
-        </div>
-      )}
-      
-      {/* Stats cards */}
-      {salesData && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Total Company Searches</h3>
-              <div className="p-2 rounded-md bg-blue-700">
-                <Search className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{salesData.totalCompanySearches.toLocaleString()}</span>
-              <span className="text-xs text-gray-500 mt-1">All-time company research searches</span>
+    <div className="p-6 space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-gray-900">Chat Insights</h2>
+        {/* Add Filter Controls (Time Range, Session Type) */}
+        <div className="flex items-center space-x-4">
+          {/* Session Type Filter */}
+          <select
+            value={sessionTypeFilter}
+            onChange={(e) => setSessionTypeFilter(e.target.value as any)}
+            className="border border-gray-300 rounded px-2 py-1 text-sm"
+          >
+            <option value="all">All Sessions</option>
+            <option value="company">Company Sessions</option>
+            <option value="general">General Sessions</option>
+          </select>
+
+          {/* Time Range Filter */}
+          <select
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value as any)}
+            className="border border-gray-300 rounded px-2 py-1 text-sm"
+          >
+            <option value="24h">Last 24h</option>
+            <option value="7d">Last 7d</option>
+            <option value="30d">Last 30d</option>
+            <option value="all">All Time</option>
+          </select>
             </div>
           </div>
           
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-100">
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Total Sales Sessions</h3>
-              <div className="p-2 rounded-md bg-indigo-600">
-                <MessageSquare className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-bold text-gray-900">{salesData.totalSalesSessions.toLocaleString()}</span>
-              <span className="text-xs text-gray-500 mt-1">All-time sales chat sessions</span>
-            </div>
-          </div>
-        </div>
-      )}
+      {loading && <div className="text-center p-10">Loading insights...</div>}
+      {error && <div className="text-center p-10 text-red-600">Error: {error}</div>}
       
-      {/* Loading state */}
-      {loading ? (
-        <div className="flex justify-center items-center h-64">
-          <div className="flex flex-col items-center">
-            <svg className="animate-spin h-8 w-8 text-blue-600 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span className="text-gray-600">Loading sales insights...</span>
+      {!loading && !error && !insightsData && <div className="text-center p-10">No insights data available for the selected filters.</div>}
+
+      {insightsData && (
+        <>
+          {/* Section 1: Overview Stats */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Example Stat Card */}
+            <div className="bg-white p-4 rounded shadow border border-gray-100">
+              <h3 className="text-sm font-medium text-gray-700 mb-1">Total Queries</h3>
+              <p className="text-2xl font-bold">{insightsData.stats.totalQueries?.toLocaleString() ?? 'N/A'}</p>
+              </div>
+            <div className="bg-white p-4 rounded shadow border border-gray-100">
+              <h3 className="text-sm font-medium text-gray-700 mb-1">Avg. Response Time</h3>
+              <p className="text-2xl font-bold">{insightsData.stats.avgResponseTime?.toFixed(2) ?? 'N/A'}s</p>
+            </div>
+            <div className="bg-white p-4 rounded shadow border border-gray-100">
+              <h3 className="text-sm font-medium text-gray-700 mb-1">No Result Rate</h3>
+              <p className="text-2xl font-bold">{insightsData.stats.noResultRate?.toFixed(1) ?? 'N/A'}%</p>
+            </div>
+            {/* Add Avg Feedback Score card later */}
           </div>
-        </div>
-      ) : salesData ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Top Researched Companies */}
-          <div className="bg-white p-6 rounded-lg shadow-sm">
-            <h3 className="text-lg font-medium mb-4 text-gray-800">Most Researched Companies</h3>
+
+          {/* Section 2: Top Topics/Queries */}
+          <div className="bg-white p-4 rounded shadow border border-gray-100">
+            <h3 className="text-lg font-semibold mb-3">Top Topics/Queries</h3>
+            {/* Placeholder for Top Topics Table */}
             <div className="overflow-x-auto">
+              {insightsData.topTopics && insightsData.topTopics.length > 0 ? (
               <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Search Count</th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Searched</th>
-                  </tr>
-                </thead>
+                  {/* Table Header */}
+                  <thead className="bg-gray-50"><tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Topic/Query</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Total Count</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Company/General</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Last Occurrence</th>
+                  </tr></thead>
+                  {/* Table Body */}
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {salesData.topResearchedCompanies.map((company) => (
-                    <tr key={company.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-sm text-gray-900 font-medium">{company.companyName}</td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{company.searchCount}</td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{formatDate(company.lastSearched)}</td>
+                    {insightsData.topTopics.slice(0, 10).map((item, index) => (
+                      <tr key={index} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 text-sm text-gray-900 max-w-xs truncate" title={item.topic}>{item.topic}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{item.count}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{item.sessionTypes.company} / {item.sessionTypes.general}</td>
+                        <td className="px-4 py-2 text-sm text-gray-500">{formatDate(item.lastOccurrence)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              ) : (
+                <p className="text-sm text-gray-500">No top topics found for these filters.</p>
+              )}
             </div>
           </div>
           
-          {/* Sales Rep Performance */}
-          <div className="bg-white p-6 rounded-lg shadow-sm">
-            <h3 className="text-lg font-medium mb-4 text-gray-800">Sales Rep Performance</h3>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sessions</th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Researches</th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Feedback</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {salesData.salesReps.map((rep) => (
-                    <tr key={rep.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-sm text-gray-900 font-medium">{rep.name}</td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{rep.sessionCount}</td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{rep.companyResearchCount}</td>
-                      <td className="px-4 py-3 text-sm">
-                        <span className={`text-sm ${rep.averageFeedbackScore > 0.8 ? 'text-green-600' : rep.averageFeedbackScore < 0.6 ? 'text-red-500' : 'text-yellow-500'}`}>
-                          {(rep.averageFeedbackScore * 100).toFixed(0)}%
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {/* Section 3: Topics with Issues (No Results / Negative Feedback) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded shadow border border-gray-100">
+              <h3 className="text-lg font-semibold mb-3">Queries with No Results</h3>
+              {/* Placeholder for No Results Table */}
+               {insightsData.noResultTopics && insightsData.noResultTopics.length > 0 ? (
+                 <ul>{insightsData.noResultTopics.slice(0,5).map((item, i)=><li key={i} className="text-sm text-gray-700 py-1">{item.topic} ({item.count})</li>)}</ul>
+               ) : <p className="text-sm text-gray-500">No queries found with no results.</p>}
             </div>
+            <div className="bg-white p-4 rounded shadow border border-gray-100">
+              <h3 className="text-lg font-semibold mb-3">Queries with Negative Feedback</h3>
+              {/* Placeholder for Negative Feedback Table */}
+              {insightsData.negativeFeedbackTopics && insightsData.negativeFeedbackTopics.length > 0 ? (
+                <ul>{insightsData.negativeFeedbackTopics.slice(0,5).map((item, i)=><li key={i} className="text-sm text-gray-700 py-1">{item.topic} ({item.count})</li>)}</ul>
+              ) : <p className="text-sm text-gray-500">No queries found with negative feedback.</p>}
           </div>
         </div>
-      ) : (
-        <div className="text-center py-6 text-gray-500">No sales insights data available</div>
+
+          {/* Section 4: Product/Feature Mentions (Add Later) */}
+          {/* <div className="bg-white p-4 rounded shadow border border-gray-100">
+            <h3 className="text-lg font-semibold mb-3">Product/Feature Mentions</h3>
+            <p className="text-sm text-gray-500">[Product mention analysis will be added here]</p>
+          </div> */}
+        </>
       )}
-      
-      {/* Note about data source */}
-      <div className="mt-6 text-xs text-gray-500 text-center">
-        <p>Note: Currently displaying mock data for development purposes.</p>
-        <p>Integration with the sales analytics API will be implemented once the user authentication system is ready.</p>
-      </div>
     </div>
   );
 };
 
 export default function Admin({ logs }: AdminProps) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<AdminTabId>('overview');
+  const [activeTab, setActiveTab] = useState<AdminTabId>('insights');
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<ChatSessionDetailed | null>(null);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
@@ -1333,7 +846,7 @@ export default function Admin({ logs }: AdminProps) {
 
   }, [activeTab]);
 
-  // Fetch GENERAL chat sessions
+  // Fetch GENERAL chat sessions (function fixed - duplicate removed)
   const fetchGeneralSessions = async (query?: string, byContent: boolean = false) => {
     setGeneralLoading(true);
     setGeneralError(null);
@@ -1474,14 +987,12 @@ export default function Admin({ logs }: AdminProps) {
   // --- Render Function --- 
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'overview':
-        return <OverviewTab />;
-      case 'queryInsights':
-        return <QueryInsightsTab />;
+      case 'systemStatus': 
+        return <SystemStatusTab />;
+      case 'insights':
+        return <InsightsTab />;
       case 'contentPerformance':
         return <ContentPerformanceTab />;
-      case 'salesInsights':
-        return <SalesCompanyInsightsTab />;
       case 'documentManagement':
         return <DocumentManagement />;
       case 'pendingDocuments':
@@ -1493,7 +1004,7 @@ export default function Admin({ logs }: AdminProps) {
       case 'companySessions':
         return renderCompanySessions();
       default:
-        return <div>Select a tab to view content</div>;
+        return <InsightsTab />;
     }
   };
 
@@ -1679,7 +1190,7 @@ export default function Admin({ logs }: AdminProps) {
       <div className="p-6 bg-white text-gray-800 min-h-screen">
         <h1 className="text-2xl font-semibold mb-6 text-gray-900">Admin Dashboard</h1>
         
-        {/* Tab Navigation */} 
+        {/* Tab Navigation (This will automatically reflect the new order from adminTabs) */}
         <div className="mb-6 border-b border-gray-200">
           <nav className="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">
             {adminTabs.map((tab) => (

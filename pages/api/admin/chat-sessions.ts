@@ -8,7 +8,7 @@ import {
   deleteChatSession,
   updateChatSession
 } from '@/utils/chatStorage';
-import { logError } from '@/utils/logger';
+import { logError, logDebug } from '@/utils/logger';
 
 // Simple authorization check for admin routes
 // In a production app, this would use proper authentication
@@ -75,6 +75,15 @@ async function handleGetRequest(req: NextApiRequest, res: NextApiResponse) {
     // Otherwise, list all sessions, possibly filtered by type
     let sessions = await listChatSessions();
     
+    // <<< ADD DEBUG LOGGING HERE >>>
+    logDebug(`[Chat Sessions API] Value of 'sessions' before filtering: ${JSON.stringify(sessions)} (Type: ${typeof sessions}, IsArray: ${Array.isArray(sessions)})`);
+
+    // Make sure sessions is an array before filtering
+    if (!Array.isArray(sessions)) {
+      logError('listChatSessions did not return an array, sessions =', sessions);
+      sessions = [];
+    }
+
     // Filter by session type if provided
     if (type) {
       sessions = sessions.filter(s => s.sessionType === type);

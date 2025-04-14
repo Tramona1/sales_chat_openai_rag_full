@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { extractTopics } from '@/utils/feedbackManager';
-import { logError, logInfo } from '@/utils/logger';
+import { logError, logInfo, logWarning } from '@/utils/logger';
 import { createServiceClient } from '@/utils/supabaseClient';
 
 /**
@@ -38,6 +38,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Create Supabase client
     const supabase = createServiceClient();
     
+    // --- FIX: Add check for null supabase client ---
+    if (!supabase) {
+        logError('[API Feedback] Failed to create Supabase client. Feedback not recorded.');
+        // Return 500 but don't throw, log it internally
+        return res.status(500).json({ error: 'Internal server error occurred while processing feedback.' });
+    }
+    // --- End FIX ---
+
+    // Extract queryLogId from the body (make it optional for now)
+    const queryLogId = body.queryLogId || null;
+    if (!queryLogId) {
+      logWarning('[API /api/feedback] Received feedback request without queryLogId. Feedback cannot be linked to a specific query.');
+    }
+
     // Format data for Supabase (using snake_case)
     const feedbackData = {
       query: body.query,
@@ -47,6 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       query_topics: queryTopics,
       session_id: body.sessionId || null,
       user_id: body.userId || null,
+      query_log_id: queryLogId,
       metadata
     };
     

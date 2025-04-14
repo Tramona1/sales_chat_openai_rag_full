@@ -9,7 +9,7 @@
  * This information is used to optimize retrieval parameters and improve results.
  */
 
-import { logError, logInfo, logWarning, logDebug } from './logger';
+import { logError, logInfo, logWarning, logDebug, logApiCall } from './logger';
 import { cacheWithExpiry, getFromCache } from './caching';
 import { openai } from './llmProviders';
 import { recordMetric } from './performanceMonitoring';
@@ -231,13 +231,15 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
   
   try {
     // Use simple analysis if feature is disabled
-    // TEMPORARY FIX: Use hardcoded flag instead of isFeatureEnabled
     if (!ENHANCED_QUERY_ANALYSIS_ENABLED) {
+      // Potentially log this as a 'skipped' or 'basic' analysis?
+      // For now, just return basic analysis without DB logging
       return performBasicAnalysis(query);
     }
     
     // Get Gemini model
     const model = getQueryAnalysisModel();
+    const modelName = 'gemini-2.0-flash'; // Hardcoded for now, match getQueryAnalysisModel
     
     // Create the query analysis prompt
     const prompt = `
@@ -263,16 +265,31 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
     `;
     
     // Generate the analysis using Gemini
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const apiCallStartTime = Date.now();
+    let responseText = '';
+    let apiError: any = null;
+    try {
+      const result = await model.generateContent(prompt);
+      responseText = result.response.text();
+      logInfo('[API QueryAnalysis] Gemini Analysis Success');
+      logApiCall('gemini', 'query_analysis', 'success', Date.now() - apiCallStartTime, undefined, { model: modelName });
+    } catch (error) {
+      apiError = error; // Store error to log later
+      logError('[API QueryAnalysis] Gemini Analysis Error', { error: error instanceof Error ? error.message : String(error) });
+      logApiCall('gemini', 'query_analysis', 'error', Date.now() - apiCallStartTime, error instanceof Error ? error.message : String(error), { model: modelName });
+      // Re-throw the error to be caught by the outer try-catch for fallback
+      throw error;
+    }
     
     // Parse the response as JSON
     let analysis: Partial<LocalQueryAnalysis>;
     try {
       analysis = extractJsonFromText(responseText);
-    } catch (error) {
-      console.error('Error parsing Gemini response as JSON:', error);
+    } catch (parseError) {
+      console.error('Error parsing Gemini response as JSON:', parseError);
       console.log('Raw response:', responseText);
+      // Log this specifically? Maybe add metadata to the failed API call log?
+      // For now, rely on the outer catch block's fallback.
       throw new Error('Invalid response format from Gemini');
     }
     
@@ -363,16 +380,16 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
 
     return fullAnalysis;
   } catch (error) {
-    // Log and record error
-    logError('Error performing query analysis', error);
-    recordMetric('queryAnalysis', 'gemini', Date.now() - startTime, false, {
-      error: error instanceof Error ? error.message : 'Unknown error'
+    // This catches errors from the API call OR parsing
+    // The API call itself is already logged by the inner try/catch
+    logError('Error performing query analysis, falling back to basic', error); // Keep outer log
+    // Restore the original error object for recordMetric
+    recordMetric('queryAnalysis', 'gemini', Date.now() - startTime, false, { 
+      error: error instanceof Error ? error.message : 'Unknown error' 
     });
     
     // Fall back to basic analysis
     const fallbackResult = performBasicAnalysis(query);
-    // Cache the fallback result as well, but maybe for shorter duration?
-    // For now, cache with standard timeout
     cacheWithExpiry(cacheKey, fallbackResult, QUERY_ANALYSIS_CACHE_TIMEOUT);
     return fallbackResult;
   }
@@ -515,9 +532,11 @@ export function getRetrievalParameters(analysis: LocalQueryAnalysis): RetrievalP
 
 /**
  * Get the Gemini API key
+ * Throws error if GEMINI_API_KEY is not set
  */
 function getGeminiApiKey(): string {
-  const apiKey = process.env.GEMINI_API_KEY || '';
+  logDebug(`[getGeminiApiKey] Checking process.env.GEMINI_API_KEY. Value: ${process.env.GEMINI_API_KEY ? '******' : 'NOT SET'}`);
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not set in environment variables');
   }

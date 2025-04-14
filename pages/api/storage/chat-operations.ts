@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { logError, logInfo } from '@/utils/logger';
+import { logError, logInfo, logDebug, logWarning } from '@/utils/logger';
 import { CompanyInformation } from '@/utils/perplexityClient';
 import { createServiceClient } from '@/utils/supabaseClient';
 
@@ -45,6 +45,7 @@ async function saveChatSession(session: Omit<StoredChatSession, 'id' | 'createdA
     // Check if this is a duplicate of a recent company session
     if (session.sessionType === 'company' && session.companyName) {
       const supabase = createServiceClient();
+      if (!supabase) { throw new Error('Failed to create Supabase client for duplicate check'); }
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       
       // Find recent session for same company
@@ -80,6 +81,7 @@ async function saveChatSession(session: Omit<StoredChatSession, 'id' | 'createdA
     
     // Insert into Supabase
     const supabase = createServiceClient();
+    if (!supabase) { throw new Error('Failed to create Supabase client for insert'); }
     const { data, error } = await supabase
       .from('chat_sessions')
       .insert(sessionData)
@@ -103,6 +105,7 @@ async function saveChatSession(session: Omit<StoredChatSession, 'id' | 'createdA
 async function getChatSession(sessionId: string): Promise<StoredChatSession | null> {
   try {
     const supabase = createServiceClient();
+    if (!supabase) { logError('Failed to create Supabase client in getChatSession'); return null; }
     const { data, error } = await supabase
       .from('chat_sessions')
       .select('*')
@@ -164,6 +167,7 @@ async function updateChatSession(
     
     // Update in Supabase
     const supabase = createServiceClient();
+    if (!supabase) { logError('Failed to create Supabase client in updateChatSession'); return false; }
     const { error } = await supabase
       .from('chat_sessions')
       .update(updateData)
@@ -183,28 +187,52 @@ async function updateChatSession(
 
 // List all chat sessions
 async function listChatSessions(): Promise<SessionIndex['sessions']> {
+  logDebug('[listChatSessions] Function called.'); // Log start
   try {
     const supabase = createServiceClient();
+    // Check if client creation failed before using it
+    if (!supabase) {
+      logError('[listChatSessions] Failed to create Supabase client.');
+      return []; // Return empty array if client is null
+    }
+    logDebug('[listChatSessions] Supabase client created successfully.');
+    
     const { data, error } = await supabase
       .from('chat_sessions')
       .select('id, title, session_type, updated_at, company_name')
       .order('updated_at', { ascending: false });
     
+    logDebug(`[listChatSessions] Supabase query completed. Error: ${JSON.stringify(error)}, Data received: ${data ? 'Yes' : 'No'}`);
+
     if (error) {
-      logError('Failed to list chat sessions from Supabase', error);
+      logError('[listChatSessions] Failed to list chat sessions from Supabase', error);
       return [];
     }
     
+    // Explicitly check if data is null or not an array
+    if (!data) {
+        logWarning('[listChatSessions] Supabase returned null/undefined data without an error.');
+        return [];
+    }
+    if (!Array.isArray(data)) {
+        logError(`[listChatSessions] Supabase returned non-array data without an error. Type: ${typeof data}, Value: ${JSON.stringify(data)}`);
+        return []; // Return empty array to prevent .map error
+    }
+    
     // Transform from Supabase format to our format
-    return data.map(session => ({
+    const result = data.map(session => ({
       id: session.id,
       title: session.title,
       sessionType: session.session_type,
       updatedAt: session.updated_at,
       companyName: session.company_name || undefined
     }));
+    
+    logDebug(`[listChatSessions] Successfully processed ${result.length} sessions. Returning array.`);
+    return result;
+
   } catch (error) {
-    logError('Failed to list chat sessions', error);
+    logError('[listChatSessions] Error caught in listChatSessions', error);
     return [];
   }
 }
@@ -213,6 +241,7 @@ async function listChatSessions(): Promise<SessionIndex['sessions']> {
 async function getSessionsByType(sessionType: 'company' | 'general'): Promise<SessionIndex['sessions']> {
   try {
     const supabase = createServiceClient();
+    if (!supabase) { logError('Failed to create Supabase client in getSessionsByType'); return []; }
     const { data, error } = await supabase
       .from('chat_sessions')
       .select('id, title, session_type, updated_at, company_name')
@@ -242,6 +271,7 @@ async function getSessionsByType(sessionType: 'company' | 'general'): Promise<Se
 async function deleteChatSession(sessionId: string): Promise<boolean> {
   try {
     const supabase = createServiceClient();
+    if (!supabase) { logError('Failed to create Supabase client in deleteChatSession'); return false; }
     const { error } = await supabase
       .from('chat_sessions')
       .delete()

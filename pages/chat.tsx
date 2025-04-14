@@ -21,6 +21,7 @@ interface Message {
   content: string;
   timestamp: Date;
   feedback?: 'positive' | 'negative' | null;
+  queryLogId?: string;
 }
 
 export default function ChatPage() {
@@ -304,6 +305,7 @@ export default function ChatPage() {
 
       // Only proceed to parse JSON if response.ok is true
       const result = await response.json();
+      const queryLogId = result.queryLogId;
 
       // Create a unique ID for the bot message
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -313,7 +315,8 @@ export default function ChatPage() {
         id: messageId,
         role: 'bot',
         content: result.answer || "I'm sorry, I couldn't generate a response. Please try again.",
-        timestamp: new Date()
+        timestamp: new Date(),
+        queryLogId: queryLogId || undefined
       };
       
       // Update messages with bot response

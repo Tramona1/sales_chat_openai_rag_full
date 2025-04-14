@@ -142,28 +142,34 @@ export function getModelForTask(
 ): { provider: string; model: string; settings: any } {
   switch (task) {
     case 'chat':
-      // Check the model name to determine the correct provider
+      // Check the model name BUT prioritize Gemini if 'gemini' is in the name
       const modelName = config.defaultModel.toLowerCase();
-      if (modelName.includes('gemini')) {
-        return {
-          provider: 'gemini',
-          model: config.defaultModel,
-          settings: {
-            temperature: config.temperature,
-            maxTokens: config.maxTokens
-          }
-        };
-      } else {
-        // Assume OpenAI for models like gpt-x
-        return {
-          provider: 'openai',
-          model: config.defaultModel,
-          settings: {
-            temperature: config.temperature,
-            maxTokens: config.maxTokens
-          }
-        };
-      }
+      // If the defaultModel name contains 'gemini', OR if we generally prefer Gemini,
+      // return Gemini provider and the default model name.
+      // This removes the automatic fallback to 'openai' provider just based on name.
+      // Ensure defaultModel is actually a valid Gemini model if this path is taken.
+      // We assume here the intention is to use Gemini primarily.
+      // if (modelName.includes('gemini')) { 
+      return {
+        provider: 'gemini',
+        model: config.defaultModel, // Use the configured default model
+        settings: {
+          temperature: config.temperature,
+          maxTokens: config.maxTokens
+        }
+      };
+      // } else {
+      //   // REMOVED: Assume OpenAI for models like gpt-x
+      //   // This was likely causing the issue if DEFAULT_LLM_MODEL was set to 'gpt-4'
+      //   return {
+      //     provider: 'openai',
+      //     model: config.defaultModel,
+      //     settings: {
+      //       temperature: config.temperature,
+      //       maxTokens: config.maxTokens
+      //     }
+      //   };
+      // }
     case 'embedding':
       return {
         provider: 'gemini', // UPDATED: Always use Gemini for embeddings

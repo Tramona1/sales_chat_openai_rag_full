@@ -8,7 +8,7 @@
 import { OpenAI } from 'openai';
 import { GoogleGenerativeAI, TaskType } from '@google/generative-ai';
 import { AI_SETTINGS } from './modelConfig';
-import { logError } from './logger';
+import { logError, logInfo, logDebug, logWarning, logApiCall } from './logger';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -150,103 +150,97 @@ function getTaskTypeEnum(taskType: string): TaskType {
  * Gemini implementation of the EmbeddingClient
  */
 class GeminiEmbeddingClient implements EmbeddingClient {
-  private readonly dimensions = 768; // Gemini embedding dimensions
-  private readonly embeddingModel = 'text-embedding-004';
-  
-  async embedText(text: string, taskType: string = 'RETRIEVAL_QUERY'): Promise<number[]> {
+  private modelName: string;
+  private client: GoogleGenerativeAI;
+  private batchSize: number = 100; // Gemini batch limit
+  private dimensions: number;
+
+  constructor(apiKey: string, modelName: string = AI_SETTINGS.embeddingModel, dimensions: number = AI_SETTINGS.embeddingDimension) {
+    if (!apiKey) throw new Error('Gemini API key is required for GeminiEmbeddingClient');
+    this.client = new GoogleGenerativeAI(apiKey);
+    this.modelName = modelName;
+    this.dimensions = dimensions;
+    logInfo(`[EmbeddingClient] Gemini client initialized with model: ${this.modelName}, dimensions: ${this.dimensions}`);
+  }
+
+  getProvider(): string { return 'gemini'; }
+  getDimensions(): number { return this.dimensions; }
+
+  async embedText(text: string, taskType: TaskType = TaskType.RETRIEVAL_DOCUMENT): Promise<number[]> {
+    // Ensure only minimal text cleaning is applied right before embedding
+    const cleanedText = text.replace(/\s+/g, ' ').trim();
+    if (!cleanedText) return [];
+
+    const model = this.client.getGenerativeModel({ model: this.modelName });
+    logDebug(`[EmbeddingClient] Requesting Gemini embedding for text (Task: ${taskType})`);
+    const startTime = Date.now();
     try {
-      // Clean and prepare text
-      const cleanedText = text.replace(/\\s+/g, ' ').trim();
-      
-      // Get the embedding model
-      const embeddingModel = genAI.getGenerativeModel({ model: this.embeddingModel });
-      
-      // Convert taskType string to TaskType enum
-      const taskTypeEnum = getTaskTypeEnum(taskType);
-      
-      // Generate embedding with proper taskType
-      const result = await embeddingModel.embedContent({
-        content: { parts: [{ text: cleanedText }], role: "user" },
-        taskType: taskTypeEnum
-      });
-      
-      // Return the embedding vector
-      return result.embedding.values;
+      const result = await model.embedContent({ content: { parts: [{ text: cleanedText }], role: "user" }, taskType });
+      const duration = Date.now() - startTime;
+      const embedding = result.embedding?.values || [];
+      if (embedding.length === 0) {
+        logWarning('[EmbeddingClient] Gemini embedding returned empty array for text.');
+        // Log as error since empty embedding is usually problematic
+        logApiCall('gemini', 'embedding', 'error', duration, 'Empty embedding returned', { model: this.modelName, taskType: TaskType[taskType] });
+      } else {
+        logInfo('[API Embedding] Gemini Embedding Success (Single Text)'); // Keep original log
+        logApiCall('gemini', 'embedding', 'success', duration, undefined, { model: this.modelName, taskType: TaskType[taskType], inputLength: cleanedText.length });
+      }
+      return embedding;
     } catch (error) {
-      logError('Error generating Gemini embedding', error);
-      
-      // In case of error, return a zero vector as fallback
-      console.error('Error generating Gemini embedding:', error);
-      return Array(this.dimensions).fill(0);
+      const duration = Date.now() - startTime;
+      logError('[API Embedding] Gemini Embedding Error (Single Text)', { error: error instanceof Error ? error.message : String(error) }); // Keep original log
+      logApiCall('gemini', 'embedding', 'error', duration, error instanceof Error ? error.message : String(error), { model: this.modelName, taskType: TaskType[taskType] });
+      throw new Error(`Gemini embedding failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  
-  async embedBatch(texts: string[], taskType: string = 'RETRIEVAL_DOCUMENT'): Promise<number[][]> {
-    try {
-      // Get the embedding model
-      const embeddingModel = genAI.getGenerativeModel({
-        model: this.embeddingModel
-      });
-      
-      // Clean and prepare texts
-      const cleanedTexts = texts.map(text => text.replace(/\\s+/g, ' ').trim());
-      
-      // Convert taskType string to TaskType enum
-      const taskTypeEnum = getTaskTypeEnum(taskType);
-      
-      // Create batch requests
-      const batchRequests = cleanedTexts.map(text => ({
-        content: { parts: [{ text }], role: "user" },
-        taskType: taskTypeEnum
-      }));
-      
-      // Use the proper batch API
-      const batchResults = await embeddingModel.batchEmbedContents({
-        requests: batchRequests
-      });
-      
-      // Extract embedding values
-      return batchResults.embeddings.map(embedding => embedding.values);
-    } catch (error) {
-      logError('Error in Gemini batch embedding', error);
-      
-      // If batch API fails, fall back to sequential processing
+
+  async embedBatch(texts: string[], taskType: TaskType = TaskType.RETRIEVAL_DOCUMENT): Promise<number[][]> {
+    // Ensure only minimal text cleaning is applied right before embedding
+    const cleanedTexts = texts.map(text => text.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    if (cleanedTexts.length === 0) return [];
+
+    const model = this.client.getGenerativeModel({ model: this.modelName });
+    const embeddings: number[][] = [];
+    logDebug(`[EmbeddingClient] Requesting Gemini embedding for batch of ${cleanedTexts.length} texts (Task: ${taskType})`);
+
+    for (let i = 0; i < cleanedTexts.length; i += this.batchSize) {
+      const batchTexts = cleanedTexts.slice(i, i + this.batchSize);
+      const requests = batchTexts.map(text => ({ content: { parts: [{ text }], role: "user" }, taskType }));
+      const startTime = Date.now();
       try {
-        console.warn('Batch embedding failed, falling back to sequential processing');
-        const embeddingModel = genAI.getGenerativeModel({
-          model: this.embeddingModel
-        });
-        
-        const results = await Promise.all(
-          texts.map(async (text) => {
-            try {
-              const cleanedText = text.replace(/\\s+/g, ' ').trim();
-              const result = await embeddingModel.embedContent({
-                content: { parts: [{ text: cleanedText }], role: "user" },
-                taskType: taskType === 'RETRIEVAL_QUERY' ? TaskType.RETRIEVAL_QUERY : TaskType.RETRIEVAL_DOCUMENT
-              });
-              return result.embedding.values;
-            } catch (err) {
-              console.error('Error in fallback embedding:', err);
-              return Array(this.dimensions).fill(0);
-            }
-          })
-        );
-        
-        return results;
-      } catch (fallbackError) {
-        console.error('Error in fallback embedding process:', fallbackError);
-        return texts.map(() => Array(this.dimensions).fill(0));
+        const result = await model.batchEmbedContents({ requests });
+        const duration = Date.now() - startTime;
+        const batchEmbeddings = result.embeddings?.map(e => e.values || []) || [];
+        embeddings.push(...batchEmbeddings);
+        logInfo(`[API Embedding] Gemini Embedding Success (Batch Index ${i / this.batchSize})`); // Keep original log
+        logApiCall('gemini', 'embedding', 'success', duration, undefined, { model: this.modelName, taskType: TaskType[taskType], batchSize: batchTexts.length });
+      } catch (batchError) {
+        const duration = Date.now() - startTime;
+        logWarning(`[EmbeddingClient] Gemini batch embedding failed at index ${i}. Trying sequential fallback...`, { error: batchError });
+        logError('[API Embedding] Gemini Embedding Error (Batch)', { error: batchError instanceof Error ? batchError.message : String(batchError) }); // Keep original log
+        // Log the BATCH error first
+        logApiCall('gemini', 'embedding', 'error', duration, batchError instanceof Error ? batchError.message : String(batchError), { model: this.modelName, taskType: TaskType[taskType], batchSize: batchTexts.length, note: 'Batch API call failed' });
+
+        // Fallback to sequential embedding for the failed batch
+        try {
+          for (const text of batchTexts) {
+            // Reuse embedText logic which includes its own logging (success or error)
+            const singleEmbedding = await this.embedText(text, taskType);
+            embeddings.push(singleEmbedding);
+          }
+          logInfo('[EmbeddingClient] Sequential embedding fallback successful for batch.')
+        } catch (sequentialError) {
+          logError('[EmbeddingClient] Sequential embedding fallback ALSO failed.', { error: sequentialError });
+           logError('[API Embedding] Gemini Embedding Error (Sequential Fallback)', { error: sequentialError instanceof Error ? sequentialError.message : String(sequentialError) }); // Keep original log
+           // Log the SEQUENTIAL error - embedText already logs its own attempt, so maybe just log the context here
+           logError('[EmbeddingClient] Error during sequential fallback attempt', { note: 'Individual errors logged by embedText' });
+          // Decide how to handle total failure - skip batch? throw error?
+          // For now, log and continue (results might be incomplete)
+        }
       }
     }
-  }
-  
-  getProvider(): string {
-    return 'gemini';
-  }
-  
-  getDimensions(): number {
-    return this.dimensions;
+    return embeddings;
   }
 }
 
@@ -257,7 +251,7 @@ class GeminiEmbeddingClient implements EmbeddingClient {
 export function getEmbeddingClient(): EmbeddingClient {
   // After migration, we exclusively use Gemini embeddings
   console.log('Using Gemini for embeddings (text-embedding-004)');
-  return new GeminiEmbeddingClient();
+  return new GeminiEmbeddingClient(geminiApiKey || '', AI_SETTINGS.embeddingModel, AI_SETTINGS.embeddingDimension);
 }
 
 /**
@@ -266,7 +260,7 @@ export function getEmbeddingClient(): EmbeddingClient {
  */
 export async function embedText(text: string, taskType: string = 'RETRIEVAL_QUERY'): Promise<number[]> {
   const client = getEmbeddingClient();
-  return client.embedText(text, taskType);
+  return client.embedText(text, getTaskTypeEnum(taskType));
 }
 
 /**
@@ -275,5 +269,5 @@ export async function embedText(text: string, taskType: string = 'RETRIEVAL_QUER
  */
 export async function embedBatch(texts: string[], taskType: string = 'RETRIEVAL_DOCUMENT'): Promise<number[][]> {
   const client = getEmbeddingClient();
-  return client.embedBatch(texts, taskType);
+  return client.embedBatch(texts, getTaskTypeEnum(taskType));
 } 

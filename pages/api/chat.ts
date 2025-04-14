@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { standardizeApiErrorResponse } from '../../utils/errorHandling';
-import { logInfo, logError, logDebug } from '../../utils/logger';
+import { logInfo, logError, logDebug, logApiCall } from '../../utils/logger';
 import { testSupabaseConnection } from '../../utils/supabaseClient';
 import { hybridSearch } from '@/utils/hybridSearch';
 
@@ -140,10 +140,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Prepare the system message with context and instructions
     let systemMessage = '';
     if (model.startsWith('gpt')) {
-      // OpenAI model system message
       systemMessage = constructOpenAISystemMessage(contextString, useAdmin, sourceList);
     } else {
-      // Gemini model system message
       systemMessage = constructGeminiSystemMessage(contextString, useAdmin, sourceList);
     }
 
@@ -216,28 +214,28 @@ function constructGeminiSystemMessage(contextString: string, useAdmin: boolean, 
 // Helper function to generate OpenAI completion
 async function generateOpenAICompletion(messages: any[], systemMessage: string, model: string) {
   logInfo(`Generating OpenAI completion with model: ${model}`);
-  
-  // Initialize OpenAI
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const formattedMessages = [ { role: 'system', content: systemMessage }, ...messages ];
+  const startTime = Date.now();
 
-  // Format the messages for OpenAI
-  const formattedMessages = [
-    { role: 'system', content: systemMessage },
-    ...messages
-  ];
-
-  // Call the OpenAI API
-  const response = await openai.chat.completions.create({
-    model,
-    messages: formattedMessages,
-    temperature: 0.5,
-    max_tokens: 1500,
-    n: 1,
-  });
-
-  return response.choices[0].message?.content || '';
+  try {
+    const response = await openai.chat.completions.create({
+      model,
+      messages: formattedMessages,
+      temperature: 0.5,
+      max_tokens: 1500,
+      n: 1,
+    });
+    const duration = Date.now() - startTime;
+    logInfo('[API Chat] OpenAI Chat Completion Success', { model }); 
+    logApiCall('openai', 'chat_completion', 'success', duration, undefined, { model });
+    return response.choices[0].message?.content || '';
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    logError('[API Chat] OpenAI Chat Completion Error', { model, error: error instanceof Error ? error.message : String(error) }); 
+    logApiCall('openai', 'chat_completion', 'error', duration, error instanceof Error ? error.message : String(error), { model });
+    throw error; // Re-throw the error for the main handler
+  }
 }
 
 // Process messages for Gemini
@@ -256,23 +254,29 @@ function processMessageForGemini(messages: any[], systemMessage: string): string
 // Helper function to generate Gemini completion
 async function generateGeminiCompletion(messages: any[], systemMessage: string) {
   logInfo('Generating Gemini completion');
-  
-  // Initialize Google AI
   const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || '');
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-
-  // Process and format the messages for Gemini
+  const modelName = "gemini-pro"; // Assuming this model is used
+  const model = genAI.getGenerativeModel({ model: modelName });
   const formattedMessages = processMessageForGemini(messages, systemMessage);
+  const startTime = Date.now();
 
-  // Call the Gemini API
-  const result = await model.generateContent({
-    contents: [{ role: 'user', parts: [{ text: formattedMessages }] }],
-    generationConfig: {
-      temperature: 0.5,
-      maxOutputTokens: 1500,
-    },
-  });
-
-  const response = result.response;
-  return response.text() || '';
+  try {
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: formattedMessages }] }],
+      generationConfig: {
+        temperature: 0.5,
+        maxOutputTokens: 1500,
+      },
+    });
+    const duration = Date.now() - startTime;
+    const response = result.response;
+    logInfo('[API Chat] Gemini Chat Completion Success'); 
+    logApiCall('gemini', 'chat_completion', 'success', duration, undefined, { model: modelName });
+    return response.text() || '';
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    logError('[API Chat] Gemini Chat Completion Error', { error: error instanceof Error ? error.message : String(error) }); 
+    logApiCall('gemini', 'chat_completion', 'error', duration, error instanceof Error ? error.message : String(error), { model: modelName });
+    throw error; // Re-throw the error for the main handler
+  }
 } 

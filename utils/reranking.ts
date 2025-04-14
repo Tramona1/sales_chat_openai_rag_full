@@ -6,9 +6,10 @@
  */
 
 import { generateStructuredGeminiResponse } from './geminiClient';
-import { logError, logWarning } from './logger';
+import { logError, logWarning, logInfo, logDebug, logApiCall } from './logger';
 import { getModelForTask } from './modelConfig';
 import { analyzeVisualQuery } from './queryAnalysis';
+import { recordMetric } from './performanceMonitoring';
 
 /**
  * Interface for visual content in multi-modal vector store items
@@ -282,6 +283,9 @@ export async function rerankWithGemini(
   //   queryHasVisualFocus = visualAnalysis.isVisualQuery;
   // }
 
+  const startTime = Date.now();
+  const modelName = 'gemini-2.0-flash'; // Define model used for logging
+
   try {
     // Prepare items for reranking
     const itemsToRerank: ItemToRerank[] = validResults.map((result, index) => {
@@ -392,11 +396,25 @@ JSON Output:`;
     };
 
     // Call Gemini API
-    const rerankerResponse = await generateStructuredGeminiResponse(
-      systemPrompt,
-      userPrompt,
-      responseSchema
-    );
+    logDebug('[API Reranking] Calling Gemini for reranking');
+    const apiCallStartTime = Date.now();
+    let rerankerResponse: any = null;
+    let apiError: any = null;
+
+    try {
+      rerankerResponse = await generateStructuredGeminiResponse(
+        systemPrompt,
+        userPrompt,
+        responseSchema
+      );
+      logInfo('[API Reranking] Gemini Reranking Success');
+      logApiCall('gemini', 'rerank', 'success', Date.now() - apiCallStartTime, undefined, { model: modelName });
+    } catch (error) {
+      apiError = error;
+      logError('[API Reranking] Gemini Reranking Error', { error: error instanceof Error ? error.message : String(error) });
+      logApiCall('gemini', 'rerank', 'error', Date.now() - apiCallStartTime, error instanceof Error ? error.message : String(error), { model: modelName });
+      throw error; // Re-throw to trigger fallback
+    }
     
     // Process rerankerResponse and map back to results
     // Check if the response has the expected 'ranked_items' key
@@ -442,10 +460,15 @@ JSON Output:`;
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
 
+    recordMetric('reranking', 'gemini', Date.now() - startTime, true, { resultCount: finalResults.length, inputCount: results.length });
     return finalResults;
       
   } catch (error) {
-    logError('Error during Gemini reranking:', error);
+    // Outer catch handles errors from API call or response processing
+    // API call logging is done in the inner try/catch
+    logError('[Reranker] Error during Gemini reranking:', error); // Keep outer log
+    recordMetric('reranking', 'gemini', Date.now() - startTime, false, { error: error instanceof Error ? error.message : String(error), inputCount: results.length });
+
     // Corrected call to applyFallbackReranking - ensure options object is passed
     return applyFallbackReranking(validResults, {
       query,

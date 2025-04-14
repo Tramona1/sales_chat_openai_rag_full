@@ -6,6 +6,8 @@
 // Set this to true to enable debug logs in production
 const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
+import { getSupabaseAdmin } from './supabaseClient'; // Add Supabase admin client import
+
 /**
  * Log an error message with optional error object
  * @param message The error message
@@ -107,5 +109,62 @@ export function logSuccess(message: string, data?: any): void {
     }
   } else if (data !== undefined) {
     console.log(data);
+  }
+}
+
+/**
+ * Logs an external API call attempt to the Supabase database.
+ * Handles errors during the database insert silently to avoid breaking the caller.
+ *
+ * @param service The external service called (e.g., 'gemini', 'openai').
+ * @param api_function The specific function/endpoint called (e.g., 'embedding', 'chat_completion', 'rerank').
+ * @param status 'success' or 'error'.
+ * @param duration_ms Optional duration of the call in milliseconds.
+ * @param error_message Optional error message if status is 'error'.
+ * @param metadata Optional additional JSON data (e.g., model used, input size).
+ */
+export async function logApiCall(
+  service: string,
+  api_function: string,
+  status: 'success' | 'error',
+  duration_ms?: number,
+  error_message?: string,
+  metadata?: Record<string, any>
+): Promise<void> {
+  try {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) {
+      logWarning('[logApiCall] Supabase client not available, skipping DB log.');
+      return;
+    }
+
+    const { error: insertError } = await supabase
+      .from('api_call_logs')
+      .insert({
+        service,
+        api_function,
+        status,
+        duration_ms,
+        error_message: error_message ? String(error_message).substring(0, 500) : undefined, // Limit error message length
+        metadata,
+      });
+
+    if (insertError) {
+      // Log the insert error but don't throw, as logging shouldn't break primary functionality
+      logError('[logApiCall] Failed to insert API call log into database', {
+        service,
+        api_function,
+        status,
+        dbError: insertError.message,
+      });
+    }
+  } catch (err) {
+    // Catch any unexpected errors during the logging process itself
+    logError('[logApiCall] Unexpected error during API call logging', {
+       error: err instanceof Error ? err.message : String(err),
+       service,
+       api_function,
+       status,
+    });
   }
 } 

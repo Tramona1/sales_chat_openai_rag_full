@@ -90,14 +90,30 @@ export async function listChatSessions(): Promise<Array<{
   companyName?: string;
 }>> {
   try {
-    const { data, error } = await getSupabaseAdmin()
+    const supabase = getSupabaseAdmin();
+    if (!supabase) {
+      logError('Failed to get Supabase admin client in listChatSessions');
+      return []; // Return empty array if no client
+    }
+    
+    const { data, error } = await supabase
       .from('chat_sessions')
       .select('id, title, session_type, updated_at, company_name')
       .order('updated_at', { ascending: false });
     
     if (error) {
       logError('Failed to list chat sessions', error);
-      throw error;
+      return []; // Return empty array on error
+    }
+    
+    // Ensure data is an array
+    if (!data || !Array.isArray(data)) {
+      logError('Supabase listChatSessions returned non-array data', { 
+        data, 
+        type: typeof data, 
+        isArray: Array.isArray(data) 
+      });
+      return []; // Return empty array if data is not an array
     }
     
     // Transform from Supabase snake_case to our camelCase
@@ -110,7 +126,7 @@ export async function listChatSessions(): Promise<Array<{
     }));
   } catch (error) {
     logError('Error listing chat sessions', error);
-    return [];
+    return []; // Always return an empty array on error
   }
 }
 
@@ -125,7 +141,13 @@ export async function getSessionsByType(sessionType: 'company' | 'general'): Pro
   companyName?: string;
 }>> {
   try {
-    const { data, error } = await getSupabaseAdmin()
+    const supabase = getSupabaseAdmin();
+    if (!supabase) {
+      logError('Failed to get Supabase admin client in getSessionsByType');
+      return []; // Return empty array if no client
+    }
+    
+    const { data, error } = await supabase
       .from('chat_sessions')
       .select('id, title, session_type, updated_at, company_name')
       .eq('session_type', sessionType)
@@ -133,7 +155,17 @@ export async function getSessionsByType(sessionType: 'company' | 'general'): Pro
     
     if (error) {
       logError(`Failed to get ${sessionType} sessions`, error);
-      throw error;
+      return []; // Return empty array on error
+    }
+    
+    // Ensure data is an array
+    if (!data || !Array.isArray(data)) {
+      logError(`Supabase getSessionsByType returned non-array data for ${sessionType}`, {
+        data,
+        type: typeof data,
+        isArray: Array.isArray(data)
+      });
+      return []; // Return empty array if data is not an array
     }
     
     // Transform from Supabase snake_case to our camelCase
@@ -146,7 +178,7 @@ export async function getSessionsByType(sessionType: 'company' | 'general'): Pro
     }));
   } catch (error) {
     logError(`Error getting ${sessionType} sessions`, error);
-    return [];
+    return []; // Always return an empty array on error
   }
 }
 

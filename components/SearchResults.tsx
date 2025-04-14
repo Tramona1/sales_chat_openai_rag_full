@@ -1,5 +1,5 @@
 import React from 'react';
-import { SearchResultTracker } from './enhanced-tracking';
+import SearchResultTracker from './enhanced-tracking/SearchResultTracker';
 import { trackSearch } from '@/utils/analytics';
 import { Tag } from '@/types/tags';
 

@@ -105,16 +105,35 @@ export async function listChatSessions(): Promise<SessionIndex['sessions']> {
   try {
     // If Supabase is enabled, use that
     if (useSupabase) {
-      return await supabaseChatStorage.listChatSessions();
+      const result = await supabaseChatStorage.listChatSessions();
+      if (!Array.isArray(result)) {
+        logError('[chatStorage] listChatSessions from Supabase did not return an array', { 
+          result, 
+          type: typeof result,
+          isArray: Array.isArray(result)
+        });
+        return []; // Always return an array
+      }
+      return result;
     }
     
     // Otherwise use file-based storage via API
     const baseUrl = getBaseUrl();
     const response = await axios.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=list`);
+    
+    // Validate response data is an array
+    if (!Array.isArray(response.data)) {
+      logError('[chatStorage] Storage API did not return an array for listChatSessions', {
+        responseData: response.data,
+        type: typeof response.data
+      });
+      return []; // Always return an array
+    }
+    
     return response.data;
   } catch (error) {
     logError('Failed to list chat sessions', error);
-    return [];
+    return []; // Always return an empty array on error
   }
 }
 
@@ -150,8 +169,10 @@ export async function searchChatSessions(query: string): Promise<SessionIndex['s
     
     // Otherwise use file-based storage via API
     const baseUrl = getBaseUrl();
-    const response = await axios.get(`${baseUrl}/api/admin/chat-sessions?search=${encodeURIComponent(query)}`);
-    return response.data;
+    // Call the storage operations endpoint for searching
+    const response = await axios.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=search&query=${encodeURIComponent(query)}`);
+    // Assuming the storage endpoint returns the sessions array directly or nested under 'sessions'
+    return response.data.sessions || response.data || []; 
   } catch (error) {
     logError('Failed to search chat sessions', error);
     return [];
@@ -170,8 +191,10 @@ export async function searchChatSessionsByContent(query: string): Promise<Sessio
     
     // Otherwise use file-based storage via API
     const baseUrl = getBaseUrl();
-    const response = await axios.get(`${baseUrl}/api/admin/chat-sessions?content=${encodeURIComponent(query)}`);
-    return response.data;
+    // Call the storage operations endpoint for content searching
+    const response = await axios.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=searchContent&query=${encodeURIComponent(query)}`);
+    // Assuming the storage endpoint returns the sessions array directly or nested under 'sessions'
+    return response.data.sessions || response.data || [];
   } catch (error) {
     logError('Failed to search chat sessions by content', error);
     return [];

@@ -20,6 +20,14 @@ function getSupabaseConfig() {
   const anonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
   const serviceKey = process.env.SUPABASE_SERVICE_KEY || '';
   
+  // <<< TEMPORARY DIAGNOSTIC LOG >>>
+  console.log('*** [DEBUG] Reading Supabase Config: ***');
+  console.log(` - NEXT_PUBLIC_SUPABASE_URL: ${process.env.NEXT_PUBLIC_SUPABASE_URL}`);
+  console.log(` - NEXT_PUBLIC_SUPABASE_ANON_KEY: ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`);
+  console.log(` - SUPABASE_SERVICE_KEY: ${process.env.SUPABASE_SERVICE_KEY}`);
+  console.log('*** --- ***');
+  // <<< END TEMPORARY DIAGNOSTIC LOG >>>
+  
   // Validate that environment variables are set
   if (!url || !anonKey || !serviceKey) {
     const missingVars = [];
@@ -62,20 +70,31 @@ export function createPublicClient(): SupabaseClient {
  * Creates a Supabase client using the service role key.
  * This has admin privileges and should only be used for server-side operations.
  * 
- * @returns SupabaseClient instance with service role key
+ * @returns SupabaseClient instance with service role key, or null if creation fails
  */
-export function createServiceClient(): SupabaseClient {
-  const { url, serviceKey } = getSupabaseConfig();
-  if (!url || !serviceKey) {
-    throw new Error('Missing Supabase configuration for service client');
+export function createServiceClient(): SupabaseClient | null {
+  try {
+    const { url, serviceKey } = getSupabaseConfig();
+    if (!url || !serviceKey) {
+      logError('Missing Supabase configuration for service client');
+      // Instead of throwing, log and return null
+      return null;
+    }
+    
+    // Add try...catch around the actual client creation
+    const client = createClient(url, serviceKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+    logDebug('[createServiceClient] Client created successfully.');
+    return client;
+
+  } catch (error) {
+    logError('[createServiceClient] Error during Supabase client creation', error);
+    return null; // Return null on error
   }
-  
-  return createClient(url, serviceKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
 }
 
 /**
@@ -127,6 +146,12 @@ export async function testSupabaseConnection(): Promise<boolean> {
     
     const supabase = createServiceClient();
     
+    // Check if client creation failed
+    if (!supabase) {
+      logError('Failed to create Supabase service client for connection test.');
+      return false;
+    }
+    
     // Test connection by querying a simple system table
     const { data, error } = await supabase.from('documents').select('id').limit(1);
     
@@ -149,7 +174,8 @@ let _supabase: SupabaseClient | null = null;
 let _supabaseAdmin: SupabaseClient | null = null;
 
 // Getter for service client
-export function getSupabase(): SupabaseClient {
+// Returns SupabaseClient or null if creation failed
+export function getSupabase(): SupabaseClient | null {
   if (!_supabase) {
     _supabase = createServiceClient();
   }

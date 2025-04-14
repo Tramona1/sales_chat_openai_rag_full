@@ -221,11 +221,17 @@ Describes how Supabase services (Database, `pgvector`, Auth, Storage, RPC) are u
     npm install
     ```
 
-3.  Configure environment variables by copying `.env.example` to `.env.local`:
+3.  Configure environment variables by copying `.env.example` to `.env.local` (if `.env.local` doesn't exist):
     ```bash
     cp .env.example .env.local
     ```
-    Then edit `.env.local` with your Supabase URL/Key and relevant AI provider API keys (OpenAI, Gemini, Perplexity).
+    Then edit `.env.local` with your required API keys and Supabase credentials:
+    - `OPENAI_API_KEY`: Your OpenAI API key (required if using OpenAI models).
+    - `GOOGLE_AI_API_KEY`: Your Google AI API key (required if using Gemini models).
+    - `PERPLEXITY_API_KEY`: Your Perplexity API key (optional, for company research feature).
+    - `NEXT_PUBLIC_SUPABASE_URL`: Your Supabase project URL (found in Project Settings > API). **Must** start with `NEXT_PUBLIC_`.
+    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase project `anon` key (found in Project Settings > API). **Must** start with `NEXT_PUBLIC_`.
+    - `SUPABASE_SERVICE_KEY`: Your Supabase project `service_role` key (found in Project Settings > API). **Do NOT** prefix with `NEXT_PUBLIC_`. This key must be kept secret.
 
 4.  Run the development server:
     ```bash

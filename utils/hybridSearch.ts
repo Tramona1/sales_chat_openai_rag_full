@@ -442,7 +442,12 @@ export async function hybridSearch(
   try {
     // Generate query embedding
     logDebug('[hybridSearch] Generating embedding for query');
-    const queryEmbedding = await embeddingClient.embedText(query);
+    
+    // Clean query with the exact same approach used in embeddingClient.ts
+    const cleanedQuery = query.replace(/\s+/g, ' ').trim();
+    logDebug(`[hybridSearch] Original query: "${query}", Cleaned query: "${cleanedQuery}"`);
+    
+    const queryEmbedding = await embeddingClient.embedText(cleanedQuery);
     logDebug(`[hybridSearch] Embedding generated with ${queryEmbedding?.length ?? 0} dimensions`);
 
     // Prepare options and weights with improved defaults
