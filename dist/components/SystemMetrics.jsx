@@ -1,46 +1,10 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = SystemMetrics;
-const react_1 = __importStar(require("react"));
-const recharts_1 = require("recharts");
-const lucide_react_1 = require("lucide-react");
-function SystemMetrics({ refreshInterval = 30000 }) {
-    const [metrics, setMetrics] = (0, react_1.useState)(null);
-    const [loading, setLoading] = (0, react_1.useState)(true);
-    const [error, setError] = (0, react_1.useState)(null);
+import React, { useState, useEffect } from 'react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { Database, Archive, MessageSquare, Clock, Activity } from 'lucide-react';
+export default function SystemMetrics({ refreshInterval = 30000 }) {
+    const [metrics, setMetrics] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
     const fetchMetrics = async () => {
         try {
             setLoading(true);
@@ -60,7 +24,7 @@ function SystemMetrics({ refreshInterval = 30000 }) {
             setLoading(false);
         }
     };
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         fetchMetrics();
         // Set up regular polling if refreshInterval is provided
         if (refreshInterval > 0) {
@@ -99,6 +63,11 @@ function SystemMetrics({ refreshInterval = 30000 }) {
         { name: 'Last 24h', value: metrics.queries.last24Hours },
         { name: 'Last 7d', value: metrics.queries.last7Days },
     ] : [];
+    // Prepare data for document chart
+    const documentChartData = metrics ? [
+        { name: 'Documents', value: metrics.vectorStore.documents },
+        { name: 'Chunks', value: metrics.vectorStore.chunks },
+    ] : [];
     if (loading && !metrics) {
         return (<div className="p-6 bg-white rounded-lg shadow">
         <div className="animate-pulse flex space-x-4">
@@ -125,12 +94,12 @@ function SystemMetrics({ refreshInterval = 30000 }) {
     return (<div className="bg-white rounded-lg shadow overflow-hidden">
       <div className="p-4 border-b border-gray-100 bg-gray-50">
         <h2 className="font-medium text-gray-800 flex items-center">
-          <lucide_react_1.Database className="h-5 w-5 mr-2 text-primary-600"/>
+          <Database className="h-5 w-5 mr-2 text-primary-600"/>
           System Metrics
           <span className="ml-auto text-xs text-gray-500">
             Updated: {metrics ? formatDate(metrics.lastUpdated) : 'N/A'}
             <button onClick={fetchMetrics} className="ml-2 p-1 rounded hover:bg-gray-200 transition" title="Refresh metrics">
-              <lucide_react_1.Clock className="h-3 w-3"/>
+              <Clock className="h-3 w-3"/>
             </button>
           </span>
         </h2>
@@ -140,32 +109,39 @@ function SystemMetrics({ refreshInterval = 30000 }) {
           {/* Vector Store Card */}
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
             <div className="flex items-center mb-2">
-              <lucide_react_1.Archive className="h-5 w-5 text-blue-600 mr-2"/>
+              <Archive className="h-5 w-5 text-blue-600 mr-2"/>
               <h3 className="font-medium text-gray-700">Vector Store</h3>
             </div>
-            <div className="mt-4 text-center">
-              <div className="text-3xl font-bold text-blue-600">
-                {metrics.vectorStore.totalItems.toLocaleString()}
-              </div>
-              <div className="text-sm text-gray-500 mt-1">Total Items</div>
+            <div className="h-32">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={documentChartData}>
+                  <XAxis dataKey="name"/>
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#3B82F6"/>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-center text-sm text-gray-500 mt-2">
+              {metrics.vectorStore.totalItems.toLocaleString()} total items
             </div>
           </div>
 
           {/* Cache Stats Card */}
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
             <div className="flex items-center mb-2">
-              <lucide_react_1.Database className="h-5 w-5 text-green-600 mr-2"/>
+              <Database className="h-5 w-5 text-green-600 mr-2"/>
               <h3 className="font-medium text-gray-700">Cache</h3>
             </div>
             <div className="h-32">
-              <recharts_1.ResponsiveContainer width="100%" height="100%">
-                <recharts_1.BarChart data={cacheChartData}>
-                  <recharts_1.XAxis dataKey="name"/>
-                  <recharts_1.YAxis />
-                  <recharts_1.Tooltip />
-                  <recharts_1.Bar dataKey="value" fill="#10B981"/>
-                </recharts_1.BarChart>
-              </recharts_1.ResponsiveContainer>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={cacheChartData}>
+                  <XAxis dataKey="name"/>
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#10B981"/>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
             <div className="text-center text-sm text-gray-500 mt-2">
               {metrics.caching.size} total entries
@@ -175,7 +151,7 @@ function SystemMetrics({ refreshInterval = 30000 }) {
           {/* Feedback Data Card */}
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
             <div className="flex items-center mb-2">
-              <lucide_react_1.MessageSquare className="h-5 w-5 text-purple-600 mr-2"/>
+              <MessageSquare className="h-5 w-5 text-purple-600 mr-2"/>
               <h3 className="font-medium text-gray-700">Feedback</h3>
             </div>
             <div className="mt-4 text-center">
@@ -193,22 +169,25 @@ function SystemMetrics({ refreshInterval = 30000 }) {
           {/* Query Stats Card */}
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
             <div className="flex items-center mb-2">
-              <lucide_react_1.MessageSquare className="h-5 w-5 text-amber-600 mr-2"/>
+              <Activity className="h-5 w-5 text-amber-600 mr-2"/>
               <h3 className="font-medium text-gray-700">Queries</h3>
             </div>
             <div className="h-32">
-              <recharts_1.ResponsiveContainer width="100%" height="100%">
-                <recharts_1.BarChart data={queryChartData}>
-                  <recharts_1.XAxis dataKey="name"/>
-                  <recharts_1.YAxis />
-                  <recharts_1.Tooltip />
-                  <recharts_1.Bar dataKey="value" fill="#F59E0B"/>
-                </recharts_1.BarChart>
-              </recharts_1.ResponsiveContainer>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={queryChartData}>
+                  <XAxis dataKey="name"/>
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#F59E0B"/>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
             <div className="text-center text-sm text-gray-500 mt-2">
               {metrics.queries.last24Hours} queries in last 24 hours
             </div>
+            {metrics.performance && (<div className="text-xs text-gray-500 mt-1">
+                Avg. Response: {metrics.performance.averageQueryTime.toFixed(2)}ms
+              </div>)}
           </div>
         </div>)}
     </div>);

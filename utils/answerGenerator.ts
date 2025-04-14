@@ -4,8 +4,7 @@
  * With fallback to Gemini for handling large contexts
  */
 
-import { logError } from './logger';
-import { generateChatCompletion } from './openaiClient';
+import { logError, logInfo, logWarning } from './logger';
 import { generateGeminiChatCompletion } from './geminiClient';
 import { AI_SETTINGS } from './modelConfig';
 
@@ -65,10 +64,12 @@ async function handleConversationalQuery(
   query: string, 
   conversationHistory?: string | Array<{role: string; content: string}>
 ): Promise<string> {
-  const systemPrompt = `You are a helpful, friendly, and professional AI assistant for a sales team of Workstream, a company that provides HR, Payroll, and Hiring solutions for the hourly workforce.
-You represent the company and should be helpful, friendly and concise.
-You are part of the sales department and your job is to help the sales team with information.
-When asked about specific details about the company, products, customers, etc., make sure when summarizing that you include only the most relevant information.`;
+  const systemPrompt = `
+You are a helpful, professional AI assistant supporting the sales team at Workstream, a company providing HR, Payroll, and Hiring solutions for the hourly workforce.
+
+Your job is to assist with any sales-related questions—ranging from product features, pricing, onboarding, customer types, or processes—based on our internal knowledge.
+
+Stay concise, helpful, and accurate. Use a tone that reflects Workstream's brand: confident, supportive, and human.`;
 
   // Process conversation history to a string format if provided
   const historyText = conversationHistory ? formatConversationHistory(conversationHistory) : '';
@@ -79,9 +80,9 @@ When asked about specific details about the company, products, customers, etc., 
   }
   
   try {
-    return await generateChatCompletion(systemPrompt, userPrompt, 'gpt-3.5-turbo');
+    return await generateGeminiChatCompletion(systemPrompt, userPrompt);
   } catch (error) {
-    logError('Error generating conversational response', error);
+    logError('Error generating conversational response with Gemini', error);
     return "Hello! I'm here to help with your sales questions. What would you like to know about our company, products, or services?";
   }
 }
@@ -94,18 +95,16 @@ async function summarizeContext(query: string, context: string): Promise<string>
   try {
     console.log(`Context too large (${estimateTokenCount(context)} tokens), summarizing with Gemini...`);
     
-    const systemPrompt = `You are an expert summarizer for Workstream, an HR, Payroll, and Hiring platform for the hourly workforce. Your task is to condense the provided text to answer a specific question accurately.
-IMPORTANT: When summarizing company-specific information about Workstream:
-1. Make sure you are including all the information that is relevant to the question
-2. Preserve specific names, numbers, dates, and technical details exactly as they appear
-3. Do not generalize or substitute real company information
-4. Be careful, and make sure you are including all the information that is relevant to the question
+    const systemPrompt = `
+You are a summarization expert for Workstream, an HR, Payroll, and Hiring platform for the hourly workforce.
 
-For investor-related questions, be sure to include:
-- Names of all investors and investment firms mentioned
-- Funding rounds and amounts
-- Dates of investments
-- Any quotes from investors`;
+Your job is to condense the provided context into a clean, helpful summary that allows someone to accurately answer a user's question.
+
+Always:
+- Focus only on what's relevant to the question.
+- Avoid speculation. Prioritize factual information.
+- Maintain Workstream's tone: confident, concise, and clear.
+- Speak from our perspective using "we", "our", or "us" where appropriate.`;
 
     const userPrompt = `Question: ${query}
     
@@ -114,7 +113,6 @@ Here is the content to summarize while keeping information relevant to the quest
 ${context}
 
 Provide a detailed summary that maintains all key information and would allow someone to fully answer the question without needing the original text. 
-For investor questions, include all investor names, funding rounds, and investment details exactly as they appear in the text.
 Remember to maintain the company's voice - when using "our," "we," or "us," speak from Workstream's perspective.`;
 
     const summary = await generateGeminiChatCompletion(systemPrompt, userPrompt);
@@ -172,8 +170,6 @@ ${options.includeSourceCitations ? 'If appropriate, you may include source citat
     userPrompt = `Question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
   }
   
-  // Import the Gemini client
-  const { generateGeminiChatCompletion } = await import('./geminiClient');
   return await generateGeminiChatCompletion(systemPrompt, userPrompt);
 }
 
@@ -189,6 +185,7 @@ export async function generateAnswer(
   query: string, 
   searchResults: SearchResultItem[],
   options: {
+    systemPrompt?: string;
     includeSourceCitations?: boolean;
     maxSourcesInAnswer?: number;
     model?: string;
@@ -200,7 +197,23 @@ export async function generateAnswer(
     // Only handle basic greetings conversationally
     // Most questions should try to search the knowledge base
     if (isBasicConversational(query)) {
-      return await handleConversationalQuery(query, options.conversationHistory);
+      // Use Gemini for conversational query as well for consistency
+      try {
+        logInfo('Handling basic conversational query with Gemini...');
+        const systemPrompt = options.systemPrompt || `You are a helpful, friendly, and professional AI assistant for a sales team of Workstream, a company that provides HR, Payroll, and Hiring solutions for the hourly workforce.
+You represent the company and should be helpful, friendly and concise.
+You are part of the sales department and your job is to help the sales team with information.
+When asked about specific details about the company, products, customers, etc., make sure when summarizing that you include only the most relevant information.`;
+        const historyText = options.conversationHistory ? formatConversationHistory(options.conversationHistory) : '';
+        let userPrompt = query;
+        if (historyText) {
+          userPrompt = `Previous conversation:\n${historyText}\n\nCurrent message: ${query}`;
+        }
+        return await generateGeminiChatCompletion(systemPrompt, userPrompt);
+      } catch (convError) {
+        logError('Error generating conversational response with Gemini', convError);
+        return "Hello! I'm here to help with your sales questions. What would you like to know about our company, products, or services?";
+      }
     }
     
     // Use options or defaults
@@ -227,20 +240,23 @@ export async function generateAnswer(
         const isCustomerQuery = lowerQuery.includes('customer') || lowerQuery.includes('client');
         const isProductQuery = lowerQuery.includes('product') || lowerQuery.includes('feature');
         
-        let fallbackPrompt = `You are a knowledgeable sales representative for Workstream, an HR, Payroll, and Hiring platform for the hourly workforce.
+        let fallbackPrompt = `
+You are a knowledgeable AI assistant for Workstream, a platform offering HR, Payroll, and Hiring solutions.
 
-The user asked: "${query}"
+The user has asked a question, but we don't have specific knowledge base results. Your job is to:
+1. Acknowledge the limitation.
+2. Provide general, accurate information we do know (if relevant).
+3. Invite clarification or suggest related areas we can help with.
 
-Unfortunately, we don't have specific information in our knowledge base to fully answer this particular question. However, please provide:
-1. A helpful response that acknowledges the specific limitation
-2. Share general information we do know about the topic (if available)
-3. Offer to help with related information we might have
+Speak clearly and professionally. Never guess or hallucinate details. Represent Workstream using "we" or "our" when appropriate.`;
 
-`;
+        let fallbackPromptBase = `${fallbackPrompt}
+
+The user asked: "${query}"`;
 
         // Add topic-specific context to help generate a better fallback response
         if (isInvestorQuery) {
-          fallbackPrompt += `
+          fallbackPromptBase += `
 For investor-related questions:
 - We know Workstream is backed by several investors including GGV Capital, Bond, Coatue, Basis Set Ventures, CRV, and Peterson Ventures
 - We've had funding rounds including a Series A and Series B
@@ -250,7 +266,7 @@ Please incorporate this general investor information while clearly stating that 
         }
         
         if (isCustomerQuery) {
-          fallbackPrompt += `
+          fallbackPromptBase += `
 For customer-related questions:
 - Workstream serves hourly workforce businesses across various industries
 - We have case studies and customer testimonials on our website
@@ -259,7 +275,7 @@ Please incorporate this general customer information while clearly stating that 
         }
         
         if (isProductQuery) {
-          fallbackPrompt += `
+          fallbackPromptBase += `
 For product-related questions:
 - Workstream offers HR, Payroll, and Hiring solutions for the hourly workforce
 - Our platform includes features for recruitment, onboarding, and workforce management
@@ -276,136 +292,84 @@ Please incorporate this general product information while clearly stating that y
           }
         }
 
-        return await generateChatCompletion(fallbackPrompt, userPrompt, model);
-      }
-      
-      // For truly general questions, use a more helpful response
-      const fallbackSystemPrompt = `You are a helpful AI assistant for the sales team of our company.
-You should be friendly, concise, and helpful.
-If the question seems to be asking for specific company information, products, pricing, or sales data, explain that you don't have that specific information in your knowledge base yet, but you'd be happy to help with any other information about our products or services.
-Always maintain the perspective that you are part of the company's sales team.`;
-
-      // For general fallback system prompt 
-      let userPrompt = query;
-      if (options.conversationHistory) {
-        const formattedHistory = formatConversationHistory(options.conversationHistory);
-        if (formattedHistory) {
-          userPrompt = `Previous conversation:\n${formattedHistory}\n\nCurrent question: ${query}`;
+        try {
+          logWarning('No search results found, generating fallback message with Gemini...');
+          return await generateGeminiChatCompletion(fallbackPromptBase, `User query: ${query}`);
+        } catch (fallbackError) {
+          logError('Error generating fallback message with Gemini', fallbackError);
+          return "I couldn't find specific information on that topic in our knowledge base. Is there something else I can help you find?";
         }
-      }
-
-      return await generateChatCompletion(fallbackSystemPrompt, userPrompt, model);
-    }
-    
-    // Format the context for the LLM when we have relevant documents
-    let contextText = searchResults
-      .slice(0, maxSourcesInAnswer)
-      .map((item, index) => {
-        let source = '';
-        if (item.source) {
-          source = `Source: ${item.source}`;
-        }
-        
-        return `[${index + 1}] ${item.text.trim()}\n${source}`;
-      })
-      .join('\n\n');
-      
-    // Estimate token count of context and conversation history
-    // Handle conversation history that might be a string or array of message objects
-    let historyText = '';
-    if (options.conversationHistory) {
-      historyText = formatConversationHistory(options.conversationHistory);
-    }
-    
-    const promptOverhead = estimateTokenCount(`Question: ${query}\n\nContext:\n\n\nAnswer:`);
-    const historyTokens = estimateTokenCount(historyText);
-    const contextTokens = estimateTokenCount(contextText);
-    const totalEstimatedTokens = promptOverhead + historyTokens + contextTokens;
-    
-    console.log(`Estimated tokens: ${totalEstimatedTokens} (Context: ${contextTokens}, History: ${historyTokens}, Overhead: ${promptOverhead})`);
-    
-    // Import model config to determine correct provider
-    const modelConfig = await import('./modelConfig');
-    const { provider } = await modelConfig.getModelForTask(undefined, 'chat');
-    
-    // Determine if we should use Gemini directly due to large context
-    const useGeminiDirectly = totalEstimatedTokens > MAX_TOKENS_OPENAI || provider === 'gemini';
-    
-    // If total is too large, we need to summarize the context
-    if (totalEstimatedTokens > MAX_CONTEXT_LENGTH) {
-      console.log(`Context too large (${totalEstimatedTokens} tokens), applying summarization`);
-      contextText = await summarizeContext(query, contextText);
-    }
-    
-    if (useGeminiDirectly) {
-      console.log(`Using Gemini for answer generation (${provider === 'gemini' ? 'provider is Gemini' : 'large context'})`);
-      return await generateGeminiAnswer(query, contextText, {
-        includeSourceCitations,
-        conversationHistory: options.conversationHistory
-      });
-    }
-    
-    // Proceed with OpenAI if context is manageable and provider is OpenAI
-    console.log(`Using OpenAI (${model}) for answer generation with ${totalEstimatedTokens} estimated tokens`);
-    
-    // Create system prompt for knowledge-based questions
-    const systemPrompt = `You are a knowledgeable AI assistant for our company's sales team.
-You have access to our company's knowledge base and should use that information to answer questions.
-
-IMPORTANT: You represent our company. When answering questions about "our company," "our products," "our services," or referring to "we" or "us," you should speak from the perspective of a company representative.
-
-Answer the user's question using the provided context. The context contains information from our company's knowledge base.
-
-If the context doesn't contain enough information to fully answer the question, acknowledge that you don't have complete information on that specific topic in your knowledge base, but try to be helpful with what you do know.
-
-Be conversational and professional in your response, as if you're having a discussion with a colleague.
-${includeSourceCitations ? 'If appropriate, you may include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}`;
-
-    // For knowledge-based questions
-    let userPrompt;
-    if (options.conversationHistory) {
-      const formattedHistory = formatConversationHistory(options.conversationHistory);
-      if (formattedHistory) {
-        userPrompt = `Previous conversation:\n${formattedHistory}\n\nCurrent question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
       } else {
-        userPrompt = `Question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
+        // Standard fallback for non-company specific queries with no results
+        return "I couldn't find information related to your query in the knowledge base.";
       }
-    } else {
-      userPrompt = `Question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
     }
     
-    // Set a timeout
-    const timeoutPromise = new Promise<string>((resolve) => {
-      setTimeout(() => {
-        resolve("I apologize, but it's taking me longer than expected to process your request. Please try again or rephrase your question.");
-      }, options.timeout || 15000);
-    });
-    
-    try {
-      // Generate the answer using the LLM
-      const answerPromise = generateChatCompletion(systemPrompt, userPrompt, model);
-      return await Promise.race([answerPromise, timeoutPromise]);
-    } catch (error) {
-      // Check if error is token limit related
-      const errorStr = String(error);
-      if (errorStr.includes('context_length_exceeded') || 
-          errorStr.includes('maximum context length') || 
-          errorStr.includes('Request too large') || 
-          errorStr.includes('rate_limit_exceeded')) {
-        
-        console.log('Attempting with fallback model Gemini due to token limits...');
-        return await generateGeminiAnswer(query, contextText, {
-          includeSourceCitations,
-          conversationHistory: options.conversationHistory
-        });
+    // Prepare context from search results
+    let contextText = "";
+    const sources: string[] = [];
+    searchResults.slice(0, maxSourcesInAnswer).forEach((result, index) => {
+      contextText += `Source [${index + 1}]: ${result.source || 'Unknown'}\nContent: ${result.text}\n\n`;
+      if (result.source) {
+        sources.push(result.source);
       }
-      
-      // Re-throw other errors
-      throw error;
+    });
+    contextText = contextText.trim();
+
+    // Estimate token count for the combined query + context
+    const promptEstimate = estimateTokenCount(query + contextText);
+    logInfo(`Estimated prompt tokens (query + context): ${promptEstimate}`);
+
+    // Check if context needs summarization (Use a Gemini-friendly limit, e.g., ~30k tokens for Flash 1.5 context window, be conservative)
+    // Let's use a conservative limit like 28000 tokens to leave space for query, prompt, and response
+    const MAX_GEMINI_CONTEXT_TOKENS = 28000; 
+    if (promptEstimate > MAX_GEMINI_CONTEXT_TOKENS) {
+      logWarning(`Context estimate (${promptEstimate} tokens) exceeds limit (${MAX_GEMINI_CONTEXT_TOKENS}). Summarizing...`);
+      contextText = await summarizeContext(query, contextText);
+      logInfo(`Summarized context token estimate: ${estimateTokenCount(contextText)}`);
+    }
+
+    // Prepare prompts for the final answer generation using Gemini
+    const baseSystemPrompt = options.systemPrompt || AI_SETTINGS.systemPrompt;
+    const modifiedSystemPrompt = `${baseSystemPrompt}
+    
+ADDITIONAL INSTRUCTIONS:
+- Your primary goal is to answer the user's question DIRECTLY using ONLY the provided context.
+- Pay close attention to specific details like names (people, companies, investors), numbers (funding amounts, dates, statistics), lists, and features.
+- If the query asks "Who are our investors?" or about funding, and the context mentions specific investor names (e.g., GGV Capital, Bond, Coatue) or funding rounds/amounts (e.g., "raised $60M", "Series B round"), you MUST include these specific details in your answer.
+- Do not simply state that Workstream has investors if the context provides names or amounts. List them.
+- If the context lacks the specific detail requested, THEN state that the information isn't available in the provided context.
+- DO NOT summarize generally when specific details answering the question are present in the context. Extract and present those details.`;
+
+    const historyText = options.conversationHistory ? formatConversationHistory(options.conversationHistory) : '';
+    
+    let userPrompt;
+    const baseInstruction = "Answer the question based only on the provided context. If listing items (like names, features, steps, etc.), include all specific examples found in the context."; // Made slightly more general
+    if (historyText) {
+      userPrompt = `Previous conversation:\n${historyText}\n\nCurrent question: ${query}\n\nUse the following context to answer the question:\n${contextText}\n\n${baseInstruction}\nAnswer:`;
+    } else {
+      userPrompt = `Question: ${query}\n\nUse the following context to answer the question:\n${contextText}\n\n${baseInstruction}\nAnswer:`;
+    }
+
+    // *** ADD LOGGING HERE ***
+    logInfo("[AnswerGenerator] Generating answer with Gemini using the following prompts:");
+    logInfo("[AnswerGenerator] System Prompt:", modifiedSystemPrompt);
+    // Log only the start and end of user prompt for brevity if it's very long
+    const userPromptPreview = userPrompt.length > 1000 ? `${userPrompt.substring(0, 500)}\n... (truncated) ...\n${userPrompt.substring(userPrompt.length - 500)}` : userPrompt;
+    logInfo("[AnswerGenerator] User Prompt (Preview):", userPromptPreview);
+    // *** END ADD LOGGING HERE ***
+
+    // Use Gemini for the final answer generation
+    logInfo(`Generating final answer with Gemini model: ${model}...`);
+    try {
+      return await generateGeminiChatCompletion(modifiedSystemPrompt, userPrompt);
+    } catch (generationError) {
+      logError('Error generating final answer with Gemini', generationError);
+      return "I apologize, but I encountered an issue generating a final answer. Please try rephrasing your question or try again later.";
     }
   } catch (error) {
-    logError('Error generating answer', error);
-    return 'Sorry, I encountered an error while processing your request. Please try again.';
+    logError('Error in generateAnswer function', error);
+    return "An unexpected error occurred while processing your request.";
   }
 }
 
@@ -520,28 +484,21 @@ export async function generateAnswerWithVisualContext(
                               lowerQuery.includes('illustration') ||
                               lowerQuery.includes('screenshot');
         
-        let fallbackPrompt = `You are a knowledgeable sales representative for Workstream, an HR, Payroll, and Hiring platform for the hourly workforce.
+        let fallbackPromptBase = `
+You are a knowledgeable AI assistant for Workstream, a platform offering HR, Payroll, and Hiring solutions.
 
-The user asked: "${query}"
+The user has asked a question, but we don't have specific knowledge base results. Your job is to:
+1. Acknowledge the limitation.
+2. Provide general, accurate information we do know (if relevant).
+3. Invite clarification or suggest related areas we can help with.
 
-Unfortunately, we don't have specific information in our knowledge base to fully answer this particular question. However, please provide:
-1. A helpful response that acknowledges the specific limitation
-2. Share general information we do know about the topic (if available)
-3. Offer to help with related information we might have
-`;
+Speak clearly and professionally. Never guess or hallucinate details. Represent Workstream using "we" or "our" when appropriate.`;
+
+        let fallbackPrompt = `${fallbackPromptBase}
+
+The user asked: "${query}"`;
         
-        // Add visual-specific context if needed
-        if (isVisualQuery) {
-          fallbackPrompt += `
-For visual-related questions:
-- We have various charts, diagrams, and images in our documentation
-- We can provide visual materials on request for specific topics
-- Mention that you don't have the specific visual content they're looking for but could help them find related information
-
-Please acknowledge that you don't have the specific visual content they're asking about.`;
-        }
-        
-        // Add other context types from the original function...
+        // Add topic-specific context to help generate a better fallback response
         if (isInvestorQuery) {
           fallbackPrompt += `
 For investor-related questions:
@@ -579,14 +536,19 @@ Please incorporate this general product information while clearly stating that y
           }
         }
 
-        return await generateChatCompletion(fallbackPrompt, userPrompt, model);
+        return await generateGeminiChatCompletion(fallbackPrompt, userPrompt);
       }
       
       // For truly general questions, use a more helpful response
-      const fallbackSystemPrompt = `You are a helpful AI assistant for the sales team of our company.
-You should be friendly, concise, and helpful.
-If the question seems to be asking for specific company information, products, pricing, or sales data, explain that you don't have that specific information in your knowledge base yet, but you'd be happy to help with any other information about our products or services.
-Always maintain the perspective that you are part of the company's sales team.`;
+      const fallbackSystemPrompt = `
+You are a knowledgeable AI assistant for Workstream, a platform offering HR, Payroll, and Hiring solutions.
+
+The user has asked a question, but we don't have specific knowledge base results. Your job is to:
+1. Acknowledge the limitation.
+2. Provide general, accurate information we do know (if relevant).
+3. Invite clarification or suggest related areas we can help with.
+
+Speak clearly and professionally. Never guess or hallucinate details. Represent Workstream using "we" or "our" when appropriate.`;
 
       // For general fallback system prompt 
       let userPrompt = query;
@@ -597,7 +559,7 @@ Always maintain the perspective that you are part of the company's sales team.`;
         }
       }
 
-      return await generateChatCompletion(fallbackSystemPrompt, userPrompt, model);
+      return await generateGeminiChatCompletion(fallbackSystemPrompt, userPrompt);
     }
     
     // Detect specific visual types requested in the query
@@ -798,33 +760,18 @@ Always maintain the perspective that you are part of the company's sales team.`;
     if (useGemini) {
       console.log(`[Multi-Modal] Using Gemini for answer generation with visual context (${totalEstimatedTokens} tokens)`);
       
-      // Import the Gemini client
-      const { generateGeminiChatCompletion } = await import('./geminiClient');
-      
-      // Create an enhanced system prompt for visual content with improved instructions
-      const systemPrompt = `You are a knowledgeable AI assistant for our company's sales team.
-You have access to our company's knowledge base, which includes both text and visual content descriptions.
+      // *** REPLACE VISUAL SYSTEM PROMPT ***
+      const systemPrompt = `
+You are a knowledgeable AI assistant for Workstream. Our knowledge base includes both text and visuals (charts, tables, diagrams, screenshots).
 
-IMPORTANT: You represent our company. When answering questions about "our company," "our products," "our services," or referring to "we" or "us," you should speak from the perspective of a company representative.
+You should:
+- Use visual context only if it helps answer the question.
+- Clearly describe any referenced visual content.
+- Never say "as shown above" or assume the user can see visuals.
+- Use Workstream's tone: confident, clear, helpful.
 
-Answer the user's question using the provided context, which contains:
-1. Text snippets from our knowledge base
-2. Descriptions of visual content (images, charts, diagrams, tables) 
-3. Image references that may be displayed to the user
-
-VISUAL CONTENT GUIDELINES:
-${visualFocus || requestedVisualTypes.size > 0 ? '- This query is specifically about visual content, so prioritize information from the visual descriptions' : '- Include visual information where relevant to the query'}
-- When referencing visuals, use their type and a brief description: "our chart showing monthly sales trends" or "our diagram of the software architecture"
-- If image references are provided, mention them when discussing related visuals: "You can refer to the chart (image-reference-id) showing..."
-- For charts and graphs: describe the trends, key data points, and conclusions that can be drawn
-- For diagrams: explain the components, relationships, and overall structure
-- For tables: summarize the most important data points and patterns
-- For screenshots: describe what the interface shows and its key elements
-
-NEVER use phrases like "as shown in the image" or "as you can see" since the user cannot directly see the visual content.
-${includeSourceCitations ? 'If appropriate, include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}
-
-If the context doesn't contain enough information to fully answer the question, acknowledge this limitation while being helpful with the information you do have.`;
+Speak as a company representative using "we" and "our." Acknowledge if any key information is missing. Stay grounded in the context.`;
+      // *** END REPLACE VISUAL SYSTEM PROMPT ***
 
       // For knowledge-based questions
       let userPrompt;
@@ -850,29 +797,18 @@ If the context doesn't contain enough information to fully answer the question, 
     // Use OpenAI for non-visual or smaller contexts
     console.log(`[Multi-Modal] Using OpenAI (${model}) for answer generation with ${totalEstimatedTokens} estimated tokens`);
     
-    // Create enhanced system prompt for knowledge-based questions with visual awareness
-    const systemPrompt = `You are a knowledgeable AI assistant for our company's sales team.
-You have access to our company's knowledge base, which includes both text and visual content descriptions.
+    // *** REPLACE VISUAL SYSTEM PROMPT (used for OpenAI fallback here?) ***
+    const systemPrompt = `
+You are a knowledgeable AI assistant for Workstream. Our knowledge base includes both text and visuals (charts, tables, diagrams, screenshots).
 
-IMPORTANT: You represent our company. When answering questions about "our company," "our products," "our services," or referring to "we" or "us," you should speak from the perspective of a company representative.
+You should:
+- Use visual context only if it helps answer the question.
+- Clearly describe any referenced visual content.
+- Never say "as shown above" or assume the user can see visuals.
+- Use Workstream's tone: confident, clear, helpful.
 
-Answer the user's question using the provided context, which contains:
-1. Text snippets from our knowledge base
-2. Descriptions of visual content (images, charts, diagrams, tables) 
-3. Image references that may be displayed to the user
-
-VISUAL CONTENT GUIDELINES:
-- When referencing visuals, use their type and a brief description: "our chart showing monthly sales trends" or "our diagram of the software architecture"
-- If image references are provided, mention them when discussing related visuals: "You can refer to the chart (image-reference-id) showing..."
-- For charts and graphs: describe the trends, key data points, and conclusions that can be drawn
-- For diagrams: explain the components, relationships, and overall structure
-- For tables: summarize the most important data points and patterns
-- For screenshots: describe what the interface shows and its key elements
-
-NEVER use phrases like "as shown in the image" or "as you can see" since the user cannot directly see the visual content.
-${includeSourceCitations ? 'If appropriate, include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}
-
-If the context doesn't contain enough information to fully answer the question, acknowledge this limitation while being helpful with the information you do have.`;
+Speak as a company representative using "we" and "our." Acknowledge if any key information is missing. Stay grounded in the context.`;
+    // *** END REPLACE VISUAL SYSTEM PROMPT ***
 
     // For knowledge-based questions
     let userPrompt;
@@ -896,7 +832,7 @@ If the context doesn't contain enough information to fully answer the question, 
     
     try {
       // Generate the answer using the LLM
-      const answerPromise = generateChatCompletion(systemPrompt, userPrompt, model);
+      const answerPromise = generateGeminiChatCompletion(systemPrompt, userPrompt);
       return await Promise.race([answerPromise, timeoutPromise]);
     } catch (error) {
       // Check if error is token limit related

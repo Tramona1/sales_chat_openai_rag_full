@@ -1,17 +1,7 @@
-"use strict";
 /**
  * Text tokenization utilities for BM25 implementation
  * Handles text normalization, stopword removal, and stemming
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.porterStem = porterStem;
-exports.tokenize = tokenize;
-exports.countTermFrequency = countTermFrequency;
-exports.getDocumentLength = getDocumentLength;
-exports.getTermFrequencies = getTermFrequencies;
-exports.getUniqueTerms = getUniqueTerms;
-exports.normalizedTermFrequency = normalizedTermFrequency;
-exports.getWordCount = getWordCount;
 // Common English stopwords to filter out
 const STOP_WORDS = new Set([
     'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'if', 'in',
@@ -22,7 +12,7 @@ const STOP_WORDS = new Set([
  * Simple Porter stemming algorithm implementation
  * Reduces words to their root form (e.g., "running" -> "run")
  */
-function porterStem(word) {
+export function porterStem(word) {
     // This is a simplified stemmer - in production, use the 'natural' NPM package
     // Convert to lowercase
     word = word.toLowerCase();
@@ -56,7 +46,7 @@ function porterStem(word) {
  * @param text The text to tokenize
  * @returns Array of tokenized terms
  */
-function tokenize(text) {
+export function tokenize(text) {
     if (!text || typeof text !== 'string') {
         return [];
     }
@@ -75,7 +65,7 @@ function tokenize(text) {
  * @param text The text to analyze
  * @returns Object mapping each term to its frequency
  */
-function countTermFrequency(text) {
+export function countTermFrequency(text) {
     const tokens = tokenize(text);
     const termFrequency = {};
     for (const token of tokens) {
@@ -89,14 +79,14 @@ function countTermFrequency(text) {
  * @param text The text to analyze
  * @returns The number of terms in the document
  */
-function getDocumentLength(text) {
+export function getDocumentLength(text) {
     return tokenize(text).length;
 }
 /**
  * Count term frequencies in a text
  * Returns a map of terms to their frequency
  */
-function getTermFrequencies(text) {
+export function getTermFrequencies(text) {
     const terms = tokenize(text);
     const frequencies = {};
     terms.forEach(term => {
@@ -108,13 +98,13 @@ function getTermFrequencies(text) {
  * Get unique terms from a text
  * Returns a Set of unique terms
  */
-function getUniqueTerms(text) {
+export function getUniqueTerms(text) {
     return new Set(tokenize(text));
 }
 /**
  * Calculate the term frequency normalized by document length
  */
-function normalizedTermFrequency(term, text) {
+export function normalizedTermFrequency(term, text) {
     const terms = tokenize(text);
     const termCount = terms.filter(t => t === term).length;
     return termCount / terms.length;
@@ -123,6 +113,6 @@ function normalizedTermFrequency(term, text) {
  * Get word count for a given text
  * Used for document length calculations
  */
-function getWordCount(text) {
+export function getWordCount(text) {
     return text.split(/\s+/).filter(word => word.length > 0).length;
 }

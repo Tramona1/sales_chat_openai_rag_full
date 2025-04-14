@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const AppBar = ({ children, position = 'static', className = '', sx = {}, }) => {
     // Convert sx prop to inline styles
     const styles = {
@@ -15,4 +10,4 @@ const AppBar = ({ children, position = 'static', className = '', sx = {}, }) => 
       {children}
     </header>);
 };
-exports.default = AppBar;
+export default AppBar;

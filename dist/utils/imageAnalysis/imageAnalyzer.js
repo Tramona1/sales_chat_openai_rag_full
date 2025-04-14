@@ -1,81 +1,188 @@
-"use strict";
 /**
  * Image Analyzer Utility
  *
  * Provides functionality to analyze images using Gemini Vision API
  * and extract structured information for the RAG system.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.ImageAnalyzer = void 0;
-const generative_ai_1 = require("@google/generative-ai");
-const fs = __importStar(require("fs"));
-const util_1 = require("util");
-const crypto_1 = __importDefault(require("crypto"));
-const baseTypes_1 = require("../../types/baseTypes");
-const performanceMonitoring_1 = require("../performanceMonitoring");
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import * as fs from 'fs';
+import { promisify } from 'util';
+import crypto from 'crypto';
+import { VisualContentType } from '../../types/baseTypes';
+import { recordMetric } from '../performanceMonitoring';
+import { logError } from '../logger';
 // Promisify fs functions
-const readFile = (0, util_1.promisify)(fs.readFile);
+const readFile = promisify(fs.readFile);
 /**
  * Map local ImageType to VisualContentType
  * This helps with compatibility between the older API and the new type system
  */
 function mapImageTypeToVisualContentType(imageType) {
     const typeMap = {
-        'chart': baseTypes_1.VisualContentType.CHART,
-        'table': baseTypes_1.VisualContentType.TABLE,
-        'diagram': baseTypes_1.VisualContentType.DIAGRAM,
-        'screenshot': baseTypes_1.VisualContentType.SCREENSHOT,
-        'photo': baseTypes_1.VisualContentType.IMAGE,
-        'unknown': baseTypes_1.VisualContentType.UNKNOWN
+        'chart': VisualContentType.CHART,
+        'table': VisualContentType.TABLE,
+        'diagram': VisualContentType.DIAGRAM,
+        'screenshot': VisualContentType.SCREENSHOT,
+        'photo': VisualContentType.IMAGE,
+        'unknown': VisualContentType.UNKNOWN
     };
-    return typeMap[imageType] || baseTypes_1.VisualContentType.UNKNOWN;
+    return typeMap[imageType] || VisualContentType.UNKNOWN;
 }
 /**
  * ImageAnalyzer class for analyzing images with Gemini Vision
  */
-class ImageAnalyzer {
-    static getGeminiClient() {
-        const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY;
-        if (!apiKey) {
-            throw new Error('Gemini API key not found in environment variables');
+export class ImageAnalyzer {
+    constructor() {
+        this.isInitialized = false;
+        this.apiKey = process.env.GOOGLE_AI_API_KEY || '';
+        this.initializeModel();
+    }
+    initializeModel() {
+        try {
+            if (!this.apiKey) {
+                throw new Error('GOOGLE_AI_API_KEY environment variable is not set');
+            }
+            const genAI = new GoogleGenerativeAI(this.apiKey);
+            // We use gemini-1.5-flash for vision tasks since gemini-2.0-flash doesn't support vision
+            const modelName = 'gemini-1.5-flash';
+            this.visionModel = genAI.getGenerativeModel({ model: modelName });
+            this.isInitialized = true;
+            console.log(`ImageAnalyzer initialized with model: ${modelName}`);
         }
-        return new generative_ai_1.GoogleGenerativeAI(apiKey);
+        catch (error) {
+            logError('Failed to initialize ImageAnalyzer', error);
+            this.isInitialized = false;
+        }
+    }
+    /**
+     * Analyzes an image buffer and returns structured information about its content
+     *
+     * @param imageBuffer - The image data buffer
+     * @param pageNumber - The page number where this image appears in the document
+     * @param contextHints - Optional text surrounding the image that might provide context
+     * @returns Structured analysis of the image content
+     */
+    async analyze(imageBuffer, pageNumber, contextHints) {
+        if (!this.isInitialized) {
+            this.initializeModel();
+            if (!this.isInitialized) {
+                throw new Error('ImageAnalyzer could not be initialized');
+            }
+        }
+        try {
+            // Convert buffer to base64
+            const base64Image = imageBuffer.toString('base64');
+            // Create prompt that asks for structured analysis
+            const prompt = `Analyze this image in detail and provide the following information:
+1. A detailed description of what you see in the image (be thorough and descriptive).
+2. Classify the visual type as one of: chart, table, diagram, graph, image, screenshot, or other.
+3. Any text that appears in the image (transcribed exactly).
+4. If this is a chart, table, or graph, extract the structured data in a usable format.
+
+${contextHints ? `Context about this image: ${contextHints}` : ''}
+
+Provide your response in this exact JSON format:
+{
+  "contentDescription": "detailed description of the image content",
+  "visualType": "chart|table|diagram|graph|image|screenshot|other",
+  "detectedText": "all text visible in the image",
+  "structuredData": {
+    "title": "title if present",
+    "dataPoints": [{"label": "label1", "value": "value1"}, ...],
+    "rows": [["cell1", "cell2"], ["cell3", "cell4"], ...],
+    "columns": ["column1", "column2", ...],
+    "type": "bar|line|pie|scatter|table|etc"
+  },
+  "confidence": 0.95
+}`;
+            // Prepare the image part
+            const imagePart = {
+                inlineData: {
+                    data: base64Image,
+                    mimeType: "image/jpeg", // Assumed MIME type
+                },
+            };
+            // Generate content using the vision model
+            const result = await this.visionModel.generateContent([prompt, imagePart]);
+            const response = await result.response;
+            const text = response.text();
+            // Extract JSON from response
+            let jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) ||
+                text.match(/```\n([\s\S]*?)\n```/) ||
+                text.match(/{[\s\S]*?}/);
+            let parsedResponse;
+            if (jsonMatch) {
+                try {
+                    parsedResponse = JSON.parse(jsonMatch[1] || jsonMatch[0]);
+                }
+                catch (e) {
+                    console.warn('Failed to parse JSON directly from response, falling back to manual extraction');
+                    parsedResponse = this.extractStructuredData(text);
+                }
+            }
+            else {
+                parsedResponse = this.extractStructuredData(text);
+            }
+            // Construct the response
+            const analysisResult = {
+                pageNumber,
+                contentDescription: parsedResponse.contentDescription || 'No description available',
+                visualType: this.validateVisualType(parsedResponse.visualType),
+                detectedText: parsedResponse.detectedText || '',
+                structuredData: parsedResponse.structuredData || undefined,
+                confidence: parsedResponse.confidence || 0.7
+            };
+            return analysisResult;
+        }
+        catch (error) {
+            logError('Error analyzing image', error);
+            // Return a minimal result in case of error
+            return {
+                pageNumber,
+                contentDescription: 'Failed to analyze image due to an error',
+                visualType: 'other',
+                detectedText: '',
+                confidence: 0
+            };
+        }
+    }
+    validateVisualType(type) {
+        const validTypes = [
+            'chart', 'table', 'diagram', 'graph', 'image', 'screenshot', 'other'
+        ];
+        if (!type || !validTypes.includes(type)) {
+            return 'other';
+        }
+        return type;
+    }
+    extractStructuredData(text) {
+        // Fallback extraction for when JSON parsing fails
+        const result = {
+            contentDescription: '',
+            visualType: 'other',
+            detectedText: '',
+            confidence: 0.5
+        };
+        // Extract content description
+        const descriptionMatch = text.match(/contentDescription["']?\s*:["']?\s*["']?(.*?)["']?\s*[,}]/);
+        if (descriptionMatch) {
+            result.contentDescription = descriptionMatch[1];
+        }
+        // Extract visual type
+        const typeMatch = text.match(/visualType["']?\s*:["']?\s*["']?(chart|table|diagram|graph|image|screenshot|other)["']?\s*[,}]/);
+        if (typeMatch) {
+            result.visualType = typeMatch[1];
+        }
+        // Extract detected text
+        const textMatch = text.match(/detectedText["']?\s*:["']?\s*["']?(.*?)["']?\s*[,}]/);
+        if (textMatch) {
+            result.detectedText = textMatch[1];
+        }
+        // Extract structured data if possible
+        if (text.includes('structuredData') || text.includes('structured data')) {
+            result.structuredData = {};
+        }
+        return result;
     }
     /**
      * Analyzes an image using Gemini Vision API
@@ -84,11 +191,11 @@ class ImageAnalyzer {
      * @param options - Analysis options
      * @returns Analysis result
      */
-    static async analyze(imagePathOrBuffer, options = {}) {
+    static async analyzeImage(imagePathOrBuffer, options = {}) {
         const startTime = Date.now();
-        const analysisId = crypto_1.default.randomBytes(8).toString('hex');
+        const analysisId = crypto.randomBytes(8).toString('hex');
         try {
-            (0, performanceMonitoring_1.recordMetric)('imageAnalysis', 'analyze', Date.now() - startTime, true, { options });
+            recordMetric('imageAnalysis', 'analyze', Date.now() - startTime, true, { options });
             // Set default options
             const analysisOptions = {
                 extractStructuredData: true,
@@ -109,13 +216,13 @@ class ImageAnalyzer {
                 sizeBytes = imageData.length;
             }
             // Get Gemini client and model
-            const genAI = this.getGeminiClient();
+            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY || '');
             const model = genAI.getGenerativeModel({
                 model: analysisOptions.model,
                 safetySettings: [
                     {
-                        category: generative_ai_1.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                        threshold: generative_ai_1.HarmBlockThreshold.BLOCK_ONLY_HIGH
+                        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
                     }
                 ],
                 generationConfig: {
@@ -154,7 +261,7 @@ Reply ONLY with a valid JSON object containing these keys and relevant values.`;
                     const analysisResult = JSON.parse(jsonText);
                     // Record performance metric
                     const durationMs = Date.now() - startTime;
-                    (0, performanceMonitoring_1.recordMetric)('imageAnalysis', 'analyze', durationMs, true, {
+                    recordMetric('imageAnalysis', 'analyze', durationMs, true, {
                         imageSize: sizeBytes,
                         resultType: this.determineImageType(analysisResult.IMAGE_TYPE)
                     });
@@ -181,12 +288,12 @@ Reply ONLY with a valid JSON object containing these keys and relevant values.`;
                     console.error(`Error parsing image analysis JSON: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
                     // Record failure
                     const durationMs = Date.now() - startTime;
-                    (0, performanceMonitoring_1.recordMetric)('imageAnalysis', 'analyze', durationMs, false, {
+                    recordMetric('imageAnalysis', 'analyze', durationMs, false, {
                         error: jsonError instanceof Error ? jsonError.message : 'JSON parsing error'
                     });
                     return {
                         success: false,
-                        type: baseTypes_1.VisualContentType.UNKNOWN,
+                        type: VisualContentType.UNKNOWN,
                         description: responseText.substring(0, 200) + '...',
                         extractedText: '',
                         detectedText: '',
@@ -205,12 +312,12 @@ Reply ONLY with a valid JSON object containing these keys and relevant values.`;
         catch (error) {
             // Record failure
             const durationMs = Date.now() - startTime;
-            (0, performanceMonitoring_1.recordMetric)('imageAnalysis', 'analyze', durationMs, false, {
+            recordMetric('imageAnalysis', 'analyze', durationMs, false, {
                 error: error instanceof Error ? error.message : 'Unknown error'
             });
             return {
                 success: false,
-                type: baseTypes_1.VisualContentType.UNKNOWN,
+                type: VisualContentType.UNKNOWN,
                 description: '',
                 extractedText: '',
                 detectedText: '',
@@ -227,7 +334,7 @@ Reply ONLY with a valid JSON object containing these keys and relevant values.`;
         const durationMs = Date.now() - startTime;
         return {
             success: false,
-            type: baseTypes_1.VisualContentType.UNKNOWN,
+            type: VisualContentType.UNKNOWN,
             description: '',
             extractedText: '',
             detectedText: '',
@@ -476,5 +583,5 @@ Reply ONLY with a valid JSON object containing these keys and relevant values.`;
         return `[Context: ${analysis.type} showing ${documentContext.summary} Key points: ${chunkContext.keyPoints.join(', ')}] ${analysis.description} ${analysis.detectedText || ''}`;
     }
 }
-exports.ImageAnalyzer = ImageAnalyzer;
-exports.default = ImageAnalyzer;
+// Export a singleton instance
+export const imageAnalyzer = new ImageAnalyzer();

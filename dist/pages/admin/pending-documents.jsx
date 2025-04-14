@@ -1,75 +1,37 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importStar(require("react"));
-const AdminLayout_1 = __importDefault(require("@/components/layouts/AdminLayout"));
-const Button_1 = __importDefault(require("@/components/ui/Button"));
-const TextField_1 = __importDefault(require("@/components/ui/TextField"));
-const PendingDocuments_1 = __importDefault(require("@/components/admin/PendingDocuments"));
-const Card_1 = require("@/components/ui/Card");
-const Typography_1 = __importDefault(require("@/components/ui/Typography"));
-const Box_1 = __importDefault(require("@/components/ui/Box"));
-const Alert_1 = __importDefault(require("@/components/ui/Alert"));
+import React, { useState, useEffect } from 'react';
+import AdminLayout from '@/components/layouts/AdminLayout';
+import Button from '@/components/ui/Button';
+import TextField from '@/components/ui/TextField';
+import PendingDocuments from '@/components/admin/PendingDocuments';
+import { Card, CardContent } from '@/components/ui/Card';
+import Typography from '@/components/ui/Typography';
+import Box from '@/components/ui/Box';
+import Alert from '@/components/ui/Alert';
 const PendingDocumentsPage = () => {
     // State for document ingestion
-    const [formState, setFormState] = (0, react_1.useState)({
+    const [formState, setFormState] = useState({
         text: '',
         source: '',
         notes: ''
     });
-    const [isProcessing, setIsProcessing] = (0, react_1.useState)(false);
-    const [error, setError] = (0, react_1.useState)(null);
-    const [analysisResult, setAnalysisResult] = (0, react_1.useState)(null);
-    const [successMessage, setSuccessMessage] = (0, react_1.useState)(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [error, setError] = useState(null);
+    const [analysisResult, setAnalysisResult] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
     // State for pending documents list
-    const [pendingDocuments, setPendingDocuments] = (0, react_1.useState)([]);
-    const [isLoading, setIsLoading] = (0, react_1.useState)(false);
-    const [selectedDocuments, setSelectedDocuments] = (0, react_1.useState)([]);
-    const [dialogState, setDialogState] = (0, react_1.useState)({
+    const [pendingDocuments, setPendingDocuments] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [selectedDocuments, setSelectedDocuments] = useState([]);
+    const [dialogState, setDialogState] = useState({
         open: false,
         documentIds: [],
         action: null
     });
     // Tab state
-    const [activeTab, setActiveTab] = (0, react_1.useState)('pending');
-    const [helpOpen, setHelpOpen] = (0, react_1.useState)(false);
+    const [activeTab, setActiveTab] = useState('pending');
+    const [helpOpen, setHelpOpen] = useState(false);
     // Fetch pending documents on component mount
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         fetchPendingDocuments();
     }, []);
     // Function to fetch pending documents
@@ -273,47 +235,47 @@ const PendingDocumentsPage = () => {
       
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>
-          <TextField_1.default label="Source Identifier" name="source" placeholder="e.g., KB-2023-05-001 or company-whitepaper-2023" value={formState.source} onChange={handleInputChange} required fullWidth helperText="A unique identifier for this document. Will be used in citations."/>
+          <TextField label="Source Identifier" name="source" placeholder="e.g., KB-2023-05-001 or company-whitepaper-2023" value={formState.source} onChange={handleInputChange} required fullWidth helperText="A unique identifier for this document. Will be used in citations."/>
         </div>
         
         <div>
-          <TextField_1.default label="Document Text" name="text" placeholder="Paste the document text here..." value={formState.text} onChange={handleInputChange} required multiline rows={10} fullWidth helperText="Raw text content of the document. All formatting will be preserved."/>
+          <TextField label="Document Text" name="text" placeholder="Paste the document text here..." value={formState.text} onChange={handleInputChange} required multiline rows={10} fullWidth helperText="Raw text content of the document. All formatting will be preserved."/>
         </div>
         
         <div>
-          <TextField_1.default label="Notes (Optional)" name="notes" placeholder="Any additional notes about this document..." value={formState.notes} onChange={handleInputChange} multiline rows={3} fullWidth helperText="Optional notes about the document source, intended use, etc."/>
+          <TextField label="Notes (Optional)" name="notes" placeholder="Any additional notes about this document..." value={formState.notes} onChange={handleInputChange} multiline rows={3} fullWidth helperText="Optional notes about the document source, intended use, etc."/>
         </div>
         
         <div className="pt-4">
-          <Button_1.default type="submit" variant="primary" disabled={isProcessing} fullWidth>
+          <Button type="submit" variant="primary" disabled={isProcessing} fullWidth>
             {isProcessing ? 'Processing...' : 'Process Document'}
-          </Button_1.default>
+          </Button>
         </div>
       </form>
     </div>);
-    return (<AdminLayout_1.default>
-      <Box_1.default className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-        <Box_1.default display="flex" justifyContent="space-between" alignItems="center" className="mb-6">
-          <Typography_1.default variant="h4" className="font-bold text-gray-900">
+    return (<AdminLayout>
+      <Box className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        <Box display="flex" justifyContent="space-between" alignItems="center" className="mb-6">
+          <Typography variant="h4" className="font-bold text-gray-900">
             Document Review Queue
-          </Typography_1.default>
+          </Typography>
           <button onClick={() => setHelpOpen(!helpOpen)} className="text-blue-600 hover:text-blue-800 text-sm flex items-center">
             <span className="mr-1">{helpOpen ? 'Hide' : 'Show'} Help</span>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
           </button>
-        </Box_1.default>
+        </Box>
         
-        {helpOpen && (<Card_1.Card className="mb-6 bg-blue-50 border border-blue-200">
-            <Card_1.CardContent>
-              <Typography_1.default variant="h6" className="font-semibold mb-2">
+        {helpOpen && (<Card className="mb-6 bg-blue-50 border border-blue-200">
+            <CardContent>
+              <Typography variant="h6" className="font-semibold mb-2">
                 Automatic Document Tagging Process
-              </Typography_1.default>
+              </Typography>
               
-              <Alert_1.default severity="info" className="mb-3">
+              <Alert severity="info" className="mb-3">
                 <strong>All document tagging is fully automated by Gemini AI.</strong> There is no need for manual tagging.
-              </Alert_1.default>
+              </Alert>
               
               <div className="mb-4">
                 <h3 className="font-medium text-blue-800 mb-2">How Document Processing Works</h3>
@@ -362,11 +324,11 @@ const PendingDocumentsPage = () => {
                   </ul>
                 </div>
               </div>
-            </Card_1.CardContent>
-          </Card_1.Card>)}
+            </CardContent>
+          </Card>)}
         
-        <PendingDocuments_1.default />
-      </Box_1.default>
-    </AdminLayout_1.default>);
+        <PendingDocuments />
+      </Box>
+    </AdminLayout>);
 };
-exports.default = PendingDocumentsPage;
+export default PendingDocumentsPage;

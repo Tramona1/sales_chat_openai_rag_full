@@ -9,13 +9,12 @@
  * This information is used to optimize retrieval parameters and improve results.
  */
 
-import { logError } from './logger';
+import { logError, logInfo, logWarning, logDebug } from './logger';
 import { cacheWithExpiry, getFromCache } from './caching';
 import { openai } from './llmProviders';
-import { DocumentCategory } from '../types/metadata';
 import { recordMetric } from './performanceMonitoring';
 // TEMPORARY FIX: Hardcode feature flags instead of importing
-// import { isFeatureEnabled } from './featureFlags';
+// import { isFeatureEnabled, FeatureFlag } from './featureFlags';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import { QueryAnalysis, QueryIntent, RetrievalParameters, Entity } from '../types/queryAnalysis';
 import { DocumentCategoryType } from './documentCategories';
@@ -25,15 +24,7 @@ const ENHANCED_QUERY_ANALYSIS_ENABLED = true;
 
 // Cache timeout for query analysis (10 minutes)
 const QUERY_ANALYSIS_CACHE_TIMEOUT = 10 * 60 * 1000;
-
-// Types of information needs
-export type QueryType = 
-  | 'FACTUAL' 
-  | 'COMPARATIVE'
-  | 'PROCEDURAL'
-  | 'EXPLANATORY'
-  | 'DEFINITIONAL'
-  | 'EXPLORATORY';
+const QUERY_ANALYSIS_CACHE_KEY_PREFIX = 'queryAnalysis:';
 
 // Entity references in queries
 export interface QueryEntity {
@@ -57,7 +48,7 @@ export interface LocalQueryAnalysis {
   isAmbiguous?: boolean;
   
   // Legacy properties
-  categories?: DocumentCategory[];
+  categories?: DocumentCategoryType[];
   estimatedResultCount?: number;
   isTimeDependent?: boolean;
   query?: string;
@@ -145,12 +136,97 @@ function extractJsonFromText(text: string): any {
 }
 
 /**
+ * Map a category string to a valid DocumentCategoryType enum value
+ * 
+ * This function takes a category string (which might come from LLM analysis)
+ * and attempts to map it to a valid DocumentCategoryType enum value.
+ * It uses multiple strategies:
+ * 1. Direct mapping via a predefined dictionary of common categories
+ * 2. Exact matching against DocumentCategoryType values
+ * 3. Partial string matching in both directions
+ * 
+ * If no valid mapping is found, it returns null, and the caller should use
+ * a default category like GENERAL.
+ * 
+ * @param category The category string to map
+ * @returns A valid DocumentCategoryType or null if no mapping found
+ */
+function mapToDocumentCategory(category?: string): DocumentCategoryType | null {
+  if (!category) return null;
+  
+  // Standardize formatting: lowercase and replace spaces with underscores
+  const formattedCategory = category.toLowerCase().replace(/\s+/g, '_');
+  
+  // Map common non-standard categories to valid DocumentCategoryType values
+  const categoryMap: Record<string, DocumentCategoryType> = {
+    // Common LLM-generated categories -> Standard categories
+    'business_&_finance': DocumentCategoryType.GENERAL,
+    'finance': DocumentCategoryType.PAYROLL,
+    'investment': DocumentCategoryType.GENERAL,
+    'investors': DocumentCategoryType.GENERAL,
+    'funding': DocumentCategoryType.GENERAL,
+    'business': DocumentCategoryType.GENERAL,
+    'company_information': DocumentCategoryType.GENERAL,
+    'recruitment': DocumentCategoryType.HIRING,
+    'employment': DocumentCategoryType.HR_MANAGEMENT,
+    'human_resources': DocumentCategoryType.HR_MANAGEMENT,
+    'customer_service': DocumentCategoryType.CUSTOMER_SUPPORT_INTEGRATION,
+    'technical_support': DocumentCategoryType.GENERAL,
+    'technology': DocumentCategoryType.AI_TOOLS,
+    'software': DocumentCategoryType.GENERAL,
+    'product': DocumentCategoryType.GENERAL,
+    'training': DocumentCategoryType.TRAINING_MODULES
+  };
+  
+  // First check for direct mapping in our custom map
+  if (categoryMap[formattedCategory]) {
+    logInfo(`Mapped LLM category "${category}" to standard category "${categoryMap[formattedCategory]}"`);
+    return categoryMap[formattedCategory];
+  }
+  
+  // Next, check if it's already a valid DocumentCategoryType (exact match)
+  if (Object.values(DocumentCategoryType).includes(formattedCategory as DocumentCategoryType)) {
+    return formattedCategory as DocumentCategoryType;
+  }
+  
+  // Try to find a partial match with DocumentCategoryType values
+  const allCategories = Object.values(DocumentCategoryType);
+  for (const validCategory of allCategories) {
+    // Check if the submitted category contains a valid category name
+    if (formattedCategory.includes(validCategory.toLowerCase())) {
+      logInfo(`Found partial match from LLM category "${category}" to standard category "${validCategory}"`);
+      return validCategory;
+    }
+    
+    // Check if a valid category contains the submitted category
+    if (validCategory.toLowerCase().includes(formattedCategory)) {
+      logInfo(`Found reverse partial match from LLM category "${category}" to standard category "${validCategory}"`);
+      return validCategory;
+    }
+  }
+  
+  logWarning(`LLM suggested category "${category}" (formatted as "${formattedCategory}") does not match any standard DocumentCategoryType.`);
+  return null; // Return null if no match
+}
+
+/**
  * Analyzes a query to extract entities and determine query characteristics
  * 
  * @param query The user query to analyze
  * @returns Analysis result with entities, categories, and query type
  */
 export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
+  const cacheKey = `${QUERY_ANALYSIS_CACHE_KEY_PREFIX}${query}`;
+  
+  // Try fetching from cache first
+  const cachedResult = getFromCache<LocalQueryAnalysis>(cacheKey);
+  if (cachedResult) {
+    logDebug('Query analysis cache hit', { query });
+    recordMetric('queryAnalysis', 'cache', 0, true);
+    return cachedResult;
+  }
+  
+  logDebug('Query analysis cache miss', { query });
   const startTime = Date.now();
   
   try {
@@ -177,8 +253,9 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
        - name: Entity name
        - type: Type of entity (PERSON, ORGANIZATION, PRODUCT, FEATURE, LOCATION, CONCEPT, TECHNICAL_TERM, OTHER)
        - score: Confidence score between 0 and 1
-    4. technicalLevel: Rating from 0 (non-technical) to 3 (highly technical)
-    5. primaryCategory: Most relevant category for the query
+    4. technicalLevel: Rating from 1 (non-technical) to 5 (highly technical)
+    5. primaryCategory: Most relevant category for the query. MUST be one of the following valid categories:
+       ${Object.values(DocumentCategoryType).join(', ')}
     6. keywords: Array of key terms for search expansion
     7. isAmbiguous: Boolean indicating if the query is ambiguous and needs clarification
     
@@ -219,13 +296,34 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
       analysis.topics = [];
     }
     
-    // Ensure technical level is a number between 0-3
-    if (typeof analysis.technicalLevel !== 'number' || 
-        analysis.technicalLevel < 0 || 
-        analysis.technicalLevel > 3) {
-      analysis.technicalLevel = 1;
+    // Ensure technical level is a number between 1-5 (Updated Scale)
+    if (typeof analysis.technicalLevel !== 'number' ||
+        analysis.technicalLevel < 1 ||
+        analysis.technicalLevel > 5) {
+      analysis.technicalLevel = 3; // Default to mid-point
     }
     
+    // *** ADDED VALIDATION FOR PRIMARY CATEGORY ***
+    const rawPrimaryCategory = analysis.primaryCategory;
+    logInfo(`[analyzeQuery] Raw category from LLM: "${rawPrimaryCategory}"`);
+    
+    const mappedCategory = mapToDocumentCategory(rawPrimaryCategory);
+
+    if (mappedCategory) {
+        logInfo(`[analyzeQuery] Successfully mapped category '${rawPrimaryCategory}' to '${mappedCategory}'`);
+        analysis.primaryCategory = mappedCategory; // Use the valid, mapped category
+    } else {
+        logWarning(`[analyzeQuery] LLM suggested primaryCategory '${rawPrimaryCategory}' is invalid or unmappable. Defaulting to GENERAL.`);
+        analysis.primaryCategory = DocumentCategoryType.GENERAL; // Default to GENERAL
+    }
+    // *** END ADDED VALIDATION ***
+    
+    // --- Map and Validate Categories --- 
+    const mappedSecondaryCategories = Array.isArray(analysis.secondaryCategories) 
+      ? analysis.secondaryCategories.map(mapToDocumentCategory).filter((c): c is DocumentCategoryType => c !== null)
+      : [];
+    // --- End Category Mapping --- 
+
     // Construct the complete analysis result
     const fullAnalysis: LocalQueryAnalysis = {
       originalQuery: query,
@@ -233,8 +331,8 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
       topics: analysis.topics as string[],
       entities: analysis.entities as Entity[],
       technicalLevel: analysis.technicalLevel as number,
-      primaryCategory: analysis.primaryCategory as string,
-      secondaryCategories: analysis.secondaryCategories as string[],
+      primaryCategory: analysis.primaryCategory,
+      secondaryCategories: mappedSecondaryCategories,
       keywords: analysis.keywords as string[],
       queryType: analysis.queryType as string,
       expandedQuery: analysis.expandedQuery as string,
@@ -247,6 +345,22 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
       intent: fullAnalysis.intent
     });
     
+    // Cache the result
+    cacheWithExpiry(cacheKey, fullAnalysis, QUERY_ANALYSIS_CACHE_TIMEOUT);
+
+    // For debugging - log the entire analysis
+    logInfo(`[analyzeQuery] Complete analysis for query "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}":`, 
+        JSON.stringify({
+            intent: fullAnalysis.intent,
+            technicalLevel: fullAnalysis.technicalLevel,
+            primaryCategory: fullAnalysis.primaryCategory,
+            secondaryCategories: fullAnalysis.secondaryCategories,
+            topics: fullAnalysis.topics,
+            entities: fullAnalysis.entities?.map(e => `${e.name} (${e.type})`),
+            isAmbiguous: fullAnalysis.isAmbiguous
+        }, null, 2)
+    );
+
     return fullAnalysis;
   } catch (error) {
     // Log and record error
@@ -256,7 +370,11 @@ export async function analyzeQuery(query: string): Promise<LocalQueryAnalysis> {
     });
     
     // Fall back to basic analysis
-    return performBasicAnalysis(query);
+    const fallbackResult = performBasicAnalysis(query);
+    // Cache the fallback result as well, but maybe for shorter duration?
+    // For now, cache with standard timeout
+    cacheWithExpiry(cacheKey, fallbackResult, QUERY_ANALYSIS_CACHE_TIMEOUT);
+    return fallbackResult;
   }
 }
 
@@ -344,10 +462,10 @@ export function getRetrievalParameters(analysis: LocalQueryAnalysis): RetrievalP
       strict: false
     },
     
-    // Default to wide technical level range (0-3)
+    // Default to wide technical level range (1-5) - UPDATED SCALE
     technicalLevelRange: {
-      min: 0,
-      max: 3
+      min: 1,
+      max: 5
     }
   };
   
@@ -375,9 +493,9 @@ export function getRetrievalParameters(analysis: LocalQueryAnalysis): RetrievalP
     params.expandQuery = true;
   }
   
-  // Adjust technical level range based on the query's technical level
-  params.technicalLevelRange.min = Math.max(0, analysis.technicalLevel - 1);
-  params.technicalLevelRange.max = Math.min(3, analysis.technicalLevel + 1);
+  // Adjust technical level range based on the query's technical level (1-5 scale)
+  params.technicalLevelRange.min = Math.max(1, analysis.technicalLevel - 1);
+  params.technicalLevelRange.max = Math.min(5, analysis.technicalLevel + 1);
   
   // If we have a primary category, use it for filtering
   if (analysis.primaryCategory) {

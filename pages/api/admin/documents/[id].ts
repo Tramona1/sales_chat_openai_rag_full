@@ -1,266 +1,199 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { standardizeApiErrorResponse } from '../../../../utils/errorHandling';
-import { 
-  getAllVectorStoreItems, 
-  addToVectorStore,
-  getVectorStoreSize,
-  VectorStoreItem
-} from '../../../../utils/vectorStore';
-import { embedText } from '../../../../utils/openaiClient';
-import path from 'path';
-import fs from 'fs';
-import { logError } from '../../../../utils/logger';
-
-// Constants for batch processing
-const VECTOR_STORE_DIR = path.join(process.cwd(), 'data', 'vector_batches');
-const BATCH_INDEX_FILE = path.join(process.cwd(), 'data', 'batch_index.json');
+import { getSupabaseAdmin } from '@/utils/supabaseClient';
+import { logInfo, logError } from '@/utils/logger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
-  const documentId = id as string;
+  
+  if (!id || typeof id !== 'string') {
+    return res.status(400).json({ error: 'Document ID is required' });
+  }
+  
+  const supabase = getSupabaseAdmin();
+  
+  // Handle different HTTP methods
+  switch (req.method) {
+    case 'GET':
+      await getDocumentById(id, supabase, res);
+      break;
+    case 'PUT':
+      await updateDocument(id, req.body, supabase, res);
+      break;
+    case 'DELETE':
+      await deleteDocument(id, supabase, res);
+      break;
+    default:
+      res.setHeader('Allow', ['GET', 'PUT', 'DELETE']);
+      res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+  }
+}
 
-  if (!documentId || typeof documentId !== 'string') {
-    return res.status(400).json({ 
-      error: { 
-        message: 'Document ID is required', 
-        code: 'missing_document_id' 
-      } 
+/**
+ * Get a document by ID, including its chunks
+ */
+async function getDocumentById(id: string, supabase: any, res: NextApiResponse) {
+  try {
+    logInfo(`Fetching document with ID: ${id}`);
+    
+    // Get the document
+    const { data: document, error } = await supabase
+      .from('documents')
+      .select(`
+        id,
+        title,
+        source,
+        created_at,
+        updated_at,
+        approved,
+        metadata
+      `)
+      .eq('id', id)
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({ error: 'Document not found' });
+      }
+      throw error;
+    }
+    
+    // Get the document chunks
+    const { data: chunks, error: chunksError } = await supabase
+      .from('document_chunks')
+      .select('id, chunk_index, text, metadata')
+      .eq('document_id', id)
+      .order('chunk_index', { ascending: true });
+    
+    if (chunksError) {
+      throw chunksError;
+    }
+    
+    // Return document with chunks
+    return res.status(200).json({
+      ...document,
+      chunks: chunks || [],
+      chunkCount: chunks?.length || 0
+    });
+  } catch (error) {
+    logError(`Error fetching document with ID ${id}:`, error);
+    return res.status(500).json({ 
+      error: 'Failed to fetch document',
+      message: error instanceof Error ? error.message : 'Unknown error'
     });
   }
-
-  try {
-    // Method handling switch statement
-    switch (req.method) {
-      case 'GET':
-        return handleGetDocument(req, res, documentId);
-      case 'PUT':
-        return handleUpdateDocument(req, res, documentId);
-      case 'DELETE':
-        return handleDeleteDocument(req, res, documentId);
-      default:
-        res.setHeader('Allow', ['GET', 'PUT', 'DELETE']);
-        return res.status(405).json({ message: `Method ${req.method} Not Allowed` });
-    }
-  } catch (error) {
-    console.error(`Error handling request for document ${documentId}:`, error);
-    const errorResponse = standardizeApiErrorResponse(error);
-    return res.status(500).json(errorResponse);
-  }
 }
 
-// GET handler: Fetch a single document by ID
-async function handleGetDocument(req: NextApiRequest, res: NextApiResponse, documentId: string) {
+/**
+ * Update a document by ID
+ */
+async function updateDocument(id: string, updateData: any, supabase: any, res: NextApiResponse) {
   try {
-    const vectorStoreItems = await getAllVectorStoreItems();
-    const document = vectorStoreItems.find((item: VectorStoreItem) => 
-      item.metadata?.source === documentId
-    );
-
-    if (!document) {
-      return res.status(404).json({ message: 'Document not found' });
-    }
-
-    return res.status(200).json(document);
-  } catch (error) {
-    logError('Error fetching document:', error);
-    const errorResponse = standardizeApiErrorResponse(error);
-    return res.status(500).json(errorResponse);
-  }
-}
-
-// PUT handler: Update a document
-async function handleUpdateDocument(req: NextApiRequest, res: NextApiResponse, documentId: string) {
-  try {
-    const { text, metadata } = req.body;
-
-    if (!text || !metadata) {
-      return res.status(400).json({ message: 'Missing text or metadata in request body' });
+    logInfo(`Updating document with ID: ${id}`);
+    
+    if (!updateData) {
+      return res.status(400).json({ error: 'Update data is required' });
     }
     
-    console.log(`Updating document with ID: ${documentId}`);
+    // Prepare update payload, ensuring timestamp is updated
+    const payload: {
+      updated_at: string;
+      title?: string;
+      source?: string;
+      approved?: boolean;
+      metadata?: Record<string, any>;
+    } = {
+      updated_at: new Date().toISOString()
+    };
     
-    const allItems = await getAllVectorStoreItems();
-    const documentIndex = allItems.findIndex((item: VectorStoreItem) => item.metadata?.source === documentId);
-
-    if (documentIndex === -1) {
-      return res.status(404).json({ message: 'Document not found for update' });
-    }
+    // Add any provided fields to payload
+    if (updateData.title !== undefined) payload.title = updateData.title;
+    if (updateData.source !== undefined) payload.source = updateData.source;
+    if (updateData.approved !== undefined) payload.approved = updateData.approved;
     
-    // Get the existing document
-    const existingDocument = allItems[documentIndex];
-    
-    // Determine if we need to regenerate the embedding (text has changed)
-    const needsNewEmbedding = existingDocument.text !== text;
-    
-    try {
-      // Generate new embeddings if needed
-      let embedding = existingDocument.embedding;
+    // Handle metadata as a special case - if provided, merge with existing metadata
+    if (updateData.metadata) {
+      // First get current document to get existing metadata
+      const { data: existingDoc, error: fetchError } = await supabase
+        .from('documents')
+        .select('metadata')
+        .eq('id', id)
+        .single();
       
-      if (needsNewEmbedding) {
-        console.log('Text changed, generating new embeddings...');
-        embedding = await embedText(text);
-        console.log('New embeddings generated');
+      if (fetchError) {
+        if (fetchError.code === 'PGRST116') {
+          return res.status(404).json({ error: 'Document not found' });
+        }
+        throw fetchError;
       }
       
-      // Update timestamp
-      const now = new Date().toISOString();
-      
-      // Track original batch ID
-      const batchId = existingDocument.metadata?.batch;
-      
-      // Create updated document
-      const updatedDocument: VectorStoreItem = {
-        text,
-        embedding,
-        metadata: {
-          ...metadata,
-          // Always preserve the source identifier and batch
-          source: documentId,
-          batch: batchId,
-          // Update timestamps
-          lastUpdated: now,
-        }
+      // Merge existing metadata with new metadata
+      payload.metadata = {
+        ...(existingDoc?.metadata || {}),
+        ...updateData.metadata
       };
-      
-      // Remove the old document directly from the vector store
-      allItems.splice(documentIndex, 1);
-      
-      // Add the updated document to the vector store
-      // This will also save changes to disk
-      await addToVectorStore(updatedDocument);
-      
-      // Update batch files directly if needed
-      if (batchId && fs.existsSync(BATCH_INDEX_FILE)) {
-        try {
-          // Read the batch index
-          const indexData = JSON.parse(fs.readFileSync(BATCH_INDEX_FILE, 'utf-8'));
-          const activeBatches = indexData.activeBatches || [];
-          
-          // If this batch exists, update it directly
-          if (activeBatches.includes(batchId)) {
-            const batchFile = path.join(VECTOR_STORE_DIR, `batch_${batchId}.json`);
-            
-            if (fs.existsSync(batchFile)) {
-              // Read the batch
-              const batchItems = JSON.parse(fs.readFileSync(batchFile, 'utf-8'));
-              
-              // Remove the old document from the batch
-              const filteredBatchItems = batchItems.filter((item: VectorStoreItem) => 
-                item.metadata?.source !== documentId
-              );
-              
-              // Add the updated document to the batch
-              filteredBatchItems.push(updatedDocument);
-              
-              // Write the updated batch
-              fs.writeFileSync(batchFile, JSON.stringify(filteredBatchItems, null, 2));
-              console.log(`Updated document in batch ${batchId}`);
-            }
-          }
-        } catch (batchError) {
-          console.error('Error updating batch file during document update:', batchError);
-        }
-      }
-      
-      // Also ensure the single file is updated as a backup
-      const singleStoreFile = path.join(process.cwd(), 'data', 'vectorStore.json');
-      fs.writeFileSync(singleStoreFile, JSON.stringify({ 
-        items: allItems,
-        lastUpdated: Date.now()
-      }, null, 2));
-      
-      console.log(`Document ${documentId} updated successfully`);
-      
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Document updated successfully',
-        id: documentId,
-        embeddingUpdated: needsNewEmbedding
-      });
-      
-    } catch (error) {
-      console.error('Error updating document:', error);
-      return res.status(500).json({ 
-        error: { 
-          message: 'Failed to update document', 
-          code: 'update_failed',
-          details: error instanceof Error ? error.message : 'Unknown error'
-        } 
-      });
     }
+    
+    // Update the document
+    const { data, error } = await supabase
+      .from('documents')
+      .update(payload)
+      .eq('id', id)
+      .select();
+    
+    if (error) {
+      throw error;
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Document updated successfully',
+      document: data?.[0] || null
+    });
   } catch (error) {
-    logError('Error updating document:', error);
-    const errorResponse = standardizeApiErrorResponse(error);
-    return res.status(500).json(errorResponse);
+    logError(`Error updating document with ID ${id}:`, error);
+    return res.status(500).json({ 
+      error: 'Failed to update document',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 }
 
-// DELETE handler: Remove a document
-async function handleDeleteDocument(req: NextApiRequest, res: NextApiResponse, documentId: string) {
+/**
+ * Delete a document by ID and its chunks
+ */
+async function deleteDocument(id: string, supabase: any, res: NextApiResponse) {
   try {
-    console.log(`Deleting document with ID: ${documentId}`);
+    logInfo(`Deleting document with ID: ${id}`);
     
-    const allItems = await getAllVectorStoreItems();
-    const documentIndex = allItems.findIndex((item: VectorStoreItem) => item.metadata?.source === documentId);
-
-    if (documentIndex === -1) {
-      return res.status(404).json({ message: 'Document not found for deletion' });
-    }
-
-    // Get the document to track which batch it belongs to
-    const documentToDelete = allItems[documentIndex];
-    const batchId = documentToDelete.metadata?.batch;
+    // Delete document chunks first (this should cascade, but we're being explicit)
+    const { error: chunksError } = await supabase
+      .from('document_chunks')
+      .delete()
+      .eq('document_id', id);
     
-    // Remove the document from the vector store
-    allItems.splice(documentIndex, 1);
-    
-    // Update the batches if applicable
-    if (batchId && fs.existsSync(BATCH_INDEX_FILE)) {
-      try {
-        // Read the batch index
-        const indexData = JSON.parse(fs.readFileSync(BATCH_INDEX_FILE, 'utf-8'));
-        const activeBatches = indexData.activeBatches || [];
-        
-        // If this batch exists, update it
-        if (activeBatches.includes(batchId)) {
-          const batchFile = path.join(VECTOR_STORE_DIR, `batch_${batchId}.json`);
-          
-          if (fs.existsSync(batchFile)) {
-            // Read the batch, remove the document, write it back
-            const batchItems = JSON.parse(fs.readFileSync(batchFile, 'utf-8'));
-            const updatedBatchItems = batchItems.filter((item: VectorStoreItem) => 
-              item.metadata?.source !== documentId
-            );
-            
-            // Write the updated batch
-            fs.writeFileSync(batchFile, JSON.stringify(updatedBatchItems, null, 2));
-            console.log(`Updated batch ${batchId} after removing document ${documentId}`);
-          }
-        }
-      } catch (batchError) {
-        console.error('Error updating batch file during document deletion:', batchError);
-        // Continue with main deletion even if batch update fails
-      }
+    if (chunksError) {
+      throw chunksError;
     }
     
-    // Save the updated vector store to the single file as well (as backup)
-    const singleStoreFile = path.join(process.cwd(), 'data', 'vectorStore.json');
-    fs.writeFileSync(singleStoreFile, JSON.stringify({ 
-      items: allItems,
-      lastUpdated: Date.now()
-    }, null, 2));
+    // Delete the document
+    const { error } = await supabase
+      .from('documents')
+      .delete()
+      .eq('id', id);
     
-    console.log(`Document ${documentId} deleted successfully`);
+    if (error) {
+      throw error;
+    }
     
-    return res.status(200).json({ 
-      success: true, 
-      message: 'Document deleted successfully',
-      id: documentId
+    return res.status(200).json({
+      success: true,
+      message: 'Document and associated chunks deleted successfully'
     });
-    
   } catch (error) {
-    logError('Error deleting document:', error);
-    const errorResponse = standardizeApiErrorResponse(error);
-    return res.status(500).json(errorResponse);
+    logError(`Error deleting document with ID ${id}:`, error);
+    return res.status(500).json({ 
+      error: 'Failed to delete document',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 } 

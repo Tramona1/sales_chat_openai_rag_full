@@ -1,26 +1,27 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.config = void 0;
-exports.default = handler;
-const formidable_1 = __importDefault(require("formidable"));
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const embeddingClient_js_1 = require("@/utils/embeddingClient.js");
-const vectorStore_1 = require("@/utils/vectorStore");
-const documentProcessing_js_1 = require("@/utils/documentProcessing.js");
-const geminiClient_js_1 = require("@/utils/geminiClient.js");
-const imageAnalyzer_1 = require("@/utils/imageAnalysis/imageAnalyzer");
+// Fix imports to avoid esModuleInterop issues
+const formidable = require('formidable');
+const fs = require('fs');
+const path = require('path');
+import { embedText } from '../../utils/embeddingClient';
+// Import Supabase client instead of direct vector store
+import { insertDocument, insertDocumentChunks } from '../../utils/supabaseClient';
+import { extractText, splitIntoChunks, splitIntoChunksWithContext, prepareTextForEmbedding } from '../../utils/documentProcessing';
+// Replace extractDocumentContext with our new analyzeDocument function
+import { analyzeDocument } from '../../utils/documentAnalysis';
+import { ImageAnalyzer } from '../../utils/imageAnalysis/imageAnalyzer';
+import { logInfo, logError, logWarning } from '../../utils/logger';
+import { getSupabaseAdmin } from '../../utils/supabaseClient';
 // Disable the default body parser
-exports.config = { api: { bodyParser: false } };
+export const config = { api: { bodyParser: false } };
 // Helper function to check if a file is an image
 function isImageFile(mimetype) {
     return mimetype.startsWith('image/');
 }
-async function handler(req, res) {
-    var _a, _b, _c;
+// Generate content hash for document deduplication
+function generateContentHash(content) {
+    return require('crypto').createHash('md5').update(content).digest('hex');
+}
+export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method Not Allowed' });
     }
@@ -28,17 +29,17 @@ async function handler(req, res) {
     const useContextualChunking = req.query.contextual === 'true';
     const useVisualProcessing = req.query.visualProcessing === 'true';
     // Ensure uploads directory exists
-    const uploadsDir = path_1.default.join(process.cwd(), 'public', 'uploads');
-    if (!fs_1.default.existsSync(uploadsDir)) {
-        fs_1.default.mkdirSync(uploadsDir, { recursive: true });
+    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
     }
     // Ensure data directory exists for vector store persistence
-    const dataDir = path_1.default.join(process.cwd(), 'data');
-    if (!fs_1.default.existsSync(dataDir)) {
-        fs_1.default.mkdirSync(dataDir, { recursive: true });
+    const dataDir = path.join(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
     }
     try {
-        const form = new formidable_1.default.IncomingForm({
+        const form = new formidable.IncomingForm({
             uploadDir: uploadsDir,
             keepExtensions: true,
             maxFileSize: 20 * 1024 * 1024, // 20MB limit
@@ -80,48 +81,83 @@ async function handler(req, res) {
                     if (!uploadedFile.filepath) {
                         throw new Error('Missing file path');
                     }
-                    // Use ImageAnalyzer to process the image
-                    const analysisResult = await imageAnalyzer_1.ImageAnalyzer.analyze(uploadedFile.filepath);
+                    // Use ImageAnalyzer static method to process the image
+                    const analysisResult = await ImageAnalyzer.analyzeImage(uploadedFile.filepath);
                     if (analysisResult.success) {
                         // Generate document context from image analysis
-                        const imageContext = imageAnalyzer_1.ImageAnalyzer.generateDocumentContext(analysisResult);
+                        const imageContext = ImageAnalyzer.generateDocumentContext(analysisResult);
+                        // Create a document in Supabase
+                        const contentHash = generateContentHash(analysisResult.description + ' ' + analysisResult.detectedText);
+                        let document;
+                        try {
+                            // Insert the document
+                            document = await insertDocument({
+                                title: source,
+                                source: source,
+                                file_path: uploadedFile.filepath,
+                                content_hash: contentHash,
+                                approved: false, // Set approved to false by default
+                                metadata: {
+                                    isVisualContent: true,
+                                    visualType: analysisResult.type,
+                                    documentType: imageContext.documentType,
+                                    documentSummary: imageContext.summary,
+                                    primaryTopics: imageContext.mainTopics,
+                                    technicalLevel: imageContext.technicalLevel,
+                                    audienceType: imageContext.audienceType,
+                                    imageMetadata: {
+                                        analysisTime: analysisResult.metadata?.analysisTime,
+                                        model: analysisResult.metadata?.model,
+                                        analysisId: analysisResult.metadata?.analysisId
+                                    }
+                                }
+                            });
+                        }
+                        catch (insertError) {
+                            if (insertError.code === '23505' && insertError.message.includes('documents_content_hash_key')) {
+                                logWarning(`Duplicate content detected for image file: ${source} (Content Hash: ${contentHash})`);
+                                result = {
+                                    source,
+                                    status: 'duplicate',
+                                    error: 'This image file has already been uploaded.',
+                                    type: 'error'
+                                };
+                                results.push(result);
+                                continue; // Move to the next file
+                            }
+                            else {
+                                throw insertError; // Re-throw other insertion errors
+                            }
+                        }
                         // Prepare text for embedding with enhanced contextual information
-                        const textForEmbedding = imageAnalyzer_1.ImageAnalyzer.prepareTextForEmbedding(analysisResult);
+                        const textForEmbedding = ImageAnalyzer.prepareTextForEmbedding(analysisResult);
                         // Generate embedding
-                        const embedding = await (0, embeddingClient_js_1.embedText)(textForEmbedding);
-                        // Store the image in vector store
-                        const item = {
-                            embedding,
+                        const embedding = await embedText(textForEmbedding);
+                        // Create a chunk for the image
+                        const chunk = {
+                            document_id: document.id,
+                            chunk_index: 0,
                             text: textForEmbedding,
-                            originalText: analysisResult.description + ' ' + analysisResult.detectedText,
+                            embedding: embedding,
                             metadata: {
-                                source,
                                 isVisualContent: true,
                                 visualType: analysisResult.type,
-                                documentType: imageContext.documentType,
-                                documentSummary: imageContext.summary,
-                                primaryTopics: imageContext.mainTopics.join(', '),
-                                technicalLevel: imageContext.technicalLevel,
-                                audienceType: imageContext.audienceType.join(', '),
-                                context: imageAnalyzer_1.ImageAnalyzer.generateChunkContext(analysisResult),
-                                timestamp: new Date().toISOString(),
-                                approved: true,
-                                imageMetadata: {
-                                    analysisTime: analysisResult.metadata.analysisTime,
-                                    model: analysisResult.metadata.model,
-                                    analysisId: analysisResult.metadata.analysisId
-                                }
+                                context: ImageAnalyzer.generateChunkContext(analysisResult),
+                                originalText: analysisResult.description + ' ' + analysisResult.detectedText
                             }
                         };
-                        // Add to vector store
-                        (0, vectorStore_1.addToVectorStore)(item);
+                        // Insert the chunk
+                        await insertDocumentChunks([chunk]);
                         processedCount = 1;
                         result = {
                             source,
                             type: 'image',
                             imageType: analysisResult.type,
+                            status: 'pending_approval', // Add status
+                            message: 'Image uploaded successfully, pending admin approval.', // Add message
                             processedCount,
-                            summary: imageContext.summary
+                            summary: imageContext.summary,
+                            documentId: document.id
                         };
                     }
                     else {
@@ -134,159 +170,146 @@ async function handler(req, res) {
                     if (!uploadedFile.filepath) {
                         throw new Error('Missing file path');
                     }
-                    const rawText = await (0, documentProcessing_js_1.extractText)(uploadedFile.filepath, mimetype);
-                    let documentContext = null;
-                    // Use contextual chunking if enabled
-                    if (useContextualChunking) {
-                        console.log('Using contextual chunking for document:', source);
-                        try {
-                            // Extract document-level context using Gemini
-                            documentContext = await (0, geminiClient_js_1.extractDocumentContext)(rawText);
-                            console.log('Document context extracted successfully');
-                            // Create chunks with context
-                            const chunks = await (0, documentProcessing_js_1.splitIntoChunksWithContext)(rawText, 500, source, true, documentContext);
-                            // Prepare texts for embedding with enhanced context
-                            for (const chunk of chunks) {
-                                if (chunk.text.trim()) {
-                                    // Prepare the text with enhanced contextual information
-                                    const preparedText = (0, documentProcessing_js_1.prepareTextForEmbedding)(chunk);
-                                    // Generate embedding for the prepared text
-                                    const embedding = await (0, embeddingClient_js_1.embedText)(preparedText);
-                                    // Build vector store item with both prepared and original text
-                                    const item = {
-                                        embedding,
-                                        text: preparedText, // Store the prepared text that was embedded
-                                        originalText: chunk.text, // Keep the original text intact
-                                        metadata: {
-                                            source: source,
-                                            // Base metadata
-                                            ...(chunk.metadata || {}),
-                                            // Document-level metadata properly mapped to VectorStoreItem fields
-                                            documentSummary: documentContext === null || documentContext === void 0 ? void 0 : documentContext.summary,
-                                            documentType: documentContext === null || documentContext === void 0 ? void 0 : documentContext.documentType,
-                                            primaryTopics: (_a = documentContext === null || documentContext === void 0 ? void 0 : documentContext.mainTopics) === null || _a === void 0 ? void 0 : _a.join(', '),
-                                            technicalLevel: documentContext === null || documentContext === void 0 ? void 0 : documentContext.technicalLevel,
-                                            audienceType: (_b = documentContext === null || documentContext === void 0 ? void 0 : documentContext.audienceType) === null || _b === void 0 ? void 0 : _b.join(', '),
-                                            // Chunk context is preserved in the context field
-                                            context: (_c = chunk.metadata) === null || _c === void 0 ? void 0 : _c.context,
-                                            // Add fields for filtering and tracking
-                                            isContextualChunk: true,
-                                            timestamp: new Date().toISOString(),
-                                            isChunk: true,
-                                            approved: true
-                                        }
-                                    };
-                                    (0, vectorStore_1.addToVectorStore)(item);
-                                    processedCount++;
-                                }
-                            }
+                    const rawText = await extractText(uploadedFile.filepath, mimetype);
+                    const contentHash = generateContentHash(rawText);
+                    try {
+                        // Check for duplicate first
+                        const { data: existingDoc, error: checkError } = await getSupabaseAdmin()
+                            .from('documents')
+                            .select('id')
+                            .eq('content_hash', contentHash)
+                            .maybeSingle();
+                        if (checkError && checkError.code !== 'PGRST116') { // Ignore "No rows found" error
+                            throw checkError;
+                        }
+                        if (existingDoc) {
+                            logWarning(`Duplicate content detected for file: ${source} (Content Hash: ${contentHash})`);
                             result = {
                                 source,
-                                type: 'document',
-                                documentType: (documentContext === null || documentContext === void 0 ? void 0 : documentContext.documentType) || 'unknown',
-                                processedCount,
-                                summary: documentContext === null || documentContext === void 0 ? void 0 : documentContext.summary
+                                status: 'duplicate',
+                                error: 'This file has already been uploaded.',
+                                type: 'error'
                             };
+                            results.push(result);
+                            continue; // Move to the next file
                         }
-                        catch (contextError) {
-                            console.error('Error in contextual processing, falling back to standard chunking:', contextError);
-                            // Fall back to standard chunking
-                            const chunks = (0, documentProcessing_js_1.splitIntoChunks)(rawText, 500, source);
-                            // Process chunks with standard text preparation
-                            for (const chunk of chunks) {
-                                if (chunk.text.trim()) {
-                                    // Even for standard chunks, prepare the text for consistency
-                                    const preparedText = (0, documentProcessing_js_1.prepareTextForEmbedding)(chunk);
-                                    // Generate embedding for the prepared text
-                                    const embedding = await (0, embeddingClient_js_1.embedText)(preparedText);
-                                    const item = {
-                                        embedding,
-                                        text: preparedText,
-                                        originalText: chunk.text,
-                                        metadata: {
-                                            source: source,
-                                            // Include the additional metadata from the chunking process
-                                            ...(chunk.metadata || {}),
-                                            timestamp: new Date().toISOString(),
-                                            isChunk: true,
-                                            approved: true
-                                        }
-                                    };
-                                    (0, vectorStore_1.addToVectorStore)(item);
-                                    processedCount++;
-                                }
-                            }
-                            result = {
-                                source,
-                                type: 'document',
-                                processedCount,
-                                fallbackProcessing: true
-                            };
+                        // --- Run Analysis BEFORE Inserting --- 
+                        logInfo('Analyzing document before insertion:', source);
+                        const documentAnalysis = await analyzeDocument(rawText, source);
+                        logInfo('Document analysis completed successfully');
+                        // Prepare the full metadata object
+                        const initialMetadata = {
+                            source_url: uploadedFile.originalFilename, // Example: Store original filename
+                            file_path: uploadedFile.filepath,
+                            mime_type: mimetype,
+                            // --- Add AI Analysis Results --- 
+                            documentSummary: documentAnalysis.documentContext.summary,
+                            documentType: documentAnalysis.documentContext.documentType,
+                            primaryTopics: documentAnalysis.documentContext.mainTopics,
+                            technicalLevel: documentAnalysis.documentContext.technicalLevel,
+                            audienceType: documentAnalysis.documentContext.audienceType,
+                            primaryCategory: documentAnalysis.primaryCategory,
+                            secondaryCategories: documentAnalysis.secondaryCategories,
+                            keyTopics: documentAnalysis.keyTopics,
+                            keywords: documentAnalysis.keywords,
+                            confidenceScore: documentAnalysis.confidenceScore,
+                            qualityFlags: documentAnalysis.qualityFlags,
+                            entities: documentAnalysis.entities
+                        };
+                        // --- Create the document record with FULL metadata --- 
+                        const { data: document, error: insertError } = await insertDocument({
+                            title: source,
+                            source: source,
+                            file_path: uploadedFile.filepath,
+                            content_hash: contentHash,
+                            approved: false,
+                            metadata: initialMetadata // Pass the complete metadata here
+                        });
+                        if (insertError)
+                            throw insertError;
+                        if (!document)
+                            throw new Error('Document insertion returned no data.');
+                        logInfo(`Created document in Supabase with ID: ${document.id}`);
+                        // --- Chunking and Embedding (using documentAnalysis context) --- 
+                        let chunks;
+                        let documentContext = documentAnalysis.documentContext;
+                        if (useContextualChunking) {
+                            logInfo('Using contextual chunking for document:', source);
+                            chunks = await splitIntoChunksWithContext(rawText, 500, source, true, documentContext);
                         }
-                    }
-                    else {
-                        // Use standard chunking when contextual is not enabled
-                        const chunks = (0, documentProcessing_js_1.splitIntoChunks)(rawText, 500, source);
-                        // Process chunks with standard text preparation
-                        for (const chunk of chunks) {
+                        else {
+                            logInfo('Using standard chunking for document:', source);
+                            chunks = splitIntoChunks(rawText, 500, source);
+                            documentContext = {};
+                        }
+                        // Prepare chunk objects for batch insertion
+                        const chunkObjects = [];
+                        processedCount = 0; // Reset count
+                        for (let i = 0; i < chunks.length; i++) {
+                            const chunk = chunks[i];
                             if (chunk.text.trim()) {
-                                // Even for standard chunks, prepare the text for consistency
-                                const preparedText = (0, documentProcessing_js_1.prepareTextForEmbedding)(chunk);
-                                // Generate embedding for the prepared text
-                                const embedding = await (0, embeddingClient_js_1.embedText)(preparedText);
-                                const item = {
-                                    embedding,
+                                const preparedText = prepareTextForEmbedding(chunk);
+                                const embedding = await embedText(preparedText);
+                                chunkObjects.push({
+                                    document_id: document.id,
+                                    chunk_index: i,
                                     text: preparedText,
-                                    originalText: chunk.text,
+                                    embedding: embedding,
                                     metadata: {
+                                        originalText: chunk.text,
                                         source: source,
-                                        // Include the additional metadata from the chunking process
                                         ...(chunk.metadata || {}),
-                                        timestamp: new Date().toISOString(),
-                                        isChunk: true,
-                                        approved: true
+                                        isContextualChunk: useContextualChunking,
                                     }
-                                };
-                                (0, vectorStore_1.addToVectorStore)(item);
+                                });
                                 processedCount++;
                             }
+                        }
+                        // Batch insert all chunks
+                        if (chunkObjects.length > 0) {
+                            await insertDocumentChunks(chunkObjects);
+                            logInfo(`Inserted ${chunkObjects.length} chunks for document ${document.id}`);
                         }
                         result = {
                             source,
                             type: 'document',
+                            documentType: documentContext?.documentType || 'unknown',
+                            status: 'pending_approval',
+                            message: 'File uploaded successfully, pending admin approval.',
                             processedCount,
-                            standardProcessing: true
+                            summary: documentContext?.summary,
+                            documentId: document.id
                         };
                     }
+                    catch (error) {
+                        // Generic error handling for the try block
+                        logError(`Error processing document ${source}:`, error);
+                        result = {
+                            source,
+                            error: error instanceof Error ? error.message : 'Unknown processing error',
+                            type: 'error'
+                        };
+                        // We push the error result later
+                    }
                 }
-                results.push(result);
             }
             catch (error) {
-                console.error(`Error processing file ${source}:`, error);
-                results.push({
+                logError('Error processing file:', error);
+                result = {
                     source,
                     error: error instanceof Error ? error.message : 'Unknown error',
-                    failed: true
-                });
+                    type: 'error'
+                };
             }
-        }
-        // Check if any files were processed successfully
-        const successCount = results.filter(r => !r.failed).length;
-        if (successCount === 0 && results.length > 0) {
-            return res.status(500).json({
-                message: 'All files failed to process',
-                results
-            });
+            results.push(result);
         }
         return res.status(200).json({
-            message: `${successCount} file(s) processed successfully.`,
-            contextual: useContextualChunking,
-            visualProcessing: useVisualProcessing,
+            message: `Successfully processed ${results.length} file(s)`,
             results
         });
     }
     catch (error) {
-        console.error('Upload error:', error);
+        logError('Upload error:', error);
         return res.status(500).json({
             message: `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`
         });

@@ -1,72 +1,61 @@
-"use strict";
 /**
  * Evaluation Utilities for RAG System
  *
  * This module provides utilities for evaluating and comparing
  * different retrieval approaches.
  */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.saveEvaluationQueries = saveEvaluationQueries;
-exports.loadEvaluationQueries = loadEvaluationQueries;
-exports.addEvaluationQuery = addEvaluationQuery;
-exports.createStandardEvaluationSet = createStandardEvaluationSet;
-exports.compareRetrievalApproaches = compareRetrievalApproaches;
-exports.runStandardEvaluation = runStandardEvaluation;
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const uuid_1 = require("uuid");
-const hybridSearch_1 = require("./hybridSearch");
-const reranking_1 = require("./reranking");
-const answerGenerator_1 = require("./answerGenerator");
-const queryAnalysis_1 = require("./queryAnalysis");
-const errorHandling_1 = require("./errorHandling");
-const llmProviders_1 = require("./llmProviders");
+import fs from 'fs';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import { hybridSearch } from './hybridSearch';
+import { rerankWithGemini } from './reranking';
+import { generateAnswer } from './answerGenerator';
+import { analyzeQuery, analyzeVisualQuery } from './queryAnalysis';
+import { logError } from './logger';
+import { openai } from './llmProviders';
 // Constants
-const EVALUATION_DIR = path_1.default.join(process.cwd(), 'data', 'evaluation_results');
-const QUERIES_FILE = path_1.default.join(EVALUATION_DIR, 'evaluation_queries.json');
+const EVALUATION_DIR = path.join(process.cwd(), 'data', 'evaluation_results');
+const QUERIES_FILE = path.join(EVALUATION_DIR, 'evaluation_queries.json');
 // Make sure evaluation directory exists
-if (!fs_1.default.existsSync(EVALUATION_DIR)) {
-    fs_1.default.mkdirSync(EVALUATION_DIR, { recursive: true });
+if (!fs.existsSync(EVALUATION_DIR)) {
+    fs.mkdirSync(EVALUATION_DIR, { recursive: true });
 }
 /**
  * Create and save a set of evaluation queries
  */
-function saveEvaluationQueries(queries) {
+export function saveEvaluationQueries(queries) {
     // Add IDs if missing
     const queriesWithIds = queries.map(q => ({
         ...q,
-        id: q.id || (0, uuid_1.v4)()
+        id: q.id || uuidv4()
     }));
-    fs_1.default.writeFileSync(QUERIES_FILE, JSON.stringify(queriesWithIds, null, 2));
+    fs.writeFileSync(QUERIES_FILE, JSON.stringify(queriesWithIds, null, 2));
     console.log(`Saved ${queriesWithIds.length} evaluation queries`);
 }
 /**
  * Load evaluation queries from file
  */
-function loadEvaluationQueries() {
-    if (!fs_1.default.existsSync(QUERIES_FILE)) {
+export function loadEvaluationQueries() {
+    if (!fs.existsSync(QUERIES_FILE)) {
         return [];
     }
     try {
-        const data = fs_1.default.readFileSync(QUERIES_FILE, 'utf8');
+        const data = fs.readFileSync(QUERIES_FILE, 'utf8');
         return JSON.parse(data);
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error loading evaluation queries', error);
+        logError('Error loading evaluation queries', error);
         return [];
     }
 }
 /**
  * Add a single evaluation query
  */
-function addEvaluationQuery(query) {
+export function addEvaluationQuery(query) {
     const queries = loadEvaluationQueries();
     // Add ID if missing
     if (!query.id) {
-        query.id = (0, uuid_1.v4)();
+        query.id = uuidv4();
     }
     // Check for duplicates
     const existingIndex = queries.findIndex(q => q.id === query.id);
@@ -81,7 +70,7 @@ function addEvaluationQuery(query) {
 /**
  * Create a standard set of evaluation queries
  */
-function createStandardEvaluationSet() {
+export function createStandardEvaluationSet() {
     const standardQueries = [
         {
             id: 'factual-pricing',
@@ -128,34 +117,50 @@ function createStandardEvaluationSet() {
     return standardQueries;
 }
 /**
- * Run traditional retrieval (no contextual)
+ * Run traditional retrieval (simulating non-contextual reranking)
  */
 async function runTraditionalRetrieval(query, limit = 10) {
     const startTime = Date.now();
-    // Analyze query
-    const queryAnalysis = await (0, queryAnalysis_1.analyzeQuery)(query);
-    // Run hybrid search
-    const searchResults = await (0, hybridSearch_1.performHybridSearch)(query, limit, 0.5, // Equal weight to vector and BM25
-    {
-        categories: queryAnalysis.categories,
-        strictCategoryMatch: false
+    // Analyze query (needed for hybrid search potentially)
+    const queryAnalysis = await analyzeQuery(query);
+    // Run hybrid search (using the main hybridSearch function)
+    const searchResponse = await hybridSearch(query, {
+        limit: limit * 2, // Get more candidates
+        // Use defaults or potentially force balanced weights for traditional?
+        vectorWeight: 0.5,
+        keywordWeight: 0.5
+        // Add basic filtering based on analysis if desired for traditional
+        // filter: { primaryCategory: queryAnalysis.primaryCategory as any }
     });
-    // Rerank without using contextual info
-    const rerankedResults = await (0, reranking_1.rerank)(query, searchResults, limit, {
-        useContextualInfo: false
-    });
+    const searchResults = searchResponse.results || [];
+    // Prepare results for reranker input
+    const resultsForReranker = searchResults.map((result, index) => ({
+        item: {
+            id: result.id || `trad-result-${index}`,
+            text: result.text || result.originalText || '',
+            metadata: result.metadata || {},
+            visualContent: result.visualContent || result.metadata?.visualContent
+        },
+        score: result.score || 0
+    }));
+    // Rerank *without* using visual/contextual info
+    const rerankOptions = {
+        limit: limit,
+        includeScores: true,
+        useVisualContext: false, // Explicitly disable visual context
+        visualFocus: false, // Explicitly disable visual focus
+        timeoutMs: 5000
+    };
+    const rerankedResults = await rerankWithGemini(query, resultsForReranker, rerankOptions);
     const endTime = Date.now();
     // Format results
     return {
-        chunks: rerankedResults.map(result => {
-            var _a;
-            return ({
-                text: result.item.text,
-                source: ((_a = result.item.metadata) === null || _a === void 0 ? void 0 : _a.source) || 'Unknown',
-                score: result.score,
-                metadata: result.item.metadata || {}
-            });
-        }),
+        chunks: rerankedResults.map(result => ({
+            text: result.item?.text || '',
+            source: result.item?.metadata?.source || 'Unknown',
+            score: result.score || 0,
+            metadata: result.item?.metadata || {}
+        })),
         elapsedTimeMs: endTime - startTime
     };
 }
@@ -164,30 +169,50 @@ async function runTraditionalRetrieval(query, limit = 10) {
  */
 async function runContextualRetrieval(query, limit = 10) {
     const startTime = Date.now();
-    // Analyze query
-    const queryAnalysis = await (0, queryAnalysis_1.analyzeQuery)(query);
-    // Run hybrid search with more candidates for reranking
-    const searchResults = await (0, hybridSearch_1.performHybridSearch)(query, limit * 2, // Get more candidates for reranking
-    0.5, {
-        categories: queryAnalysis.categories,
-        strictCategoryMatch: false
+    // Analyze query (needed for hybrid search potentially)
+    const queryAnalysis = await analyzeQuery(query);
+    // Run hybrid search with more candidates for reranking (using the main hybridSearch function)
+    const searchResponse = await hybridSearch(query, {
+        limit: limit * 2, // Get more candidates
+        // Use parameters derived from query analysis?
+        // vectorWeight: retrievalParams.hybridRatio, 
+        // keywordWeight: 1.0 - retrievalParams.hybridRatio,
+        // filter: ... derived filter ...
+        // For now, use defaults similar to traditional for fair comparison?
+        vectorWeight: 0.5,
+        keywordWeight: 0.5
     });
-    // Rerank with contextual info
-    const rerankedResults = await (0, reranking_1.rerank)(query, searchResults, limit, {
-        useContextualInfo: true
-    });
+    const searchResults = searchResponse.results || [];
+    // Prepare results for reranker input
+    const resultsForReranker = searchResults.map((result, index) => ({
+        item: {
+            id: result.id || `ctx-result-${index}`,
+            text: result.text || result.originalText || '',
+            metadata: result.metadata || {},
+            visualContent: result.visualContent || result.metadata?.visualContent
+        },
+        score: result.score || 0
+    }));
+    // Rerank *with* contextual info
+    const visualAnalysis = analyzeVisualQuery(query);
+    const rerankOptions = {
+        limit: limit,
+        includeScores: true,
+        useVisualContext: true, // Enable visual context
+        visualFocus: visualAnalysis.isVisualQuery,
+        visualTypes: visualAnalysis.visualTypes,
+        timeoutMs: 5000
+    };
+    const rerankedResults = await rerankWithGemini(query, resultsForReranker, rerankOptions);
     const endTime = Date.now();
     // Format results
     return {
-        chunks: rerankedResults.map(result => {
-            var _a;
-            return ({
-                text: result.item.text,
-                source: ((_a = result.item.metadata) === null || _a === void 0 ? void 0 : _a.source) || 'Unknown',
-                score: result.score,
-                metadata: result.item.metadata || {}
-            });
-        }),
+        chunks: rerankedResults.map(result => ({
+            text: result.item?.text || '',
+            source: result.item?.metadata?.source || 'Unknown',
+            score: result.score || 0,
+            metadata: result.item?.metadata || {}
+        })),
         elapsedTimeMs: endTime - startTime
     };
 }
@@ -197,14 +222,13 @@ async function runContextualRetrieval(query, limit = 10) {
 async function generateAnswerFromResults(query, retrievalResults, useContextual) {
     // Format the results for the answer generator
     const formattedResults = retrievalResults.chunks.map(chunk => {
-        var _a, _b, _c, _d, _e;
         // Handle contextual information if available
-        const contextMetadata = ((_a = chunk.metadata) === null || _a === void 0 ? void 0 : _a.context) || {};
+        const contextMetadata = chunk.metadata?.context || {};
         const documentContext = {
-            summary: ((_b = chunk.metadata) === null || _b === void 0 ? void 0 : _b.documentSummary) || '',
-            topics: ((_c = chunk.metadata) === null || _c === void 0 ? void 0 : _c.primaryTopics) || '',
-            documentType: ((_d = chunk.metadata) === null || _d === void 0 ? void 0 : _d.documentType) || '',
-            technicalLevel: (_e = chunk.metadata) === null || _e === void 0 ? void 0 : _e.technicalLevel
+            summary: chunk.metadata?.documentSummary || '',
+            topics: chunk.metadata?.primaryTopics || '',
+            documentType: chunk.metadata?.documentType || '',
+            technicalLevel: chunk.metadata?.technicalLevel
         };
         return {
             text: chunk.text,
@@ -235,7 +259,7 @@ between chunks to provide a more accurate and coherent answer.
 Pay attention to whether a chunk is a definition or contains examples, and use that information
 to structure your response appropriately.`;
     }
-    const answer = await (0, answerGenerator_1.generateAnswer)(query, formattedResults, options);
+    const answer = await generateAnswer(query, formattedResults, options);
     return answer;
 }
 /**
@@ -293,7 +317,6 @@ function evaluateRetrievalMetrics(results, expectedTopics = []) {
  * Evaluate answer quality using GPT-4
  */
 async function evaluateAnswerQuality(query, answer, expectedTopics = []) {
-    var _a, _b;
     try {
         // Create prompt for evaluating answer quality
         const prompt = `
@@ -316,14 +339,14 @@ Rate the answer on a scale of 0-10 based on the following criteria:
 Provide ONLY a single number as your final score (0-10).
 `;
         // Use more capable model for evaluation
-        const response = await llmProviders_1.openai.chat.completions.create({
+        const response = await openai.chat.completions.create({
             model: "gpt-4-turbo-preview",
             messages: [{ role: "user", content: prompt }],
             temperature: 0.1,
             max_tokens: 10
         });
         // Extract score (just parse the first number found)
-        const content = ((_b = (_a = response.choices[0]) === null || _a === void 0 ? void 0 : _a.message) === null || _b === void 0 ? void 0 : _b.content) || "";
+        const content = response.choices[0]?.message?.content || "";
         const scoreMatch = content.match(/\d+(\.\d+)?/);
         if (scoreMatch) {
             // Convert to number and ensure it's in the 0-10 range
@@ -333,14 +356,14 @@ Provide ONLY a single number as your final score (0-10).
         return 5; // Default to neutral if parsing fails
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error evaluating answer quality', error);
+        logError('Error evaluating answer quality', error);
         return 5; // Default to neutral on error
     }
 }
 /**
  * Compare traditional and contextual retrieval approaches
  */
-async function compareRetrievalApproaches(queryOrId, saveResults = true) {
+export async function compareRetrievalApproaches(queryOrId, saveResults = true) {
     // Resolve query
     let query;
     if (typeof queryOrId === 'string') {
@@ -353,7 +376,7 @@ async function compareRetrievalApproaches(queryOrId, saveResults = true) {
         else {
             // Treat as a query string
             query = {
-                id: (0, uuid_1.v4)(),
+                id: uuidv4(),
                 query: queryOrId
             };
         }
@@ -364,7 +387,7 @@ async function compareRetrievalApproaches(queryOrId, saveResults = true) {
     console.log(`Comparing retrieval approaches for query: "${query.query}"`);
     // Create comparison result object
     const comparison = {
-        id: (0, uuid_1.v4)(),
+        id: uuidv4(),
         query,
         timestamp: new Date().toISOString(),
         traditional: {
@@ -458,21 +481,21 @@ Overall winner: ${comparison.winner}
         console.log(comparison.evaluationNotes);
         // Save results if requested
         if (saveResults) {
-            const resultsFile = path_1.default.join(EVALUATION_DIR, `comparison_${comparison.id}_${new Date().toISOString().replace(/:/g, '-')}.json`);
-            fs_1.default.writeFileSync(resultsFile, JSON.stringify(comparison, null, 2));
+            const resultsFile = path.join(EVALUATION_DIR, `comparison_${comparison.id}_${new Date().toISOString().replace(/:/g, '-')}.json`);
+            fs.writeFileSync(resultsFile, JSON.stringify(comparison, null, 2));
             console.log(`Results saved to ${resultsFile}`);
         }
         return comparison;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error comparing retrieval approaches', error);
+        logError('Error comparing retrieval approaches', error);
         throw error;
     }
 }
 /**
  * Run evaluation on all standard queries
  */
-async function runStandardEvaluation() {
+export async function runStandardEvaluation() {
     // Load or create standard queries
     let queries = loadEvaluationQueries();
     if (queries.length === 0) {
@@ -487,7 +510,7 @@ async function runStandardEvaluation() {
             console.log(`Completed evaluation for query: ${query.id}`);
         }
         catch (error) {
-            (0, errorHandling_1.logError)(`Error evaluating query ${query.id}`, error);
+            logError(`Error evaluating query ${query.id}`, error);
         }
     }
     // Generate summary report
@@ -521,8 +544,8 @@ async function runStandardEvaluation() {
         }
     };
     // Save summary report
-    const summaryFile = path_1.default.join(EVALUATION_DIR, `evaluation_summary_${new Date().toISOString().replace(/:/g, '-')}.json`);
-    fs_1.default.writeFileSync(summaryFile, JSON.stringify(summaryReport, null, 2));
+    const summaryFile = path.join(EVALUATION_DIR, `evaluation_summary_${new Date().toISOString().replace(/:/g, '-')}.json`);
+    fs.writeFileSync(summaryFile, JSON.stringify(summaryReport, null, 2));
     console.log('\n===== EVALUATION SUMMARY =====');
     console.log(`Total Queries: ${summaryReport.totalQueries}`);
     console.log(`Contextual Wins: ${contextualWins} (${summaryReport.winners.contextualWinPercentage.toFixed(1)}%)`);

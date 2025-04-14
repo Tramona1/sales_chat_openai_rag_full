@@ -46,42 +46,20 @@ export const openai = new OpenAI({
 });
 
 /**
- * Generate embeddings for text using OpenAI
- * Used for vector similarity search
+ * Generate embeddings for text using the OpenAI API
+ * @param text The text to embed
+ * @returns An embedding vector
  */
 export async function embedText(text: string): Promise<number[]> {
+  console.warn('embedText from openaiClient is deprecated. Please use embedText from embeddingClient.ts instead.');
+  
   try {
-    // Clean and prepare text
-    const cleanedText = text.trim().replace(/\n+/g, ' ');
-    
-    // Try to use the Gemini embedding function first (if available)
-    try {
-      // Dynamic import to avoid circular dependencies
-      const { embedTextWithGemini } = await import('./geminiClient');
-      const embedding = await embedTextWithGemini(cleanedText);
-      if (embedding && embedding.length > 0) {
-        return embedding;
-      }
-    } catch (geminiError) {
-      console.warn('Gemini embedding failed, falling back to OpenAI', geminiError);
-      // Fall back to OpenAI if Gemini fails
-    }
-    
-    // Get embedding from OpenAI
-    const response = await openai.embeddings.create({
-      model: AI_SETTINGS.embeddingModel,
-      input: cleanedText,
-    });
-    
-    // Return the embedding vector
-    return response.data[0].embedding;
+    // Import and redirect to the new embedding client
+    const { embedText: embedTextFromClient } = await import('./embeddingClient');
+    return embedTextFromClient(text);
   } catch (error) {
-    logError('Error generating embedding', error);
-    
-    // In case of error, return a zero vector as fallback
-    // This should be handled by the calling function
-    console.error('Error generating embedding:', error);
-    return Array(1536).fill(0);
+    logError('Error in openaiClient.embedText redirection', error);
+    throw error;
   }
 }
 

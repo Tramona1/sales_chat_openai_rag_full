@@ -1,19 +1,16 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const adminWorkflow_1 = require("@/utils/adminWorkflow");
-const errorHandling_1 = require("@/utils/errorHandling");
+import { getPendingDocuments } from '@/utils/adminWorkflow';
+import { logError } from '@/utils/logger';
 /**
  * API endpoint for retrieving pending documents that require admin approval
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Only allow GET requests
     if (req.method !== 'GET') {
         return res.status(405).json({ message: 'Method not allowed' });
     }
     try {
         // Get pending documents
-        const pendingDocs = await (0, adminWorkflow_1.getPendingDocuments)();
+        const pendingDocs = await getPendingDocuments();
         // Transform the stored pending documents into the format expected by the UI
         const documents = pendingDocs.map(doc => ({
             id: doc.id,
@@ -42,7 +39,7 @@ async function handler(req, res) {
     }
     catch (error) {
         // Log and return error
-        (0, errorHandling_1.logError)('Error retrieving pending documents', error);
+        logError('Error retrieving pending documents', error);
         return res.status(500).json({
             success: false,
             message: 'Failed to retrieve pending documents',

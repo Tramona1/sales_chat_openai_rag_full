@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const Alert = ({ children, severity = 'info', onClose, variant = 'standard', className = '' }) => {
     // Severity-based icon
     const renderIcon = () => {
@@ -66,4 +61,4 @@ const Alert = ({ children, severity = 'info', onClose, variant = 'standard', cla
         </button>)}
     </div>);
 };
-exports.default = Alert;
+export default Alert;

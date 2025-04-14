@@ -16,7 +16,7 @@
     "./**/*.ts",
     "../utils/**/*.ts",
     "../utils/**/*.js"
-, "../backups/verify_ts_imports.js"  ],
+, "../backups/verify_ts_imports.js", "../test_gemini_api.js"  ],
   "exclude": [
     "node_modules"
   ]

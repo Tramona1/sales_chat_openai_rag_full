@@ -1,8 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const advancedDocumentProcessing_1 = require("../../utils/advancedDocumentProcessing");
-async function handler(req, res) {
+import { processTextWithUnderstanding } from '../../utils/advancedDocumentProcessing';
+export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method Not Allowed' });
     }
@@ -17,7 +14,7 @@ async function handler(req, res) {
             : 'Direct Text Input';
         // Process the text input with advanced understanding
         try {
-            const result = await (0, advancedDocumentProcessing_1.processTextWithUnderstanding)(text, {
+            const result = await processTextWithUnderstanding(text, {
                 extractEntities: true,
                 summarize: true,
                 categorize: true

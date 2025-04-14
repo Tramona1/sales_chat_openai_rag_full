@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { getCacheStats } from '../../utils/caching';
 import { standardizeApiErrorResponse } from '../../utils/errorHandling';
-import { supabaseAdmin } from '../../utils/supabaseClient';
+import { getSupabaseAdmin } from '../../utils/supabaseClient';
 import { logInfo, logError } from '../../utils/logger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,8 +22,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       logInfo('Fetching document statistics from Supabase');
       
+      const supabase = getSupabaseAdmin();
+      
       // Get document count
-      const { count: documentCount, error: docError } = await supabaseAdmin
+      const { count: documentCount, error: docError } = await supabase
         .from('documents')
         .select('*', { count: 'exact', head: true });
       
@@ -32,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       
       // Get chunk count
-      const { count: chunkCount, error: chunkError } = await supabaseAdmin
+      const { count: chunkCount, error: chunkError } = await supabase
         .from('document_chunks')
         .select('*', { count: 'exact', head: true });
       

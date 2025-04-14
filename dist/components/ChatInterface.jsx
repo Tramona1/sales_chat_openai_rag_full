@@ -1,53 +1,16 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importStar(require("react"));
+import React, { useState, useEffect, useRef } from 'react';
 const ChatInterface = ({ messages, onSendMessage, onFeedback, placeholder = 'Type your message...', containerRef }) => {
-    const [input, setInput] = (0, react_1.useState)('');
-    const [isTyping, setIsTyping] = (0, react_1.useState)(false);
-    const messagesEndRef = (0, react_1.useRef)(null);
-    const inputRef = (0, react_1.useRef)(null);
+    const [input, setInput] = useState('');
+    const [isTyping, setIsTyping] = useState(false);
+    const messagesEndRef = useRef(null);
+    const inputRef = useRef(null);
     // Auto-scroll to bottom when messages change
-    (0, react_1.useEffect)(() => {
-        var _a;
-        (_a = messagesEndRef.current) === null || _a === void 0 ? void 0 : _a.scrollIntoView({ behavior: 'smooth' });
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
     // Auto-focus input on load
-    (0, react_1.useEffect)(() => {
-        var _a;
-        (_a = inputRef.current) === null || _a === void 0 ? void 0 : _a.focus();
+    useEffect(() => {
+        inputRef.current?.focus();
     }, []);
     // Handle form submission
     const handleSubmit = (e) => {
@@ -91,10 +54,10 @@ const ChatInterface = ({ messages, onSendMessage, onFeedback, placeholder = 'Typ
                 : 'bg-gray-100 text-gray-800 rounded-bl-none'}`}>
               {/* Message content */}
               <div>
-                {message.content.split('\n').map((line, i) => (<react_1.default.Fragment key={i}>
+                {message.content.split('\n').map((line, i) => (<React.Fragment key={i}>
                     {line}
                     {i < message.content.split('\n').length - 1 && <br />}
-                  </react_1.default.Fragment>))}
+                  </React.Fragment>))}
               </div>
               
               {/* Feedback buttons (only show for assistant messages) */}
@@ -139,4 +102,4 @@ const ChatInterface = ({ messages, onSendMessage, onFeedback, placeholder = 'Typ
       </div>
     </div>);
 };
-exports.default = ChatInterface;
+export default ChatInterface;

@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const Divider = ({ orientation = 'horizontal', variant = 'fullWidth', light = false, className = '', textAlign, children }) => {
     // Orientation classes
     const orientationClass = orientation === 'vertical'
@@ -30,4 +25,4 @@ const Divider = ({ orientation = 'horizontal', variant = 'fullWidth', light = fa
     // Otherwise render a simple divider
     return (<hr className={`${orientationClass} ${variantClasses[variant]} ${lightClass} ${className}`}/>);
 };
-exports.default = Divider;
+export default Divider;

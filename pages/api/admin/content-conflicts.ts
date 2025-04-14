@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { detectDocumentConflicts } from '@/utils/conflictDetection';
 import { logError, logInfo } from '@/utils/logger';
-import { supabaseAdmin } from '@/utils/supabaseClient';
+import { getSupabaseAdmin } from '@/utils/supabaseClient';
 
 /**
  * API endpoint to get content conflicts in the knowledge base
@@ -21,7 +21,8 @@ export default async function handler(
     
     // Fetch document chunks from Supabase
     logInfo('Fetching document chunks from Supabase for conflict detection');
-    const { data: documentChunks, error } = await supabaseAdmin
+    const supabase = getSupabaseAdmin();
+    const { data: documentChunks, error } = await supabase
       .from('document_chunks')
       .select('id, document_id, content, metadata, embedding')
       .order('document_id', { ascending: true });

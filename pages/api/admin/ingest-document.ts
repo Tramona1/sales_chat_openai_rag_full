@@ -6,7 +6,7 @@ import {
   convertEnhancedAnalysisToMetadata
 } from '../../../utils/geminiProcessor';
 import { embedText } from '../../../utils/embeddingClient';
-import { logError, logInfo } from '../../../utils/errorHandling';
+import { logError, logInfo } from '../../../utils/logger';
 import { addToPendingDocuments, checkForContentConflicts } from '../../../utils/adminWorkflow';
 import { splitIntoChunksWithContext } from '../../../utils/documentProcessing';
 import { ContextualChunk } from '../../../types/documentProcessing';
@@ -196,15 +196,16 @@ export default async function handler(
     }
 
     // Generate embedding for vector storage (if we haven't done contextual chunking)
-    const embedding = chunks.length === 0 ? await embedText(text) : null;
+    const embedding = chunks.length === 0 ? await embedText(text) : undefined;
 
     // Add to pending documents queue instead of vector store
     // Pass the chunks if we have them, otherwise null to use default processing
+    // The function now inserts directly into documents table with approved=false
     const documentId = await addToPendingDocuments(
       text, 
       metadata, 
-      embedding,
-      chunks.length > 0 ? chunks : null
+      embedding // Remove the 4th argument (chunks) 
+      // chunks.length > 0 ? chunks : null // Removed argument
     );
 
     // Return success with analysis summary and conflict information

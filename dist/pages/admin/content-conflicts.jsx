@@ -1,72 +1,32 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.getServerSideProps = void 0;
-exports.default = ContentConflictsPage;
-const react_1 = __importStar(require("react"));
-const head_1 = __importDefault(require("next/head"));
-const conflictDetection_1 = require("../../utils/conflictDetection");
-const Box_1 = __importDefault(require("@/components/ui/Box"));
-const Typography_1 = __importDefault(require("@/components/ui/Typography"));
-const Button_1 = __importDefault(require("@/components/ui/Button"));
-const Paper_1 = __importDefault(require("@/components/ui/Paper"));
-const Dialog_1 = __importDefault(require("@/components/ui/Dialog"));
-const Alert_1 = __importDefault(require("@/components/ui/Alert"));
-const CircularProgress_1 = __importDefault(require("@/components/ui/CircularProgress"));
-const Tabs_1 = require("@/components/ui/Tabs");
-const Tabs_2 = require("@/components/ui/Tabs");
+import React, { useState, useEffect } from 'react';
+import Head from 'next/head';
+import { ConflictType, formatDocumentSnippet } from '../../utils/conflictDetection';
+import Box from '@/components/ui/Box';
+import Typography from '@/components/ui/Typography';
+import Button from '@/components/ui/Button';
+import Paper from '@/components/ui/Paper';
+import Dialog from '@/components/ui/Dialog';
+import Alert from '@/components/ui/Alert';
+import CircularProgress from '@/components/ui/CircularProgress';
+import { Tabs } from '@/components/ui/Tabs';
+import { Tab } from '@/components/ui/Tabs';
 /**
  * Admin page for managing content conflicts
  */
-function ContentConflictsPage() {
+export default function ContentConflictsPage() {
     // State for conflict data
-    const [conflicts, setConflicts] = (0, react_1.useState)([]);
-    const [loading, setLoading] = (0, react_1.useState)(true);
-    const [error, setError] = (0, react_1.useState)(null);
-    const [currentTab, setCurrentTab] = (0, react_1.useState)('all');
-    const [resolvingConflict, setResolvingConflict] = (0, react_1.useState)(null);
-    const [successMessage, setSuccessMessage] = (0, react_1.useState)(null);
+    const [conflicts, setConflicts] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [currentTab, setCurrentTab] = useState('all');
+    const [resolvingConflict, setResolvingConflict] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
     // Dialog state
-    const [resolveDialogOpen, setResolveDialogOpen] = (0, react_1.useState)(false);
-    const [selectedConflict, setSelectedConflict] = (0, react_1.useState)(null);
-    const [selectedDocId, setSelectedDocId] = (0, react_1.useState)(null);
+    const [resolveDialogOpen, setResolveDialogOpen] = useState(false);
+    const [selectedConflict, setSelectedConflict] = useState(null);
+    const [selectedDocId, setSelectedDocId] = useState(null);
     // Fetch conflicts on component mount
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         fetchConflicts();
     }, []);
     // Function to fetch conflicts
@@ -105,10 +65,9 @@ function ContentConflictsPage() {
     });
     // Handle opening the resolve dialog
     const handleOpenResolveDialog = (conflict) => {
-        var _a;
         setSelectedConflict(conflict);
         // Default to the suggested resolution if available
-        setSelectedDocId(((_a = conflict.suggestedResolution) === null || _a === void 0 ? void 0 : _a.preferredDocId) || null);
+        setSelectedDocId(conflict.suggestedResolution?.preferredDocId || null);
         setResolveDialogOpen(true);
     };
     // Handle closing the resolve dialog
@@ -167,10 +126,10 @@ function ContentConflictsPage() {
     // Render conflict type badge
     const renderConflictBadge = (type) => {
         const styles = {
-            [conflictDetection_1.ConflictType.CONTRADICTORY]: { bg: 'bg-red-100', text: 'text-red-800' },
-            [conflictDetection_1.ConflictType.OUTDATED]: { bg: 'bg-yellow-100', text: 'text-yellow-800' },
-            [conflictDetection_1.ConflictType.INCOMPLETE]: { bg: 'bg-blue-100', text: 'text-blue-800' },
-            [conflictDetection_1.ConflictType.DUPLICATE]: { bg: 'bg-gray-100', text: 'text-gray-800' }
+            [ConflictType.CONTRADICTORY]: { bg: 'bg-red-100', text: 'text-red-800' },
+            [ConflictType.OUTDATED]: { bg: 'bg-yellow-100', text: 'text-yellow-800' },
+            [ConflictType.INCOMPLETE]: { bg: 'bg-blue-100', text: 'text-blue-800' },
+            [ConflictType.DUPLICATE]: { bg: 'bg-gray-100', text: 'text-gray-800' }
         };
         const style = styles[type];
         return (<span className={`px-2 py-1 rounded-full text-xs font-medium ${style.bg} ${style.text}`}>
@@ -178,67 +137,67 @@ function ContentConflictsPage() {
       </span>);
     };
     return (<div className="container mx-auto px-4 py-8">
-      <head_1.default>
+      <Head>
         <title>Content Conflicts | Admin Dashboard</title>
-      </head_1.default>
+      </Head>
       
-      <Box_1.default display="flex" justifyContent="space-between" alignItems="center" className="mb-6">
+      <Box display="flex" justifyContent="space-between" alignItems="center" className="mb-6">
         <div>
-          <Typography_1.default variant="h4" className="font-bold">Content Conflicts</Typography_1.default>
-          <Typography_1.default variant="body2" color="textSecondary">
+          <Typography variant="h4" className="font-bold">Content Conflicts</Typography>
+          <Typography variant="body2" color="textSecondary">
             Manage conflicting information in the knowledge base
-          </Typography_1.default>
+          </Typography>
         </div>
         
-        <Button_1.default variant="outline" onClick={fetchConflicts} disabled={loading}>
+        <Button variant="outline" onClick={fetchConflicts} disabled={loading}>
           Refresh Conflicts
-        </Button_1.default>
-      </Box_1.default>
+        </Button>
+      </Box>
       
       {/* Success message */}
-      {successMessage && (<Alert_1.default severity="success" className="mb-4" onClose={() => setSuccessMessage(null)}>
+      {successMessage && (<Alert severity="success" className="mb-4" onClose={() => setSuccessMessage(null)}>
           {successMessage}
-        </Alert_1.default>)}
+        </Alert>)}
       
       {/* Error message */}
-      {error && (<Alert_1.default severity="error" className="mb-4" onClose={() => setError(null)}>
+      {error && (<Alert severity="error" className="mb-4" onClose={() => setError(null)}>
           {error}
-        </Alert_1.default>)}
+        </Alert>)}
       
       {/* Tabs for filtering */}
-      <Tabs_1.Tabs value={currentTab} onChange={handleTabChange} className="mb-4">
-        <Tabs_2.Tab value="all" label="All Conflicts"/>
-        <Tabs_2.Tab value="high-priority" label="High Priority"/>
-        <Tabs_2.Tab value="leadership" label="Leadership"/>
-        <Tabs_2.Tab value="pricing" label="Pricing"/>
-        <Tabs_2.Tab value="features" label="Features"/>
-      </Tabs_1.Tabs>
+      <Tabs value={currentTab} onChange={handleTabChange} className="mb-4">
+        <Tab value="all" label="All Conflicts"/>
+        <Tab value="high-priority" label="High Priority"/>
+        <Tab value="leadership" label="Leadership"/>
+        <Tab value="pricing" label="Pricing"/>
+        <Tab value="features" label="Features"/>
+      </Tabs>
       
       {/* Loading state */}
       {loading && (<div className="flex justify-center items-center h-64">
-          <CircularProgress_1.default />
+          <CircularProgress />
         </div>)}
       
       {/* No conflicts state */}
-      {!loading && filteredConflicts.length === 0 && (<Paper_1.default className="p-8 text-center">
-          <Typography_1.default variant="h6" className="text-gray-500">
+      {!loading && filteredConflicts.length === 0 && (<Paper className="p-8 text-center">
+          <Typography variant="h6" className="text-gray-500">
             No conflicts found
-          </Typography_1.default>
-          <Typography_1.default variant="body2" color="textSecondary" className="mt-2">
+          </Typography>
+          <Typography variant="body2" color="textSecondary" className="mt-2">
             {currentTab !== 'all'
                 ? `No ${currentTab} conflicts detected in the knowledge base`
                 : 'No conflicts detected in the knowledge base'}
-          </Typography_1.default>
-        </Paper_1.default>)}
+          </Typography>
+        </Paper>)}
       
       {/* Conflicts list */}
       {!loading && filteredConflicts.length > 0 && (<div className="space-y-6">
-          {filteredConflicts.map((conflict, index) => (<Paper_1.default key={`${conflict.topic}-${index}`} className="overflow-hidden">
+          {filteredConflicts.map((conflict, index) => (<Paper key={`${conflict.topic}-${index}`} className="overflow-hidden">
               <div className="px-6 py-4 bg-gray-50 border-b flex justify-between items-center">
                 <div>
-                  <Typography_1.default variant="h6" className="font-semibold">
+                  <Typography variant="h6" className="font-semibold">
                     {conflict.topic}{conflict.entityName ? `: ${conflict.entityName}` : ''}
-                  </Typography_1.default>
+                  </Typography>
                   <div className="flex items-center mt-1 space-x-2">
                     {conflict.isHighPriority && (<span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
                         High Priority
@@ -248,85 +207,83 @@ function ContentConflictsPage() {
                       </span>))}
                   </div>
                 </div>
-                <Button_1.default variant="primary" onClick={() => handleOpenResolveDialog(conflict)} disabled={resolvingConflict === conflict.topic}>
-                  {resolvingConflict === conflict.topic ? (<CircularProgress_1.default size={24} color="primary" className="mr-2"/>) : null}
+                <Button variant="primary" onClick={() => handleOpenResolveDialog(conflict)} disabled={resolvingConflict === conflict.topic}>
+                  {resolvingConflict === conflict.topic ? (<CircularProgress size={24} color="primary" className="mr-2"/>) : null}
                   Resolve Conflict
-                </Button_1.default>
+                </Button>
               </div>
               
               <div className="p-4">
                 {conflict.conflicts.map((c, i) => (<div key={i} className="mb-4">
-                    <Typography_1.default variant="subtitle2" className="font-medium mb-2">
+                    <Typography variant="subtitle2" className="font-medium mb-2">
                       {c.description}
-                    </Typography_1.default>
+                    </Typography>
                     <div className="pl-4 border-l-4 border-gray-200">
                       {c.affectedDocIds.map((docId) => {
-                        var _a;
-                        const doc = conflict.documents.find(d => { var _a; return ((_a = d.metadata) === null || _a === void 0 ? void 0 : _a.source) === docId; });
+                        const doc = conflict.documents.find(d => d.metadata?.source === docId);
                         return doc ? (<div key={docId} className="mb-2 p-3 bg-gray-50 rounded">
                             <div className="flex justify-between items-center mb-2">
-                              <Typography_1.default variant="caption" className="text-gray-500">
+                              <Typography variant="caption" className="text-gray-500">
                                 ID: {docId}
-                              </Typography_1.default>
-                              <Typography_1.default variant="caption" className="text-gray-500">
-                                {((_a = doc.metadata) === null || _a === void 0 ? void 0 : _a.lastUpdated)
+                              </Typography>
+                              <Typography variant="caption" className="text-gray-500">
+                                {doc.metadata?.lastUpdated
                                 ? `Last updated: ${new Date(doc.metadata.lastUpdated).toLocaleDateString()}`
                                 : ''}
-                              </Typography_1.default>
+                              </Typography>
                             </div>
-                            <Typography_1.default variant="body2">
-                              {(0, conflictDetection_1.formatDocumentSnippet)(doc, 200)}
-                            </Typography_1.default>
+                            <Typography variant="body2">
+                              {formatDocumentSnippet(doc, 200)}
+                            </Typography>
                           </div>) : null;
                     })}
                     </div>
                   </div>))}
                 
                 {conflict.suggestedResolution && (<div className="mt-4 p-4 bg-green-50 rounded">
-                    <Typography_1.default variant="subtitle2" className="font-medium">
+                    <Typography variant="subtitle2" className="font-medium">
                       Suggested Resolution
-                    </Typography_1.default>
-                    <Typography_1.default variant="body2">
+                    </Typography>
+                    <Typography variant="body2">
                       {conflict.suggestedResolution.reason}
-                    </Typography_1.default>
+                    </Typography>
                   </div>)}
               </div>
-            </Paper_1.default>))}
+            </Paper>))}
         </div>)}
       
       {/* Resolution Dialog */}
-      <Dialog_1.default open={resolveDialogOpen} onClose={handleCloseResolveDialog} title={`Resolve ${selectedConflict === null || selectedConflict === void 0 ? void 0 : selectedConflict.topic} Conflict`} actions={<>
-            <Button_1.default variant="secondary" onClick={handleCloseResolveDialog}>
+      <Dialog open={resolveDialogOpen} onClose={handleCloseResolveDialog} title={`Resolve ${selectedConflict?.topic} Conflict`} actions={<>
+            <Button variant="secondary" onClick={handleCloseResolveDialog}>
               Cancel
-            </Button_1.default>
-            <Button_1.default variant="primary" onClick={handleResolveConflict} disabled={!selectedDocId || resolvingConflict !== null}>
+            </Button>
+            <Button variant="primary" onClick={handleResolveConflict} disabled={!selectedDocId || resolvingConflict !== null}>
               {resolvingConflict ? 'Resolving...' : 'Confirm Resolution'}
-            </Button_1.default>
+            </Button>
           </>}>
         {selectedConflict && (<div className="max-w-2xl">
-            <Typography_1.default variant="body1" className="mb-4">
+            <Typography variant="body1" className="mb-4">
               Select the document with the correct information. Other documents will be marked as deprecated.
-            </Typography_1.default>
+            </Typography>
             
             <div className="space-y-4 mt-4">
               {selectedConflict.documents.map((doc) => {
-                var _a, _b;
-                const docId = ((_a = doc.metadata) === null || _a === void 0 ? void 0 : _a.source) || '';
+                const docId = doc.metadata?.source || '';
                 return (<div key={docId} className={`p-4 border rounded cursor-pointer transition-colors ${selectedDocId === docId
                         ? 'border-blue-500 bg-blue-50'
                         : 'border-gray-300 hover:bg-gray-50'}`} onClick={() => setSelectedDocId(docId)}>
                     <div className="flex items-center mb-2">
                       <input type="radio" checked={selectedDocId === docId} onChange={() => setSelectedDocId(docId)} className="mr-2 h-4 w-4 text-blue-600"/>
-                      <Typography_1.default variant="subtitle2" className="font-medium">
+                      <Typography variant="subtitle2" className="font-medium">
                         Document ID: {docId}
-                      </Typography_1.default>
+                      </Typography>
                     </div>
                     <div className="ml-6">
-                      <Typography_1.default variant="body2">
-                        {(0, conflictDetection_1.formatDocumentSnippet)(doc, 150)}
-                      </Typography_1.default>
+                      <Typography variant="body2">
+                        {formatDocumentSnippet(doc, 150)}
+                      </Typography>
                       <div className="mt-2 text-xs text-gray-500">
-                        {((_b = doc.metadata) === null || _b === void 0 ? void 0 : _b.lastUpdated) && (<span>Last updated: {new Date(doc.metadata.lastUpdated).toLocaleString()}</span>)}
+                        {doc.metadata?.lastUpdated && (<span>Last updated: {new Date(doc.metadata.lastUpdated).toLocaleString()}</span>)}
                       </div>
                     </div>
                   </div>);
@@ -334,21 +291,20 @@ function ContentConflictsPage() {
             </div>
             
             {selectedConflict.suggestedResolution && (<div className="mt-4 p-3 bg-yellow-50 border border-yellow-100 rounded">
-                <Typography_1.default variant="body2">
+                <Typography variant="body2">
                   <strong>Suggestion:</strong> {selectedConflict.suggestedResolution.reason}
-                </Typography_1.default>
+                </Typography>
               </div>)}
           </div>)}
-      </Dialog_1.default>
+      </Dialog>
     </div>);
 }
 /**
  * Server-side props
  */
-const getServerSideProps = async (context) => {
+export const getServerSideProps = async (context) => {
     // In a real implementation, you might want to check authentication/authorization here
     return {
         props: {}
     };
 };
-exports.getServerSideProps = getServerSideProps;

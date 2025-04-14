@@ -3,7 +3,8 @@ import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { standardizeApiErrorResponse } from '../../utils/errorHandling';
 import { logInfo, logError, logDebug } from '../../utils/logger';
-import { hybridSearch, testSupabaseConnection } from '../../utils/supabaseClient';
+import { testSupabaseConnection } from '../../utils/supabaseClient';
+import { hybridSearch } from '@/utils/hybridSearch';
 
 // Create a function to get embedding since it's missing from imports
 async function getEmbedding(text: string): Promise<number[]> {
@@ -81,16 +82,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let retrievedDocuments: SearchResult[] = [];
     try {
       logInfo('Performing hybrid search with Supabase');
-      const searchResults = await hybridSearch(userMessage, 30, 0.7);
+      const response = await hybridSearch(userMessage, { 
+        limit: 30, 
+        matchThreshold: 0.2,  // More lenient threshold for better recall
+        vectorWeight: 0.3,    // Emphasize keywords more for better exact match retrieval
+        keywordWeight: 0.7    // Emphasize keywords for better exact match retrieval
+      });
+      const searchResults = response.results;
       logDebug(`Retrieved ${searchResults.length} documents from hybrid search`);
       
       retrievedDocuments = searchResults.map((item: any) => ({
         id: item.id || `search-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        text: item.content || '', // Using content field from Supabase
-        score: item.similarity,
+        text: item.text || item.originalText || '',
+        score: item.score,
         metadata: {
-          source: item.source || item.title || 'Unknown Source',
-          title: item.title || 'Untitled Document',
+          source: item.metadata?.source || item.metadata?.title || 'Unknown Source',
+          title: item.metadata?.title || 'Untitled Document',
           ...(item.metadata || {})
         }
       }));
@@ -104,7 +111,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Sort by relevance score and filter by threshold
     retrievedDocuments = retrievedDocuments
-      .filter(doc => (typeof doc.score === 'number' && doc.score >= SIMILARITY_THRESHOLD) || doc.score === undefined)
       .sort((a, b) => {
         const scoreA = typeof a.score === 'number' ? a.score : 0;
         const scoreB = typeof b.score === 'number' ? b.score : 0;

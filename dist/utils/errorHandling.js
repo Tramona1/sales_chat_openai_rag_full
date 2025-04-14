@@ -1,76 +1,49 @@
-"use strict";
-var _a;
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.QueryProcessingError = exports.NetworkError = exports.VectorStoreError = exports.AIModelError = exports.DocumentProcessingError = void 0;
-exports.handleOpenAIError = handleOpenAIError;
-exports.handleError = handleError;
-exports.createFallbackResponse = createFallbackResponse;
-exports.safeExecute = safeExecute;
-exports.standardizeApiErrorResponse = standardizeApiErrorResponse;
-exports.formatValidationError = formatValidationError;
-exports.logError = logError;
-exports.logWarning = logWarning;
-exports.logInfo = logInfo;
-exports.logDebug = logDebug;
-exports.createError = createError;
-exports.formatApiError = formatApiError;
-exports.withErrorHandling = withErrorHandling;
-const openai_1 = require("openai");
-const config_1 = require("./config");
-// Get the config
-const config = (0, config_1.getConfig)();
-// Browser-compatible logging configuration
-const LOG_LEVEL = {
-    debug: 0,
-    info: 1,
-    warn: 2,
-    error: 3
-};
-const currentLevel = LOG_LEVEL[((_a = config.logging) === null || _a === void 0 ? void 0 : _a.level) || 'info'];
+/**
+ * Error handling utilities
+ *
+ * This module provides utilities for handling errors in a consistent way.
+ */
+import { OpenAI } from 'openai';
+import { logError } from './logger';
 // Custom error classes for better error identification
-class DocumentProcessingError extends Error {
+export class DocumentProcessingError extends Error {
     constructor(message, originalError) {
         super(message);
         this.originalError = originalError;
         this.name = 'DocumentProcessingError';
     }
 }
-exports.DocumentProcessingError = DocumentProcessingError;
-class AIModelError extends Error {
+export class AIModelError extends Error {
     constructor(message, originalError) {
         super(message);
         this.originalError = originalError;
         this.name = 'AIModelError';
     }
 }
-exports.AIModelError = AIModelError;
-class VectorStoreError extends Error {
+export class VectorStoreError extends Error {
     constructor(message, originalError) {
         super(message);
         this.originalError = originalError;
         this.name = 'VectorStoreError';
     }
 }
-exports.VectorStoreError = VectorStoreError;
-class NetworkError extends Error {
+export class NetworkError extends Error {
     constructor(message, originalError) {
         super(message);
         this.originalError = originalError;
         this.name = 'NetworkError';
     }
 }
-exports.NetworkError = NetworkError;
-class QueryProcessingError extends Error {
+export class QueryProcessingError extends Error {
     constructor(message, originalError) {
         super(message);
         this.originalError = originalError;
         this.name = 'QueryProcessingError';
     }
 }
-exports.QueryProcessingError = QueryProcessingError;
 // Error handler for OpenAI API errors
-function handleOpenAIError(error) {
-    if (error instanceof openai_1.OpenAI.APIError) {
+export function handleOpenAIError(error) {
+    if (error instanceof OpenAI.APIError) {
         if (error.status === 400) {
             return new AIModelError(`Invalid request to OpenAI: ${error.message}`, error);
         }
@@ -87,11 +60,11 @@ function handleOpenAIError(error) {
     return new AIModelError(`Unexpected error with OpenAI: ${error instanceof Error ? error.message : String(error)}`, error instanceof Error ? error : undefined);
 }
 // General purpose error handler
-function handleError(error, context) {
+export function handleError(error, context) {
     // Log the error for debugging
     console.error(`Error in ${context}:`, error);
     // Specific handling based on error type
-    if (error instanceof openai_1.OpenAI.APIError) {
+    if (error instanceof OpenAI.APIError) {
         return handleOpenAIError(error);
     }
     if (error instanceof DocumentProcessingError ||
@@ -106,16 +79,16 @@ function handleError(error, context) {
     return new Error(`Error in ${context}: ${message}`);
 }
 // Helper for fallback response creation
-function createFallbackResponse(defaultValue) {
+export function createFallbackResponse(defaultValue) {
     return defaultValue;
 }
 // Type-safe try/catch wrapper for async functions
-async function safeExecute(operation, context, fallback) {
+export async function safeExecute(operation, context, fallback) {
     try {
         return await operation();
     }
     catch (error) {
-        handleError(error, context);
+        logError(`Error during safeExecute in context: ${context}`, error);
         return fallback;
     }
 }
@@ -123,8 +96,7 @@ async function safeExecute(operation, context, fallback) {
  * Standardize error responses for API endpoints
  * This ensures consistent error formatting across the application
  */
-function standardizeApiErrorResponse(error) {
-    var _a;
+export function standardizeApiErrorResponse(error) {
     console.error('Error details:', error);
     // Handle OpenAI API errors
     if (error.name === 'OpenAIError' || (error.response && error.response.headers && error.response.headers.get('x-request-id'))) {
@@ -153,7 +125,7 @@ function standardizeApiErrorResponse(error) {
         };
     }
     // Handle timeout errors
-    if (error.name === 'AbortError' || error.code === 'ETIMEDOUT' || ((_a = error.message) === null || _a === void 0 ? void 0 : _a.includes('timeout'))) {
+    if (error.name === 'AbortError' || error.code === 'ETIMEDOUT' || error.message?.includes('timeout')) {
         return {
             error: {
                 message: 'Request timed out. Please try again.',
@@ -178,7 +150,7 @@ function standardizeApiErrorResponse(error) {
 /**
  * Format validation errors consistently
  */
-function formatValidationError(message, fieldErrors) {
+export function formatValidationError(message, fieldErrors) {
     return {
         error: {
             message: message || 'Validation error',
@@ -188,45 +160,9 @@ function formatValidationError(message, fieldErrors) {
     };
 }
 /**
- * Log error in browser-compatible way
- */
-function logError(message, error, level = 'error') {
-    // Skip logging if level is below the configured level
-    if (LOG_LEVEL[level] < currentLevel) {
-        return;
-    }
-    // In browser - use console for logging
-    console.error(`[${level.toUpperCase()}] ${message}`, error);
-    // No file system operations in this browser-compatible version
-}
-/**
- * Log warning in browser-compatible way
- */
-function logWarning(message, data) {
-    if (currentLevel <= LOG_LEVEL.warn) {
-        console.warn(`[WARN] ${message}`, data);
-    }
-}
-/**
- * Log info in browser-compatible way
- */
-function logInfo(message, data) {
-    if (currentLevel <= LOG_LEVEL.info) {
-        console.info(`[INFO] ${message}`, data);
-    }
-}
-/**
- * Log debug in browser-compatible way
- */
-function logDebug(message, data) {
-    if (currentLevel <= LOG_LEVEL.debug) {
-        console.debug(`[DEBUG] ${message}`, data);
-    }
-}
-/**
  * Create an error with a specific code
  */
-function createError(message, code, additionalDetails) {
+export function createError(message, code, additionalDetails) {
     const error = new Error(message);
     if (code) {
         error.code = code;
@@ -239,7 +175,7 @@ function createError(message, code, additionalDetails) {
 /**
  * Format API errors consistently for response
  */
-function formatApiError(message = 'An unexpected error occurred', code = 'UNKNOWN_ERROR', details) {
+export function formatApiError(message = 'An unexpected error occurred', code = 'UNKNOWN_ERROR', details) {
     return {
         error: {
             message,
@@ -252,7 +188,7 @@ function formatApiError(message = 'An unexpected error occurred', code = 'UNKNOW
  * Higher-order function for error handling
  * Wraps a function with automatic error handling
  */
-function withErrorHandling(fn, errorMessage = 'Operation failed') {
+export function withErrorHandling(fn, errorMessage = 'Operation failed') {
     return async (...args) => {
         try {
             return await fn(...args);

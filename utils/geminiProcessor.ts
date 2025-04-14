@@ -7,7 +7,8 @@
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import { logError, logInfo } from './logger';
-import { DocumentCategoryType } from './documentCategories';
+import { DocumentCategoryType, getStandardCategories } from './documentCategories';
+import { STANDARD_CATEGORIES } from './tagUtils';
 
 // Initialize Gemini API client
 const API_KEY = process.env.GEMINI_API_KEY || '';
@@ -131,6 +132,9 @@ export interface QueryAnalysisResult {
  * Generate system prompt for document analysis
  */
 function generateDocumentAnalysisPrompt(text: string): string {
+  // Get the category values from STANDARD_CATEGORIES to use in the prompt
+  const categoryValues = STANDARD_CATEGORIES.map(cat => cat.value).join(', ');
+  
   return `
 You are an AI assistant specializing in document analysis and categorization for a knowledge base system.
 
@@ -143,9 +147,9 @@ Provide a detailed analysis in the following JSON format:
 {
   "summary": "A concise summary of the document (max 150 words)",
   "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitors, other]",
-  "primaryCategory": "The main category of this document",
-  "secondaryCategories": ["Other relevant categories"],
-  "technicalLevel": "A number from 0-3 where 0 is non-technical and 3 is highly technical",
+  "primaryCategory": "The main category of this document. Must be one of the following standardized values: ${categoryValues}",
+  "secondaryCategories": ["Other relevant categories from the same standardized list: ${categoryValues} (0-3 categories recommended)"],
+  "technicalLevel": "A number from 1 to 10 indicating technical complexity (1=very basic, 10=highly technical/expert)",
   "entities": {
     "people": [
       {"name": "Person name", "role": "Their role if mentioned", "importance": "high/medium/low"}
@@ -156,19 +160,14 @@ Provide a detailed analysis in the following JSON format:
     "products": ["List of products mentioned"],
     "features": ["List of features mentioned"]
   },
-  "keywords": ["Important keywords from the document"],
-  "topics": ["Main topics covered"],
+  "keywords": ["Important keywords from the document (5-10 recommended)"],
+  "topics": ["Main topics covered (3-5 recommended)"],
   "confidenceScore": "A number from 0-1 indicating your confidence in this analysis"
 }
 
-Focus particularly on:
-1. Leadership information - identify CEOs, founders, and executives
-2. Company-specific information
-3. Product details and features
-4. Technical specifications
-5. Pricing information
-
 Be as accurate and comprehensive as possible. If information is not present, use empty arrays or null values rather than inventing information.
+
+IMPORTANT: For the primaryCategory and secondaryCategories fields, you MUST use ONLY values from this standardized list: ${categoryValues}. Do not invent new categories.
 `;
 }
 
@@ -176,6 +175,9 @@ Be as accurate and comprehensive as possible. If information is not present, use
  * Generate system prompt for enhanced document analysis with more detailed categorization
  */
 function generateEnhancedAnalysisPrompt(text: string): string {
+  // Get the category values from STANDARD_CATEGORIES to use in the prompt
+  const categoryValues = STANDARD_CATEGORIES.map(cat => cat.value).join(', ');
+  
   return `
 You are an AI assistant specializing in document analysis and detailed categorization for an advanced knowledge base system.
 
@@ -189,17 +191,17 @@ Provide a detailed analysis in the following JSON format:
   "summary": "A concise summary of the document (max 150 words)",
   "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitor, partner, market, training, legal, policy, other]",
   
-  "primaryCategory": "The main category of this document",
-  "secondaryCategories": ["Other relevant categories"],
+  "primaryCategory": "The main category of this document. Must be one of the following standardized values: ${categoryValues}",
+  "secondaryCategories": ["Other relevant categories from the same standardized list: ${categoryValues} (0-3 categories recommended)"],
   "industryCategories": ["Relevant industry sectors like healthcare, finance, retail, etc."],
   "functionCategories": ["Relevant business functions like marketing, sales, support, development"],
   "useCases": ["Specific use cases the document addresses"],
   
-  "technicalLevel": "A number from 0-3 where 0 is non-technical and 3 is highly technical",
+  "technicalLevel": "A number from 1 to 10 indicating technical complexity (1=very basic, 10=highly technical/expert)",
   "complexityScore": "A number from 0-5 rating the complexity of content (0=simple, 5=very complex)",
   
-  "topics": ["Main topics covered in the document"],
-  "subtopics": ["More specific subtopics covered"],
+  "topics": ["Main topics covered in the document (3-5 recommended)"],
+  "subtopics": ["More specific subtopics covered (3-5 recommended)"],
   
   "entities": {
     "people": [
@@ -591,29 +593,47 @@ Only report genuine conflicts where information directly contradicts, not just d
 }
 
 /**
+ * Find matching standardized category based on input from Gemini analysis
+ * This function ensures we always use standardized values across the application
+ * @param category Category name from Gemini
+ * @returns Standardized category value
+ */
+export function findStandardizedCategory(category: string): string {
+  if (!category || typeof category !== 'string') {
+    return 'GENERAL';
+  }
+  
+  const standardCategories = getStandardCategories(); // Use the function to get current enum values
+  const formattedCategory = category.toUpperCase().trim().replace(/\s+/g, '_');
+
+  // Check if the formatted category is a valid value in the enum
+  if (standardCategories.includes(formattedCategory as DocumentCategoryType)) {
+    return formattedCategory;
+  }
+
+  // If not a direct match, check labels from STANDARD_CATEGORIES in tagUtils.ts
+  const matchingStandardCategory = STANDARD_CATEGORIES.find(sc => 
+    sc.label.toLowerCase() === category.toLowerCase() || 
+    sc.value === formattedCategory
+  );
+
+  if (matchingStandardCategory) {
+    return matchingStandardCategory.value; // Return the VALUE (enum key)
+  }
+
+  // Log a warning if no match is found after checking labels
+  logError(`Could not map category "${category}" (formatted: ${formattedCategory}) to a standard category value. Defaulting to GENERAL.`);
+
+  // Default to GENERAL if no match found
+  return 'GENERAL';
+}
+
+/**
  * Convert Gemini analysis to document metadata
  * @param analysis Gemini document analysis
  * @returns Metadata suitable for storage in vector database
  */
 export function convertAnalysisToMetadata(analysis: GeminiDocumentAnalysis): Record<string, any> {
-  // Map content type to document category
-  const categoryMapping: Record<string, string> = {
-    'leadership': DocumentCategoryType.PRODUCT,
-    'product': DocumentCategoryType.PRODUCT,
-    'pricing': DocumentCategoryType.PRICING,
-    'technical': DocumentCategoryType.TECHNICAL,
-    'company_info': DocumentCategoryType.GENERAL,
-    'feature': DocumentCategoryType.FEATURES,
-    'support': DocumentCategoryType.FAQ,
-    'competitor': DocumentCategoryType.COMPETITORS,
-    'partner': DocumentCategoryType.CUSTOMER,
-    'market': DocumentCategoryType.MARKET,
-    'training': DocumentCategoryType.TRAINING,
-    'legal': DocumentCategoryType.INTERNAL_POLICY,
-    'policy': DocumentCategoryType.INTERNAL_POLICY,
-    'other': DocumentCategoryType.OTHER
-  };
-
   // Extract CEO information if present
   const ceoInfo = analysis.entities.people.find(p => 
     p.role?.toLowerCase().includes('ceo') || 
@@ -623,11 +643,12 @@ export function convertAnalysisToMetadata(analysis: GeminiDocumentAnalysis): Rec
 
   return {
     // Core metadata
-    category: categoryMapping[analysis.contentType] || DocumentCategoryType.GENERAL,
-    primaryCategory: categoryMapping[analysis.primaryCategory] || DocumentCategoryType.GENERAL,
+    category: findStandardizedCategory(analysis.contentType),
+    primaryCategory: findStandardizedCategory(analysis.primaryCategory),
     secondaryCategories: analysis.secondaryCategories
-      .map(c => categoryMapping[c] || null)
-      .filter(Boolean),
+      .filter(category => category && category.trim() !== '') // Filter out empty categories
+      .map(category => findStandardizedCategory(category))
+      .filter((value, index, self) => self.indexOf(value) === index), // Remove duplicates
     technicalLevel: analysis.technicalLevel,
     
     // Enhanced metadata
@@ -659,24 +680,6 @@ export function convertAnalysisToMetadata(analysis: GeminiDocumentAnalysis): Rec
 export function convertEnhancedAnalysisToMetadata(
   analysis: EnhancedGeminiDocumentAnalysis
 ): Record<string, any> {
-  // Map content type to document category
-  const categoryMapping: Record<string, string> = {
-    'leadership': DocumentCategoryType.PRODUCT,
-    'product': DocumentCategoryType.PRODUCT,
-    'pricing': DocumentCategoryType.PRICING,
-    'technical': DocumentCategoryType.TECHNICAL,
-    'company_info': DocumentCategoryType.GENERAL,
-    'feature': DocumentCategoryType.FEATURES,
-    'support': DocumentCategoryType.FAQ,
-    'competitor': DocumentCategoryType.COMPETITORS,
-    'partner': DocumentCategoryType.CUSTOMER,
-    'market': DocumentCategoryType.MARKET,
-    'training': DocumentCategoryType.TRAINING,
-    'legal': DocumentCategoryType.INTERNAL_POLICY,
-    'policy': DocumentCategoryType.INTERNAL_POLICY,
-    'other': DocumentCategoryType.OTHER
-  };
-
   // Extract CEO information if present
   const ceoInfo = analysis.entities.people.find(p => 
     p.role?.toLowerCase().includes('ceo') || 
@@ -689,10 +692,11 @@ export function convertEnhancedAnalysisToMetadata(
   
   // Build hierarchical category structure
   const hierarchicalCategories = {
-    primary: categoryMapping[analysis.primaryCategory] || DocumentCategoryType.GENERAL,
+    primary: findStandardizedCategory(analysis.primaryCategory),
     secondary: analysis.secondaryCategories
-      .map(c => categoryMapping[c] || null)
-      .filter(Boolean),
+      .filter(category => category && category.trim() !== '') // Filter out empty categories
+      .map(category => findStandardizedCategory(category))
+      .filter((value, index, self) => self.indexOf(value) === index), // Remove duplicates
     industry: analysis.industryCategories || [],
     function: analysis.functionCategories || [],
     useCases: analysis.useCases || []
@@ -700,11 +704,12 @@ export function convertEnhancedAnalysisToMetadata(
 
   return {
     // Core metadata
-    category: categoryMapping[analysis.contentType] || DocumentCategoryType.GENERAL,
-    primaryCategory: categoryMapping[analysis.primaryCategory] || DocumentCategoryType.GENERAL,
+    category: findStandardizedCategory(analysis.contentType),
+    primaryCategory: findStandardizedCategory(analysis.primaryCategory),
     secondaryCategories: analysis.secondaryCategories
-      .map(c => categoryMapping[c] || null)
-      .filter(Boolean),
+      .filter(category => category && category.trim() !== '') // Filter out empty categories
+      .map(category => findStandardizedCategory(category))
+      .filter((value, index, self) => self.indexOf(value) === index), // Remove duplicates
     technicalLevel: analysis.technicalLevel,
     
     // Enhanced metadata

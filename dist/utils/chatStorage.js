@@ -1,4 +1,3 @@
-"use strict";
 /**
  * Chat Storage Utility
  *
@@ -7,23 +6,15 @@
  * - General chat sessions
  * - Sales rep notes
  * - Chat history
+ *
+ * This module automatically selects the appropriate storage backend based on
+ * the USE_SUPABASE environment variable.
  */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.saveChatSession = saveChatSession;
-exports.listChatSessions = listChatSessions;
-exports.getSessionsByType = getSessionsByType;
-exports.searchChatSessions = searchChatSessions;
-exports.searchChatSessionsByContent = searchChatSessionsByContent;
-exports.getChatSession = getChatSession;
-exports.updateChatSession = updateChatSession;
-exports.deleteChatSession = deleteChatSession;
-exports.extractKeywords = extractKeywords;
-exports.generateSessionTitle = generateSessionTitle;
-const axios_1 = __importDefault(require("axios"));
-const errorHandling_1 = require("./errorHandling");
+import axios from 'axios';
+import { logError } from './logger';
+import * as supabaseChatStorage from './supabaseChatStorage';
+// Check if we should use Supabase for chat storage specifically
+const useSupabase = process.env.USE_SUPABASE_CHAT === 'true' || (process.env.USE_SUPABASE === 'true' && process.env.USE_SUPABASE_CHAT !== 'false');
 // Helper function to get the base URL
 const getBaseUrl = () => {
     // In the browser, use window.location as the base
@@ -48,165 +39,161 @@ const getBaseUrl = () => {
 /**
  * Save a new chat session
  */
-async function saveChatSession(session) {
+export async function saveChatSession(session) {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.saveChatSession(session);
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.post(`${baseUrl}/api/storage/chat-operations?method=POST&action=save`, session);
+        const response = await axios.post(`${baseUrl}/api/storage/chat-operations?method=POST&action=save`, session);
         return response.data.sessionId;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Failed to save chat session', error);
+        logError('Failed to save chat session', error);
         throw new Error('Failed to save chat session');
     }
 }
 /**
  * List all chat sessions
  */
-async function listChatSessions() {
+export async function listChatSessions() {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.listChatSessions();
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=list`);
+        const response = await axios.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=list`);
         return response.data;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Failed to list chat sessions', error);
+        logError('Failed to list chat sessions', error);
         return [];
     }
 }
 /**
  * Get sessions by type
  */
-async function getSessionsByType(sessionType) {
+export async function getSessionsByType(sessionType) {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.getSessionsByType(sessionType);
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=list&type=${sessionType}`);
+        const response = await axios.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=list&type=${sessionType}`);
         return response.data;
     }
     catch (error) {
-        (0, errorHandling_1.logError)(`Failed to get ${sessionType} sessions`, error);
+        logError(`Failed to get ${sessionType} sessions`, error);
         return [];
     }
 }
 /**
  * Search chat sessions by query text
  */
-async function searchChatSessions(query) {
+export async function searchChatSessions(query) {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.searchChatSessions(query);
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.get(`${baseUrl}/api/admin/chat-sessions?search=${encodeURIComponent(query)}`);
+        const response = await axios.get(`${baseUrl}/api/admin/chat-sessions?search=${encodeURIComponent(query)}`);
         return response.data;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Failed to search chat sessions', error);
+        logError('Failed to search chat sessions', error);
         return [];
     }
 }
 /**
  * Search chat sessions by content
  */
-async function searchChatSessionsByContent(query) {
+export async function searchChatSessionsByContent(query) {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.searchChatSessionsByContent(query);
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.get(`${baseUrl}/api/admin/chat-sessions?content=${encodeURIComponent(query)}`);
+        const response = await axios.get(`${baseUrl}/api/admin/chat-sessions?content=${encodeURIComponent(query)}`);
         return response.data;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Failed to search chat sessions by content', error);
+        logError('Failed to search chat sessions by content', error);
         return [];
     }
 }
 /**
  * Get a chat session by ID
  */
-async function getChatSession(sessionId) {
-    var _a;
+export async function getChatSession(sessionId) {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.getChatSession(sessionId);
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=get&id=${sessionId}`);
+        const response = await axios.get(`${baseUrl}/api/storage/chat-operations?method=GET&action=get&id=${sessionId}`);
         return response.data;
     }
     catch (error) {
-        if (axios_1.default.isAxiosError(error) && ((_a = error.response) === null || _a === void 0 ? void 0 : _a.status) === 404) {
+        if (axios.isAxiosError(error) && error.response?.status === 404) {
             // Session not found
             return null;
         }
-        (0, errorHandling_1.logError)('Failed to get chat session', error);
+        logError('Failed to get chat session', error);
         return null;
     }
 }
 /**
  * Update an existing chat session
  */
-async function updateChatSession(sessionId, updates) {
+export async function updateChatSession(sessionId, updates) {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.updateChatSession(sessionId, updates);
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.put(`${baseUrl}/api/storage/chat-operations?method=PUT&action=update&id=${sessionId}`, updates);
+        // Include the sessionId in the request body
+        const response = await axios.put(`${baseUrl}/api/storage/chat-operations?method=PUT&action=update`, { id: sessionId, ...updates });
         return response.data.success;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Failed to update chat session', error);
+        logError('Failed to update chat session', error);
         return false;
     }
 }
 /**
  * Delete a chat session
  */
-async function deleteChatSession(sessionId) {
+export async function deleteChatSession(sessionId) {
     try {
+        // If Supabase is enabled, use that
+        if (useSupabase) {
+            return await supabaseChatStorage.deleteChatSession(sessionId);
+        }
+        // Otherwise use file-based storage via API
         const baseUrl = getBaseUrl();
-        const response = await axios_1.default.delete(`${baseUrl}/api/admin/chat-sessions?id=${sessionId}`);
+        const response = await axios.delete(`${baseUrl}/api/storage/chat-operations?method=DELETE&id=${sessionId}`);
         return response.data.success;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Failed to delete chat session', error);
+        logError('Failed to delete chat session', error);
         return false;
     }
 }
-/**
- * Extract keywords from messages for better searching
- */
-function extractKeywords(messages) {
-    // Simple keyword extraction - in production, you'd use a more sophisticated NLP approach
-    const allText = messages
-        .map(msg => msg.content)
-        .join(' ')
-        .toLowerCase();
-    // Remove common words and symbols
-    const cleanText = allText.replace(/[^\w\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    // Split into words and filter out short words and common stopwords
-    const stopwords = ['the', 'and', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are', 'am', 'was', 'were'];
-    const words = cleanText.split(' ')
-        .filter(word => word.length > 3 && !stopwords.includes(word));
-    // Count word frequency
-    const wordCount = {};
-    words.forEach(word => {
-        wordCount[word] = (wordCount[word] || 0) + 1;
-    });
-    // Sort by frequency and return top 10 keywords
-    return Object.entries(wordCount)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
-        .map(([word]) => word);
-}
-/**
- * Generate a title for a chat session based on messages
- */
-function generateSessionTitle(messages) {
-    // Default title
-    const defaultTitle = `Chat Session ${new Date().toLocaleDateString()}`;
-    // Find first user message
-    const firstUserMessage = messages.find(msg => msg.role === 'user');
-    if (!firstUserMessage)
-        return defaultTitle;
-    // Clean and truncate message
-    const content = firstUserMessage.content.trim();
-    if (content.length < 5)
-        return defaultTitle;
-    if (content.length <= 30) {
-        return content.charAt(0).toUpperCase() + content.slice(1);
-    }
-    // Truncate longer messages
-    return content.substring(0, 30).trim() + '...';
-}
+// Reexport utility functions from supabaseChatStorage
+export const { extractKeywords, generateSessionTitle } = useSupabase
+    ? supabaseChatStorage
+    : require('./chatStorageUtils');

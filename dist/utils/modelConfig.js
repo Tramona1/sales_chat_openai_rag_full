@@ -1,94 +1,89 @@
-"use strict";
 /**
  * AI model configuration settings for the RAG system
  * This provides centralized configuration for all AI model settings
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.SYSTEM_PROMPTS = exports.AI_SETTINGS = void 0;
-exports.getSystemPromptForQuery = getSystemPromptForQuery;
-exports.getModelForTask = getModelForTask;
 /**
  * Application AI settings
  */
-exports.AI_SETTINGS = {
+export const AI_SETTINGS = {
     // Default model for standard operations
-    defaultModel: process.env.DEFAULT_LLM_MODEL || 'gpt-4',
+    defaultModel: process.env.DEFAULT_LLM_MODEL || 'gemini-2.0-flash',
     // Fallback model when primary is unavailable or for less critical operations
     fallbackModel: process.env.FALLBACK_LLM_MODEL || 'gpt-3.5-turbo-1106',
     // Embedding model for vector operations - MIGRATED TO GEMINI
-    embeddingModel: 'models/text-embedding-004',
-    // Embedding dimension - 768 for Gemini models/text-embedding-004
+    embeddingModel: 'text-embedding-004',
+    // Embedding dimension - 768 for Gemini text-embedding-004
     embeddingDimension: 768,
     // Default max tokens for generation
     maxTokens: 1000,
     // Default temperature for most operations
     temperature: 0.7,
     // Default system prompt for RAG queries
-    systemPrompt: `You are an AI assistant for the sales team. 
+    systemPrompt: `You are an AI assistant for the sales team for Workstream. Workstream is a leading HR, payroll, and hiring platform designed specifically for managing the hourly workforce, offering a suite of tools that automate hiring, onboarding, scheduling, and payroll processes to streamline operations for businesses across various industries. By integrating these functions into a mobile-first platform, Workstream helps companies reduce labor costs, improve compliance, and enhance employee engagement.
 Answer the question based ONLY on the context provided. 
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.
 Provide concise, accurate responses with all relevant details from the context.`,
     // Updated contextual generation model settings for multi-modal RAG
     contextGenerationModel: {
         provider: 'gemini',
-        model: 'gemini-2.0-flash', // Fast model for context generation
+        model: 'gemini-2.0-flash',
         temperature: 0.2,
         maxTokens: 1024
     },
     // Updated reranker model settings for visual content awareness
     rerankerModel: {
         provider: 'gemini',
-        model: 'gemini-2.0-pro', // Use Pro model for better visual understanding in reranking
+        model: 'gemini-2.0-flash',
         temperature: 0.1
     }
 };
 /**
  * Different preset system prompts for various use cases
  */
-exports.SYSTEM_PROMPTS = {
-    standard: exports.AI_SETTINGS.systemPrompt,
+export const SYSTEM_PROMPTS = {
+    standard: AI_SETTINGS.systemPrompt,
     technical: `You are an AI assistant for the sales team specializing in technical questions.
 Answer the question based ONLY on the context provided.
 Use technical language and be precise in your explanations.
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.`,
     sales: `You are an AI assistant for the sales team specializing in sales queries.
 Answer the question based ONLY on the context provided.
 Focus on value propositions, competitive advantages, and addressing customer pain points.
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.`,
     pricing: `You are an AI assistant for the sales team specializing in pricing questions.
 Answer the question based ONLY on the context provided.
 Be very precise about pricing details, plans, and subscription options.
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.`
 };
 /**
  * Get system prompt based on query type
  */
-function getSystemPromptForQuery(query) {
+export function getSystemPromptForQuery(query) {
     const lowerQuery = query.toLowerCase();
     if (lowerQuery.includes('price') ||
         lowerQuery.includes('cost') ||
         lowerQuery.includes('subscription') ||
         lowerQuery.includes('plan')) {
-        return exports.SYSTEM_PROMPTS.pricing;
+        return SYSTEM_PROMPTS.pricing;
     }
     if (lowerQuery.includes('technical') ||
         lowerQuery.includes('architecture') ||
         lowerQuery.includes('infrastructure') ||
         lowerQuery.includes('integration')) {
-        return exports.SYSTEM_PROMPTS.technical;
+        return SYSTEM_PROMPTS.technical;
     }
     if (lowerQuery.includes('competitor') ||
         lowerQuery.includes('comparison') ||
         lowerQuery.includes('vs') ||
         lowerQuery.includes('pitch') ||
         lowerQuery.includes('sell')) {
-        return exports.SYSTEM_PROMPTS.sales;
+        return SYSTEM_PROMPTS.sales;
     }
-    return exports.SYSTEM_PROMPTS.standard;
+    return SYSTEM_PROMPTS.standard;
 }
 /**
  * Get model configuration for a specific task
@@ -96,17 +91,32 @@ function getSystemPromptForQuery(query) {
  * @param task The task to get the model for
  * @returns Model provider, name and settings
  */
-function getModelForTask(config = exports.AI_SETTINGS, task) {
+export function getModelForTask(config = AI_SETTINGS, task) {
     switch (task) {
         case 'chat':
-            return {
-                provider: 'openai',
-                model: config.defaultModel,
-                settings: {
-                    temperature: config.temperature,
-                    maxTokens: config.maxTokens
-                }
-            };
+            // Check the model name to determine the correct provider
+            const modelName = config.defaultModel.toLowerCase();
+            if (modelName.includes('gemini')) {
+                return {
+                    provider: 'gemini',
+                    model: config.defaultModel,
+                    settings: {
+                        temperature: config.temperature,
+                        maxTokens: config.maxTokens
+                    }
+                };
+            }
+            else {
+                // Assume OpenAI for models like gpt-x
+                return {
+                    provider: 'openai',
+                    model: config.defaultModel,
+                    settings: {
+                        temperature: config.temperature,
+                        maxTokens: config.maxTokens
+                    }
+                };
+            }
         case 'embedding':
             return {
                 provider: 'gemini', // UPDATED: Always use Gemini for embeddings
@@ -133,13 +143,36 @@ function getModelForTask(config = exports.AI_SETTINGS, task) {
                 }
             };
         default:
-            return {
-                provider: 'openai',
-                model: config.defaultModel,
-                settings: {
-                    temperature: config.temperature,
-                    maxTokens: config.maxTokens
-                }
-            };
+            // Default case also checks model name
+            const defaultModelName = config.defaultModel.toLowerCase();
+            if (defaultModelName.includes('gemini')) {
+                return {
+                    provider: 'gemini',
+                    model: config.defaultModel,
+                    settings: {
+                        temperature: config.temperature,
+                        maxTokens: config.maxTokens
+                    }
+                };
+            }
+            else {
+                return {
+                    provider: 'openai',
+                    model: config.defaultModel,
+                    settings: {
+                        temperature: config.temperature,
+                        maxTokens: config.maxTokens
+                    }
+                };
+            }
     }
 }
+// Create a default export object with all the named exports as properties
+const modelConfig = {
+    AI_SETTINGS,
+    SYSTEM_PROMPTS,
+    getSystemPromptForQuery,
+    getModelForTask
+};
+// Export as default
+export default modelConfig;

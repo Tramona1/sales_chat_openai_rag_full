@@ -103,15 +103,18 @@ async function handlePostRequest(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // Ensure sessionType is always set to a valid value
+    const sessionType = body.sessionType || (body.companyName ? 'company' : 'general');
+    
     // In company mode, companyName and companyInfo are required
-    if (body.sessionType === 'company' && (!body.companyName || !body.companyInfo)) {
+    if (sessionType === 'company' && (!body.companyName || !body.companyInfo)) {
       return res.status(400).json({ 
         error: 'For company sessions, companyName and companyInfo are required' 
       });
     }
     
     // For general sessions, title is required
-    if (body.sessionType === 'general' && !body.title) {
+    if (sessionType === 'general' && !body.title) {
       return res.status(400).json({ 
         error: 'For general sessions, title is required' 
       });
@@ -119,7 +122,7 @@ async function handlePostRequest(req: NextApiRequest, res: NextApiResponse) {
     
     // Save the session
     const sessionId = await saveChatSession({
-      sessionType: body.sessionType,
+      sessionType: sessionType,
       title: body.title || body.companyName || 'Untitled Session',
       companyName: body.companyName,
       companyInfo: body.companyInfo,

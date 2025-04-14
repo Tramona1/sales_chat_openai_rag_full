@@ -5,24 +5,7 @@
  */
 
 import { OpenAI } from 'openai';
-
-// Simple configuration based on environment variables
-// This avoids the dependency on the config module which is causing issues
-const LOG_LEVEL_MAP = {
-  debug: 0,
-  info: 1,
-  warn: 2,
-  error: 3
-};
-
-type LogLevel = keyof typeof LOG_LEVEL_MAP;
-
-// Get log level from environment or default to 'info'
-const configuredLogLevel = (process.env.LOG_LEVEL || 'info').toLowerCase() as LogLevel;
-const currentLevel = LOG_LEVEL_MAP[configuredLogLevel in LOG_LEVEL_MAP ? configuredLogLevel : 'info'];
-
-// Error levels
-export const LOG_LEVEL = LOG_LEVEL_MAP;
+import { logError } from './logger';
 
 // Custom error classes for better error identification
 export class DocumentProcessingError extends Error {
@@ -115,7 +98,7 @@ export async function safeExecute<T>(
   try {
     return await operation();
   } catch (error) {
-    handleError(error, context);
+    logError(`Error during safeExecute in context: ${context}`, error);
     return fallback;
   }
 }
@@ -200,46 +183,6 @@ export function formatValidationError(message: string, fieldErrors?: Record<stri
       details: fieldErrors
     }
   };
-}
-
-/**
- * Log error in browser-compatible way
- */
-export function logError(message: string, error?: any, level: keyof typeof LOG_LEVEL_MAP = 'error') {
-  if (LOG_LEVEL_MAP[level] < currentLevel) {
-    return;
-  }
-  
-  // In browser - use console for logging
-  console.error(`[${level.toUpperCase()}] ${message}`, error);
-  // No file system operations in this browser-compatible version
-}
-
-/**
- * Log warning in browser-compatible way
- */
-export function logWarning(message: string, data?: any) {
-  if (currentLevel <= LOG_LEVEL_MAP.warn) {
-    console.warn(`[WARN] ${message}`, data);
-  }
-}
-
-/**
- * Log info in browser-compatible way
- */
-export function logInfo(message: string, data?: any) {
-  if (currentLevel <= LOG_LEVEL_MAP.info) {
-    console.info(`[INFO] ${message}`, data);
-  }
-}
-
-/**
- * Log debug in browser-compatible way
- */
-export function logDebug(message: string, data?: any) {
-  if (currentLevel <= LOG_LEVEL_MAP.debug) {
-    console.debug(`[DEBUG] ${message}`, data);
-  }
 }
 
 /**

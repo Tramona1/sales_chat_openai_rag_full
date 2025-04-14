@@ -1,82 +1,57 @@
-"use strict";
 /**
- * Configuration utility
+ * Configuration Module
  *
- * Provides access to application configuration from various sources.
- * Browser-compatible version that uses environment variables.
+ * This module provides access to the application configuration settings.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.appConfig = void 0;
-exports.getConfig = getConfig;
-exports.reloadConfig = reloadConfig;
 // Default configuration
 const defaultConfig = {
     openai: {
-        defaultModel: 'gpt-3.5-turbo',
+        apiKey: process.env.OPENAI_API_KEY,
+        defaultModel: process.env.DEFAULT_LLM_MODEL || 'gpt-4',
     },
     gemini: {
-        defaultModel: 'gemini-2.0-flash',
+        apiKey: process.env.GOOGLE_AI_API_KEY,
+        defaultModel: 'gemini-pro',
     },
     vectorStore: {
-        path: '/data/vectorStore.json',
-        backupPath: '/data/backups',
+        path: process.env.VECTOR_STORE_DIR || 'data/vector_batches',
+        backupPath: 'data/backups',
     },
     logging: {
-        level: 'info',
-        logToFile: false, // No file logging in browser
-        logPath: '/logs',
-    }
-};
-// Cache for config to avoid repeated processing
-let configCache = null;
-/**
- * Get the application configuration
- *
- * @returns The application configuration
- */
-function getConfig() {
-    var _a, _b;
-    // Return cached config if available
-    if (configCache) {
-        return configCache;
-    }
-    try {
-        // In browser environment, we only use environment variables
-        // and default values since we can't access the file system
-        const config = {
-            ...defaultConfig,
-            openai: {
-                ...defaultConfig.openai,
-                // Access environment variables from Next.js public runtime config
-                apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY || ((_a = defaultConfig.openai) === null || _a === void 0 ? void 0 : _a.apiKey),
-            },
-            gemini: {
-                ...defaultConfig.gemini,
-                apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || ((_b = defaultConfig.gemini) === null || _b === void 0 ? void 0 : _b.apiKey),
-            },
-        };
-        // Cache the config
-        configCache = config;
-        return config;
-    }
-    catch (error) {
-        console.error('Error loading configuration:', error);
-        return defaultConfig;
-    }
-}
-/**
- * Reload the configuration (clears cache)
- */
-function reloadConfig() {
-    configCache = null;
-    return getConfig();
-}
-exports.appConfig = {
-    // Model Configuration
-    modelConfig: {
-        defaultModel: 'gemini-2.0-flash',
-        temperature: 0.2,
-        // ... existing code ...
+        level: process.env.LOG_LEVEL || 'info',
+        file: 'data/logs/app.log',
     },
-    // ... existing code ...
 };
+// Singleton to hold the config
+let configInstance = { ...defaultConfig };
+/**
+ * Get the current configuration
+ */
+export function getConfig() {
+    return configInstance;
+}
+/**
+ * Reload the configuration from environment variables
+ */
+export function reloadConfig() {
+    configInstance = {
+        openai: {
+            apiKey: process.env.OPENAI_API_KEY,
+            defaultModel: process.env.DEFAULT_LLM_MODEL || 'gpt-4',
+        },
+        gemini: {
+            apiKey: process.env.GOOGLE_AI_API_KEY,
+            defaultModel: 'gemini-pro',
+        },
+        vectorStore: {
+            path: process.env.VECTOR_STORE_DIR || 'data/vector_batches',
+            backupPath: 'data/backups',
+        },
+        logging: {
+            level: process.env.LOG_LEVEL || 'info',
+            file: 'data/logs/app.log',
+        },
+    };
+    return configInstance;
+}
+export default getConfig();

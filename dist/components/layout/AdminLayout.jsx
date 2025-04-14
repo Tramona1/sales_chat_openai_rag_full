@@ -1,23 +1,73 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = AdminLayout;
-const react_1 = __importDefault(require("react"));
-const head_1 = __importDefault(require("next/head"));
-const AdminSidebar_1 = __importDefault(require("./AdminSidebar"));
-function AdminLayout({ children, title = 'Admin' }) {
+import React, { useState } from 'react';
+import Head from 'next/head';
+import Link from 'next/link';
+import { MessageSquare, Home, Briefcase, Shield, Menu } from 'lucide-react';
+import { useRouter } from 'next/router';
+export default function AdminLayout({ children, title = 'Admin' }) {
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const router = useRouter();
+    const navItems = [
+        { name: 'Home', href: '/', icon: <Home className="h-5 w-5"/> },
+        { name: 'Chat', href: '/chat', icon: <MessageSquare className="h-5 w-5"/> },
+        { name: 'Company Chat', href: '/company-chat', icon: <Briefcase className="h-5 w-5"/> },
+        { name: 'Admin', href: '/admin', icon: <Shield className="h-5 w-5"/> },
+    ];
+    const isActive = (path) => router.pathname === path;
+    const toggleMobileMenu = () => setMobileMenuOpen(!mobileMenuOpen);
     return (<>
-      <head_1.default>
+      <Head>
         <title>{title} | Knowledge Base Admin</title>
-      </head_1.default>
-      <div className="h-screen flex overflow-hidden bg-gray-100">
-        <AdminSidebar_1.default />
-        
-        <div className="flex flex-col w-0 flex-1 overflow-hidden">
+      </Head>
+      <div className="min-h-screen flex flex-col bg-gray-100">
+        {/* Top header */}
+        <header className="bg-white border-b border-neutral-200 shadow-sm sticky top-0 z-10">
+          <div className="px-4 sm:px-6 lg:px-8 h-16 flex items-center">
+            {/* Logo icon */}
+            <Link href="/" className="flex items-center mr-8 text-primary-600">
+              <MessageSquare className="h-6 w-6"/>
+            </Link>
+            
+            {/* Desktop Navigation - hidden on mobile */}
+            <nav className="hidden lg:flex items-center space-x-8">
+              {navItems.map((item) => (<Link key={item.href} href={item.href} className={`flex items-center space-x-1 text-sm font-medium transition-colors ${isActive(item.href)
+                ? 'text-primary-700'
+                : 'text-neutral-700 hover:text-primary-600'}`}>
+                  <span className={`${isActive(item.href) ? 'text-primary-600' : 'text-neutral-500'} mr-1`}>
+                    {item.icon}
+                  </span>
+                  <span>{item.name}</span>
+                </Link>))}
+            </nav>
+            
+            {/* Mobile menu button - pushed to the right */}
+            <div className="ml-auto lg:hidden">
+              <button className="text-neutral-500 hover:text-neutral-700" onClick={toggleMobileMenu}>
+                <Menu className="h-6 w-6"/>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Mobile menu dropdown (only shown when mobileMenuOpen is true) */}
+        {mobileMenuOpen && (<div className="lg:hidden bg-white border-b border-neutral-200 shadow-sm z-20">
+            <div className="px-4 py-2">
+              <nav className="flex flex-col space-y-2">
+                {navItems.map((item) => (<Link key={item.href} href={item.href} className={`flex items-center px-4 py-2 text-sm font-medium rounded-lg transition-colors ${isActive(item.href)
+                    ? 'bg-primary-50 text-primary-700'
+                    : 'text-neutral-700 hover:bg-neutral-100'}`} onClick={() => setMobileMenuOpen(false)}>
+                    <span className={`${isActive(item.href) ? 'text-primary-600' : 'text-neutral-500'} mr-3`}>
+                      {item.icon}
+                    </span>
+                    {item.name}
+                  </Link>))}
+              </nav>
+            </div>
+          </div>)}
+
+        {/* Main content */}
+        <div className="flex-1 overflow-hidden">
           <main className="flex-1 relative z-0 overflow-y-auto focus:outline-none">
-            <div className="md:pl-64">
+            <div className="px-4 py-6">
               {children}
             </div>
           </main>

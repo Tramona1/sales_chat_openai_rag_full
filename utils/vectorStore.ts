@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path'; // Keep path for dotenv
-import { supabase } from './supabaseClient';
+import { getSupabaseAdmin } from './supabaseClient';
+import { logWarning } from './logger';
 
 // Load environment variables
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
@@ -21,6 +22,16 @@ export interface VectorStoreItem {
   similarity?: number;
   rank?: number;
   search_type?: string;
+}
+
+// Define a type for the object being inserted
+interface DocumentChunkInsert {
+  document_id: string;
+  chunk_index: number;
+  embedding: number[];
+  text: string;
+  metadata: any;
+  context: any;
 }
 
 // TODO: Define more specific types based on Supabase schema if needed
@@ -71,157 +82,70 @@ export function cosineSimilarity(vecA: number[], vecB: number[]): number {
   return Math.max(-1, Math.min(1, similarity));
 }
 
-// --- Functions below need complete refactoring --- 
+// REMOVED - Obsolete/duplicate Supabase implementation moved to supabaseClient.ts
+// export async function getSimilarItems(
+//   queryEmbedding: number[],
+//   limit: number = 5,
+//   options?: { match_threshold?: number } // Add options object for flexibility
+// ): Promise<(VectorStoreItem & { score: number })[]> { // Ensure score is part of the return type
+// 
+//   const match_threshold = options?.match_threshold ?? 0.7; // Default threshold
+//   const match_count = limit;
+// 
+//   try {
+//     const client = getSupabaseAdmin(); // Get the initialized client
+//     const { data, error } = await client.rpc('search_vectors', {
+//       query_embedding: queryEmbedding,
+//       match_threshold,
+//       match_count
+//     });
+// 
+//     if (error) {
+//       console.error('Error fetching similar items from Supabase:', error);
+//       throw new Error(`Failed to get similar items: ${error.message}`);
+//     }
+// 
+//     if (!data) {
+//     return [];
+//   }
+//   
+//     // Map RPC result (which includes 'similarity') to VectorStoreItem & { score: number }
+//     const results: (VectorStoreItem & { score: number })[] = data.map((item: any) => ({
+//       id: item.id,
+//       document_id: item.document_id,
+//       chunk_index: item.chunk_index,
+//       // We defined the search_vectors function to return original_text as 'content'
+//       // Handle both column names for robustness
+//       originalText: item.original_text || item.content || '',
+//       text: item.text || item.content || '',
+//       metadata: item.metadata,
+//       embedding: [], // Embedding not returned by search_vectors, set empty array
+//       score: item.similarity // Map similarity to score
+//     }));
+// 
+//     return results;
+// 
+//   } catch (error) {
+//     console.error('Supabase RPC failed in getSimilarItems:', error);
+//     // Re-throw or handle as appropriate for the application
+//     throw error;
+//   }
+// }
 
-export async function addToVectorStore(items: VectorStoreItem | VectorStoreItem[]): Promise<void> {
-  const itemsArray = Array.isArray(items) ? items : [items];
-  if (itemsArray.length === 0) return;
+// REMOVED - Obsolete implementation, handled by factory/supabaseClient
+// export async function clearVectorStore(): Promise<void> {
+  // ... (warnings removed)
+// }
 
-  const chunksToInsert = itemsArray.map(item => {
-    // Basic validation
-    if (!item.document_id || item.chunk_index === undefined || !item.embedding) {
-      console.error('Skipping item due to missing required fields (document_id, chunk_index, embedding):', item);
-      return null;
-    }
-    return {
-      document_id: item.document_id,
-      chunk_index: item.chunk_index,
-      embedding: item.embedding,
-      original_text: item.originalText, // Assumes originalText exists
-      text: item.text,                 // Assumes text (contextualized?) exists
-      metadata: item.metadata || {},
-      context: item.context || {}
-      // created_at is handled by default value in DB
-    };
-  }).filter(item => item !== null); // Filter out invalid items
+// REMOVED - Obsolete implementation, handled by factory/supabaseClient
+// export async function getVectorStoreSize(): Promise<number> {
+ // ... (implementation removed)
+// }
 
-  if (chunksToInsert.length === 0) {
-    console.warn('No valid items provided to addToVectorStore');
-    return;
-  }
-
-  try {
-    const { error } = await supabase
-      .from('document_chunks')
-      .insert(chunksToInsert as any); // Use 'as any' for now, refine type mapping later
-
-    if (error) {
-      console.error('Error adding items to Supabase vector store:', error);
-      throw new Error(`Failed to add items to vector store: ${error.message}`);
-    }
-    console.log(`Successfully added ${chunksToInsert.length} items to the vector store.`);
-  } catch (error) {
-    console.error('Supabase operation failed in addToVectorStore:', error);
-    // Re-throw or handle as appropriate for the application
-    throw error;
-  }
-}
-
-export async function getSimilarItems(
-  queryEmbedding: number[],
-  limit: number = 5,
-  options?: { match_threshold?: number } // Add options object for flexibility
-): Promise<(VectorStoreItem & { score: number })[]> { // Ensure score is part of the return type
-
-  const match_threshold = options?.match_threshold ?? 0.7; // Default threshold
-  const match_count = limit;
-
-  try {
-    const { data, error } = await supabase.rpc('search_vectors', {
-      query_embedding: queryEmbedding,
-      match_threshold,
-      match_count
-    });
-
-    if (error) {
-      console.error('Error fetching similar items from Supabase:', error);
-      throw new Error(`Failed to get similar items: ${error.message}`);
-    }
-
-    if (!data) {
-    return [];
-  }
-  
-    // Map RPC result (which includes 'similarity') to VectorStoreItem & { score: number }
-    const results: (VectorStoreItem & { score: number })[] = data.map((item: any) => ({
-      id: item.id,
-      document_id: item.document_id,
-      chunk_index: item.chunk_index,
-      // We defined the search_vectors function to return original_text as 'content'
-      originalText: item.content, 
-      metadata: item.metadata,
-      embedding: [], // Embedding not returned by search_vectors, set empty array
-      score: item.similarity // Map similarity to score
-    }));
-
-    return results;
-
-  } catch (error) {
-    console.error('Supabase RPC failed in getSimilarItems:', error);
-    // Re-throw or handle as appropriate for the application
-    throw error;
-  }
-}
-
-export async function clearVectorStore(): Promise<void> {
-  // TODO: Refactor to delete from Supabase tables. BE CAREFUL!
-  console.warn('clearVectorStore is a destructive operation and currently only logs a warning.');
-  console.warn('To implement, it should delete from document_chunks and potentially documents tables.');
-  console.warn('Example (USE WITH EXTREME CAUTION):');
-  console.warn('// const { error: chunkError } = await supabase.from(\'document_chunks\').delete().neq(\'id\', \'00000000-0000-0000-0000-000000000000\'); // Delete all chunks');
-  console.warn('// const { error: docError } = await supabase.from(\'documents\').delete().neq(\'id\', \'00000000-0000-0000-0000-000000000000\'); // Delete all documents');
-  // Implementation removed - was clearing memory and deleting files
-}
-
-export async function getVectorStoreSize(): Promise<number> {
-  try {
-    const { count, error } = await supabase
-      .from('document_chunks')
-      .select('*', { count: 'exact', head: true });
-
-    if (error) {
-      console.error('Error fetching vector store size from Supabase:', error);
-      throw new Error(`Failed to get vector store size: ${error.message}`);
-    }
-    return count ?? 0;
-  } catch (error) {
-    console.error('Supabase operation failed in getVectorStoreSize:', error);
-    throw error;
-  }
-}
-
-export async function getAllVectorStoreItems(): Promise<VectorStoreItem[]> {
-  // WARNING: Fetching all items can be inefficient for large datasets.
-  // Consider adding pagination or filtering in a real application.
-  console.warn('Fetching all vector store items. This might be inefficient for large datasets.')
-  try {
-    const { data, error } = await supabase
-      .from('document_chunks')
-      .select('id, document_id, chunk_index, original_text, text, metadata, context');
-
-    if (error) {
-      console.error('Error fetching all vector store items from Supabase:', error);
-      throw new Error(`Failed to get all vector store items: ${error.message}`);
-    }
-
-    // Map Supabase rows to VectorStoreItem type
-    const results: VectorStoreItem[] = (data || []).map((item: any) => ({
-      id: item.id,
-      document_id: item.document_id,
-      chunk_index: item.chunk_index,
-      originalText: item.original_text,
-      text: item.text,
-      metadata: item.metadata,
-      context: item.context,
-      embedding: [] // Embedding not selected by default
-    }));
-
-    return results;
-  } catch (error) {
-    console.error('Supabase operation failed in getAllVectorStoreItems:', error);
-    throw error;
-  }
-}
+// REMOVED - Obsolete implementation, handled by factory/supabaseClient
+// export async function getAllVectorStoreItems(): Promise<VectorStoreItem[]> {
+ // ... (implementation removed)
+// }
 
 // Initial load is no longer needed as we query DB directly
 // loadVectorStore(); 

@@ -8,10 +8,15 @@
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { performHybridSearch } from './hybridSearch';
-import { rerank } from './reranking';
+import { performHybridSearch, hybridSearch } from './hybridSearch';
+import { 
+  rerankWithGemini, 
+  MultiModalSearchResult, 
+  RankedSearchResult, 
+  MultiModalRerankOptions 
+} from './reranking';
 import { generateAnswer } from './answerGenerator';
-import { analyzeQuery } from './queryAnalysis';
+import { analyzeQuery, analyzeVisualQuery, LocalQueryAnalysis } from './queryAnalysis';
 import { logError, logInfo } from './logger';
 import { openai } from './llmProviders';
 
@@ -179,39 +184,60 @@ export function createStandardEvaluationSet(): EvaluationQuery[] {
 }
 
 /**
- * Run traditional retrieval (no contextual)
+ * Run traditional retrieval (simulating non-contextual reranking)
  */
 async function runTraditionalRetrieval(query: string, limit: number = 10): Promise<RetrievalResult> {
   const startTime = Date.now();
   
-  // Analyze query
+  // Analyze query (needed for hybrid search potentially)
   const queryAnalysis = await analyzeQuery(query);
   
-  // Run hybrid search
-  const searchResults = await performHybridSearch(
-    query,
-    limit,
-    0.5, // Equal weight to vector and BM25
-    {
-      categories: queryAnalysis.categories,
-      strictCategoryMatch: false
-    }
-  );
-  
-  // Rerank without using contextual info
-  const rerankedResults = await rerank(query, searchResults, limit, { 
-    useContextualInfo: false 
+  // Run hybrid search (using the main hybridSearch function)
+  const searchResponse = await hybridSearch(query, { 
+    limit: limit * 2, // Get more candidates
+    // Use defaults or potentially force balanced weights for traditional?
+    vectorWeight: 0.5, 
+    keywordWeight: 0.5 
+    // Add basic filtering based on analysis if desired for traditional
+    // filter: { primaryCategory: queryAnalysis.primaryCategory as any }
   });
+  const searchResults = searchResponse.results || [];
+
+  // Prepare results for reranker input
+  const resultsForReranker: MultiModalSearchResult[] = searchResults.map((result: any, index: number) => ({
+    item: {
+      id: result.id || `trad-result-${index}`,
+      text: result.text || result.originalText || '',
+      metadata: result.metadata || {},
+      visualContent: result.visualContent || result.metadata?.visualContent
+    },
+    score: result.score || 0
+  }));
+  
+  // Rerank *without* using visual/contextual info
+  const rerankOptions: MultiModalRerankOptions = {
+    limit: limit, 
+    includeScores: true,
+    useVisualContext: false, // Explicitly disable visual context
+    visualFocus: false, // Explicitly disable visual focus
+    timeoutMs: 5000
+  };
+
+  const rerankedResults = await rerankWithGemini(
+    query, 
+    resultsForReranker, 
+    rerankOptions
+  );
   
   const endTime = Date.now();
   
   // Format results
   return {
     chunks: rerankedResults.map(result => ({
-      text: result.item.text,
-      source: result.item.metadata?.source || 'Unknown',
-      score: result.score,
-      metadata: result.item.metadata || {}
+      text: result.item?.text || '',
+      source: result.item?.metadata?.source || 'Unknown',
+      score: result.score || 0,
+      metadata: result.item?.metadata || {}
     })),
     elapsedTimeMs: endTime - startTime
   };
@@ -223,34 +249,59 @@ async function runTraditionalRetrieval(query: string, limit: number = 10): Promi
 async function runContextualRetrieval(query: string, limit: number = 10): Promise<RetrievalResult> {
   const startTime = Date.now();
   
-  // Analyze query
+  // Analyze query (needed for hybrid search potentially)
   const queryAnalysis = await analyzeQuery(query);
   
-  // Run hybrid search with more candidates for reranking
-  const searchResults = await performHybridSearch(
-    query,
-    limit * 2, // Get more candidates for reranking
-    0.5,
-    {
-      categories: queryAnalysis.categories,
-      strictCategoryMatch: false
-    }
-  );
-  
-  // Rerank with contextual info
-  const rerankedResults = await rerank(query, searchResults, limit, { 
-    useContextualInfo: true 
+  // Run hybrid search with more candidates for reranking (using the main hybridSearch function)
+  const searchResponse = await hybridSearch(query, { 
+    limit: limit * 2, // Get more candidates
+    // Use parameters derived from query analysis?
+    // vectorWeight: retrievalParams.hybridRatio, 
+    // keywordWeight: 1.0 - retrievalParams.hybridRatio,
+    // filter: ... derived filter ...
+    // For now, use defaults similar to traditional for fair comparison?
+    vectorWeight: 0.5, 
+    keywordWeight: 0.5 
   });
+  const searchResults = searchResponse.results || [];
+
+  // Prepare results for reranker input
+  const resultsForReranker: MultiModalSearchResult[] = searchResults.map((result: any, index: number) => ({
+    item: {
+      id: result.id || `ctx-result-${index}`,
+      text: result.text || result.originalText || '',
+      metadata: result.metadata || {},
+      visualContent: result.visualContent || result.metadata?.visualContent
+    },
+    score: result.score || 0
+  }));
+  
+  // Rerank *with* contextual info
+  const visualAnalysis = analyzeVisualQuery(query);
+  const rerankOptions: MultiModalRerankOptions = {
+    limit: limit, 
+    includeScores: true,
+    useVisualContext: true, // Enable visual context
+    visualFocus: visualAnalysis.isVisualQuery,
+    visualTypes: visualAnalysis.visualTypes,
+    timeoutMs: 5000
+  };
+
+  const rerankedResults = await rerankWithGemini(
+    query, 
+    resultsForReranker, 
+    rerankOptions
+  );
   
   const endTime = Date.now();
   
   // Format results
   return {
     chunks: rerankedResults.map(result => ({
-      text: result.item.text,
-      source: result.item.metadata?.source || 'Unknown',
-      score: result.score,
-      metadata: result.item.metadata || {}
+      text: result.item?.text || '',
+      source: result.item?.metadata?.source || 'Unknown',
+      score: result.score || 0,
+      metadata: result.item?.metadata || {}
     })),
     elapsedTimeMs: endTime - startTime
   };

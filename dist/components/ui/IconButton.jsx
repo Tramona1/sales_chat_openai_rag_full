@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const IconButton = ({ children, onClick, color = 'default', size = 'medium', edge = false, disabled = false, className = '', 'aria-label': ariaLabel, sx = {}, }) => {
     // Size classes
     const sizeClasses = {
@@ -49,4 +44,4 @@ const IconButton = ({ children, onClick, color = 'default', size = 'medium', edg
       {children}
     </button>);
 };
-exports.default = IconButton;
+export default IconButton;

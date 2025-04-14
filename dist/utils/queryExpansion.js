@@ -1,26 +1,21 @@
-"use strict";
 /**
  * Query Expansion Module
  *
  * This module provides functionality to expand user queries with related terms
  * to improve retrieval performance, especially for complex or ambiguous queries.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_EXPANSION_OPTIONS = void 0;
-exports.semanticQueryExpansion = semanticQueryExpansion;
-exports.keywordQueryExpansion = keywordQueryExpansion;
-exports.analyzeQuery = analyzeQuery;
-exports.expandQuery = expandQuery;
-const openaiClient_1 = require("./openaiClient");
-const tokenization_1 = require("./tokenization");
-const errorHandling_1 = require("./errorHandling");
-const caching_1 = require("./caching");
+// Import Gemini client functions and remove OpenAI client import
+// import { generateChatCompletion, generateStructuredResponse } from './openaiClient'; 
+import { generateStructuredGeminiResponse, generateGeminiChatCompletion } from './geminiClient';
+import { tokenize } from './tokenization';
+import { logError } from './logger';
+import { getFromCache, cacheWithExpiry } from './caching';
 /**
  * Default options for query expansion
  */
-exports.DEFAULT_EXPANSION_OPTIONS = {
+export const DEFAULT_EXPANSION_OPTIONS = {
     maxExpandedTerms: 4, // Reduced from 5 based on test results
-    model: 'gpt-3.5-turbo',
+    model: 'gemini-2.0-flash', // UPDATED: Use Gemini model
     useSemanticExpansion: true,
     useKeywordExpansion: true,
     semanticWeight: 0.7, // Favor semantic expansion by default
@@ -36,13 +31,13 @@ exports.DEFAULT_EXPANSION_OPTIONS = {
  * This approach uses language models to understand query intent
  * and generate related terms.
  */
-async function semanticQueryExpansion(query, options = {}) {
-    const config = { ...exports.DEFAULT_EXPANSION_OPTIONS, ...options };
+export async function semanticQueryExpansion(query, options = {}) {
+    const config = { ...DEFAULT_EXPANSION_OPTIONS, ...options };
     const startTime = Date.now();
     // Try to get cached result if caching is enabled
     if (config.enableCaching) {
         const cacheKey = `semantic_expansion:${query}`;
-        const cachedResult = (0, caching_1.getFromCache)(cacheKey);
+        const cachedResult = getFromCache(cacheKey);
         if (cachedResult && Array.isArray(cachedResult)) {
             if (config.debug) {
                 console.log('Using cached semantic expansion results for query:', query);
@@ -52,7 +47,7 @@ async function semanticQueryExpansion(query, options = {}) {
     }
     try {
         // Create system prompt for semantic expansion
-        // More targeted prompt based on query type to improve relevance
+        // This prompt should work reasonably well with Gemini too
         const systemPrompt = `You are an expert in information retrieval helping to improve search quality.
 Your task is to expand the user's query with related terms to improve search results.
 Focus on adding precise, targeted phrases that might appear in relevant documents.
@@ -71,15 +66,23 @@ Consider:
 - Focus on precision over recall
 
 Return as a JSON array of strings.`;
-        // Set up timeout for semantic expansion
-        const expansionPromise = (0, openaiClient_1.generateStructuredResponse)(systemPrompt, userPrompt, [], config.model);
-        // Add timeout using AbortController instead of Promise.race for cleaner cancellation
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
+        // Define the expected schema for the structured response
+        const responseSchema = {
+            type: "array",
+            items: { type: "string" }
+        };
+        // Set up timeout for semantic expansion 
+        // Note: Timeout implementation might need adjustment if geminiClient doesn't support AbortController directly
+        // For now, we assume the geminiClient handles timeouts internally or we rely on default timeouts.
+        // const controller = new AbortController(); 
+        // const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
         try {
-            // Try structured response first (most reliable)
-            const result = await expansionPromise;
-            clearTimeout(timeoutId);
+            // Try structured response first using Gemini
+            const result = await generateStructuredGeminiResponse(systemPrompt, userPrompt, responseSchema
+            // Pass model if needed by geminiClient function, assuming it uses config
+            // config.model 
+            );
+            // clearTimeout(timeoutId); // Clear timeout if used
             if (Array.isArray(result)) {
                 const validTerms = result
                     .filter(term => typeof term === 'string' &&
@@ -90,24 +93,29 @@ Return as a JSON array of strings.`;
                 // Cache the result if caching is enabled
                 if (config.enableCaching && validTerms.length > 0) {
                     const cacheKey = `semantic_expansion:${query}`;
-                    await (0, caching_1.cacheWithExpiry)(cacheKey, validTerms, config.cacheTtlSeconds);
+                    await cacheWithExpiry(cacheKey, validTerms, config.cacheTtlSeconds);
                 }
                 return validTerms;
             }
         }
         catch (structuredError) {
-            // If structured response fails, try fallback
+            // If structured response fails, try fallback with Gemini chat
             if (config.debug) {
                 console.log(`Structured expansion failed for "${query}". Using fallback.`);
             }
         }
-        // Fallback to simpler expansion if structured response fails
+        // Fallback to simpler expansion using Gemini chat completion
         try {
-            const fallbackResponse = await (0, openaiClient_1.generateChatCompletion)("You are a search query expansion expert. Provide only related search terms, no explanations.", `Generate ${config.maxExpandedTerms} search terms related to: "${query}"\nReturn one term per line, no numbering or bullets.`, config.model, false);
+            const fallbackSystemPrompt = "You are a search query expansion expert. Provide only related search terms, no explanations.";
+            const fallbackUserPrompt = `Generate ${config.maxExpandedTerms} search terms related to: "${query}"\nReturn one term per line, no numbering or bullets.`;
+            const fallbackResponse = await generateGeminiChatCompletion(fallbackSystemPrompt, fallbackUserPrompt
+            // Pass model if needed, assuming geminiClient uses config
+            // config.model 
+            );
             // Parse the response to extract terms (one per line)
             const terms = fallbackResponse
-                .split('\n')
-                .map(line => line.trim().replace(/^[•\-\d.\s]+/, '')) // Remove bullets, numbers
+                .split('\\n')
+                .map(line => line.trim().replace(/^[•\\-\\d.\\s]+/, '')) // Remove bullets, numbers
                 .filter(line => line &&
                 !line.startsWith('-') &&
                 line.length > 2 &&
@@ -117,23 +125,23 @@ Return as a JSON array of strings.`;
             // Cache the result if caching is enabled
             if (config.enableCaching && terms.length > 0) {
                 const cacheKey = `semantic_expansion:${query}`;
-                await (0, caching_1.cacheWithExpiry)(cacheKey, terms, config.cacheTtlSeconds);
+                await cacheWithExpiry(cacheKey, terms, config.cacheTtlSeconds);
             }
             return terms;
         }
         catch (fallbackError) {
-            (0, errorHandling_1.logError)('semanticQueryExpansion:fallback', fallbackError);
+            logError('semanticQueryExpansion:fallback', fallbackError);
             return []; // Return empty array if all methods fail
         }
     }
     catch (error) {
-        (0, errorHandling_1.logError)('semanticQueryExpansion', error);
+        logError('semanticQueryExpansion', error);
         return []; // Return empty array on error
     }
     finally {
         if (config.debug) {
             const duration = Date.now() - startTime;
-            console.log(`Semantic expansion took ${duration}ms for query: "${query}"`);
+            console.log(`Semantic expansion took ${duration}ms for query: \"${query}\"`);
         }
     }
 }
@@ -143,13 +151,13 @@ Return as a JSON array of strings.`;
  * This simpler approach uses word forms, common synonyms, and
  * domain-specific transformations.
  */
-function keywordQueryExpansion(query, options = {}) {
-    const config = { ...exports.DEFAULT_EXPANSION_OPTIONS, ...options };
+export function keywordQueryExpansion(query, options = {}) {
+    const config = { ...DEFAULT_EXPANSION_OPTIONS, ...options };
     const startTime = Date.now();
     // Try to get cached result if caching is enabled
     if (config.enableCaching) {
         const cacheKey = `keyword_expansion:${query}`;
-        const cachedResult = (0, caching_1.getFromCache)(cacheKey);
+        const cachedResult = getFromCache(cacheKey);
         if (cachedResult && Array.isArray(cachedResult)) {
             if (config.debug) {
                 console.log(`Cache hit for keyword expansion of query: "${query}"`);
@@ -159,7 +167,7 @@ function keywordQueryExpansion(query, options = {}) {
     }
     try {
         // Tokenize the query
-        const tokens = (0, tokenization_1.tokenize)(query);
+        const tokens = tokenize(query);
         const expandedTerms = [];
         const queryLower = query.toLowerCase();
         // Common business terms synonyms/related terms - expanded with more relevant terms
@@ -232,7 +240,7 @@ function keywordQueryExpansion(query, options = {}) {
         // Cache the result if caching is enabled
         if (config.enableCaching && uniqueTerms.length > 0) {
             const cacheKey = `keyword_expansion:${query}`;
-            (0, caching_1.cacheWithExpiry)(cacheKey, uniqueTerms, config.cacheTtlSeconds);
+            cacheWithExpiry(cacheKey, uniqueTerms, config.cacheTtlSeconds);
         }
         if (config.debug) {
             const duration = Date.now() - startTime;
@@ -241,18 +249,18 @@ function keywordQueryExpansion(query, options = {}) {
         return uniqueTerms;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('keywordQueryExpansion', error);
+        logError('keywordQueryExpansion', error);
         return []; // Return empty array on error
     }
 }
 /**
- * Analyze query to determine domain context and technical level
+ * Analyze query to determine context for expansion (internal use)
  */
-async function analyzeQuery(query) {
+async function analyzeQueryExpansionContext(query) {
     try {
         // Try to get cached result
         const cacheKey = `query_analysis:${query}`;
-        const cachedResult = (0, caching_1.getFromCache)(cacheKey);
+        const cachedResult = getFromCache(cacheKey);
         if (cachedResult) {
             return cachedResult;
         }
@@ -263,22 +271,32 @@ async function analyzeQuery(query) {
         const userPrompt = `Query: ${query}
     
 Please analyze this query and return a JSON object with technicalLevel (number 1-5), domainContext (string), and complexity (number 1-5).`;
-        const result = await (0, openaiClient_1.generateStructuredResponse)(systemPrompt, userPrompt, {
-            technicalLevel: 1,
-            domainContext: "general",
-            complexity: 1
-        }, 'gpt-3.5-turbo');
+        // Define the expected schema
+        const responseSchema = {
+            type: "object",
+            properties: {
+                technicalLevel: { type: "number", minimum: 1, maximum: 5 },
+                domainContext: { type: "string", enum: ["pricing", "technical", "support", "feature", "comparison", "general"] },
+                complexity: { type: "number", minimum: 1, maximum: 5 }
+            },
+            required: ["technicalLevel", "domainContext", "complexity"]
+        };
+        // Use Gemini structured response
+        const result = await generateStructuredGeminiResponse(systemPrompt, userPrompt, responseSchema
+        // Assuming geminiClient uses default model from config, or pass explicitly:
+        // 'gemini-2.0-flash' 
+        );
         const analysis = {
-            technicalLevel: (result === null || result === void 0 ? void 0 : result.technicalLevel) || 1,
-            domainContext: (result === null || result === void 0 ? void 0 : result.domainContext) || 'general',
-            complexity: (result === null || result === void 0 ? void 0 : result.complexity) || 1
+            technicalLevel: result?.technicalLevel || 1,
+            domainContext: result?.domainContext || 'general',
+            complexity: result?.complexity || 1
         };
         // Cache the result
-        await (0, caching_1.cacheWithExpiry)(cacheKey, analysis, 86400); // 24 hours TTL
+        await cacheWithExpiry(cacheKey, analysis, 86400); // 24 hours TTL
         return analysis;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('analyzeQuery', error);
+        logError('analyzeQueryExpansionContext', error);
         return {
             technicalLevel: 1,
             domainContext: 'general',
@@ -289,8 +307,8 @@ Please analyze this query and return a JSON object with technicalLevel (number 1
 /**
  * Main function to expand a query using multiple techniques
  */
-async function expandQuery(query, options = {}) {
-    const config = { ...exports.DEFAULT_EXPANSION_OPTIONS, ...options };
+export async function expandQuery(query, options = {}) {
+    const config = { ...DEFAULT_EXPANSION_OPTIONS, ...options };
     let expansionType = 'none';
     let addedTerms = [];
     const startTime = Date.now();
@@ -301,7 +319,7 @@ async function expandQuery(query, options = {}) {
         // Try to get cached full expansion result
         if (config.enableCaching) {
             const cacheKey = `full_expansion:${query}:${config.useSemanticExpansion}:${config.useKeywordExpansion}:${config.maxExpandedTerms}`;
-            const cachedResult = (0, caching_1.getFromCache)(cacheKey);
+            const cachedResult = getFromCache(cacheKey);
             if (cachedResult) {
                 if (config.debug) {
                     console.log('Using cached query expansion results for query:', query);
@@ -309,10 +327,16 @@ async function expandQuery(query, options = {}) {
                 return cachedResult;
             }
         }
-        // Get query analysis to determine expansion strategy
+        // Analyze query for context (technical level, domain)
         let analysis = { technicalLevel: 1, domainContext: 'general', complexity: 1 };
-        if (config.includeMetadata || config.debug) {
-            analysis = await analyzeQuery(query);
+        if (config.includeMetadata) {
+            try {
+                analysis = await analyzeQueryExpansionContext(query);
+            }
+            catch (analysisError) {
+                logError('Failed to analyze query context for expansion', analysisError);
+                // Use defaults if analysis fails
+            }
         }
         // Adjust semantic/keyword weights based on query characteristics
         let dynamicSemanticWeight = config.semanticWeight;
@@ -396,12 +420,12 @@ async function expandQuery(query, options = {}) {
         // Cache the result
         if (config.enableCaching && addedTerms.length > 0) {
             const cacheKey = `full_expansion:${query}:${config.useSemanticExpansion}:${config.useKeywordExpansion}:${config.maxExpandedTerms}`;
-            await (0, caching_1.cacheWithExpiry)(cacheKey, result, config.cacheTtlSeconds);
+            await cacheWithExpiry(cacheKey, result, config.cacheTtlSeconds);
         }
         return result;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('expandQuery', error);
+        logError('expandQuery', error);
         const processingTime = Date.now() - startTime;
         // Return original query on error
         return {

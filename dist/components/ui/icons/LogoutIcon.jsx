@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const LogoutIcon = ({ className = '', color = 'currentColor', size = 24, }) => {
     return (<svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`feather feather-log-out ${className}`}>
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
@@ -11,4 +6,4 @@ const LogoutIcon = ({ className = '', color = 'currentColor', size = 24, }) => {
       <line x1="21" y1="12" x2="9" y2="12"></line>
     </svg>);
 };
-exports.default = LogoutIcon;
+export default LogoutIcon;

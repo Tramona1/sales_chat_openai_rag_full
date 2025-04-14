@@ -1,13 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const adminWorkflow_1 = require("@/utils/adminWorkflow");
-const errorHandling_1 = require("@/utils/errorHandling");
+import { approveOrRejectDocument } from '@/utils/adminWorkflow';
+import { logError, logInfo } from '@/utils/logger';
 /**
  * API endpoint for rejecting pending documents
  * This will remove documents from the pending queue without adding them to the vector store
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Only allow POST requests
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method not allowed' });
@@ -30,23 +27,23 @@ async function handler(req, res) {
         for (const documentId of documentIds) {
             try {
                 // Reject the document
-                const success = await (0, adminWorkflow_1.approveOrRejectDocument)(documentId, {
+                const success = await approveOrRejectDocument(documentId, {
                     approved: false,
                     reviewerComments: reviewerComments || 'Rejected by admin',
                     reviewedBy: reviewedBy || 'admin'
                 });
                 if (success) {
                     results.successful.push(documentId);
-                    (0, errorHandling_1.logInfo)(`Document ${documentId} rejected successfully`);
+                    logInfo(`Document ${documentId} rejected successfully`);
                 }
                 else {
                     results.failed.push(documentId);
-                    (0, errorHandling_1.logInfo)(`Failed to reject document ${documentId}`);
+                    logInfo(`Failed to reject document ${documentId}`);
                 }
             }
             catch (error) {
                 results.failed.push(documentId);
-                (0, errorHandling_1.logError)(`Error rejecting document ${documentId}`, error);
+                logError(`Error rejecting document ${documentId}`, error);
             }
         }
         // Return results
@@ -58,7 +55,7 @@ async function handler(req, res) {
     }
     catch (error) {
         // Log and return error
-        (0, errorHandling_1.logError)('Error rejecting documents', error);
+        logError('Error rejecting documents', error);
         return res.status(500).json({
             success: false,
             message: 'Failed to reject documents',

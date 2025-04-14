@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const Box = ({ children, className = '', style = {}, onClick, display, flexDirection, alignItems, justifyContent, flexWrap, flexGrow, gap, p, px, py, pt, pr, pb, pl, m, mx, my, mt, mr, mb, ml, width, height, maxWidth, maxHeight, minWidth, minHeight, borderRadius, position, overflow, bgcolor, color, ...rest }) => {
     const getSpacingClass = (value, prefix) => {
         if (value === undefined)
@@ -67,4 +62,4 @@ const Box = ({ children, className = '', style = {}, onClick, display, flexDirec
       {children}
     </div>);
 };
-exports.default = Box;
+export default Box;

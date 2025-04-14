@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getPendingDocuments } from '@/utils/adminWorkflow';
-import { logError } from '@/utils/errorHandling';
+import { logError } from '@/utils/logger';
 
 /**
  * API endpoint for retrieving pending documents that require admin approval

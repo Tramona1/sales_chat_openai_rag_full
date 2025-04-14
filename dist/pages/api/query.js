@@ -1,66 +1,52 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const featureFlags_1 = require("../../utils/featureFlags");
-const performanceMonitoring_1 = require("../../utils/performanceMonitoring");
-const modelConfig_1 = require("../../utils/modelConfig");
-// Simple logger that works without external dependencies
-const logger = {
-    info: (message, ...args) => console.log(`[INFO] ${message}`, ...args),
-    debug: (message, ...args) => console.log(`[DEBUG] ${message}`, ...args),
-    error: (message, ...args) => console.error(`[ERROR] ${message}`, ...args)
+import { logError, logInfo, logWarning } from '../../utils/logger';
+import * as modelConfig from '../../utils/modelConfig';
+// TEMPORARY FIX: Hardcode feature flags instead of importing
+// import { isFeatureEnabled } from '../../utils/featureFlags';
+import { recordMetric } from '../../utils/performanceMonitoring';
+import { testSupabaseConnection } from '../../utils/supabaseClient';
+import { analyzeVisualQuery } from '../../utils/queryAnalysis';
+// TEMPORARY FIX: Hardcode feature flags
+const FEATURE_FLAGS = {
+    contextualReranking: true,
+    contextualEmbeddings: true,
+    multiModalSearch: true,
+    enhancedAnswerGeneration: true
 };
 // Import at runtime to avoid TypeScript import resolution issues
 async function importModules() {
     try {
-        const { performVectorSearch } = await Promise.resolve().then(() => __importStar(require('../../utils/vectorSearch')));
-        const { performBM25Search } = await Promise.resolve().then(() => __importStar(require('../../utils/bm25Search')));
-        const { hybridSearch } = await Promise.resolve().then(() => __importStar(require('../../utils/hybridSearch')));
-        const { rerank } = await Promise.resolve().then(() => __importStar(require('../../utils/reranking')));
-        const { analyzeQuery } = await Promise.resolve().then(() => __importStar(require('../../utils/queryAnalysis')));
-        const { generateAnswer } = await Promise.resolve().then(() => __importStar(require('../../utils/answerGeneration')));
-        const { performMultiModalSearch } = await Promise.resolve().then(() => __importStar(require('../../utils/multiModalProcessing')));
+        // Check if Supabase is configured and connected
+        const isSupabaseConnected = await testSupabaseConnection();
+        if (!isSupabaseConnected) {
+            logError('Supabase is not connected, some features may not work correctly');
+        }
+        // Import the modules we need
+        const { hybridSearch, fallbackSearch } = await import('../../utils/hybridSearch');
+        const { rerankWithGemini } = await import('../../utils/reranking');
+        const { analyzeQuery } = await import('../../utils/queryAnalysis');
+        const { generateAnswer } = await import('../../utils/answerGeneration');
+        // Import Supabase-specific modules if available
+        let supabaseModules = {};
+        if (isSupabaseConnected) {
+            try {
+                const { performMultiModalSearch } = await import('../../utils/multiModalProcessing');
+                const { performFtsSearch } = await import('../../utils/ftsSearch');
+                supabaseModules = {
+                    performMultiModalSearch,
+                    performFtsSearch
+                };
+            }
+            catch (importError) {
+                logError('Error importing Supabase-specific modules:', importError);
+            }
+        }
         return {
-            performVectorSearch,
-            performBM25Search,
             hybridSearch,
-            rerank,
+            fallbackSearch,
+            rerankWithGemini,
             analyzeQuery,
             generateAnswer,
-            performMultiModalSearch
+            ...supabaseModules
         };
     }
     catch (error) {
@@ -68,21 +54,29 @@ async function importModules() {
         throw error;
     }
 }
-async function handler(req, res) {
+export default async function handler(req, res) {
     const startTime = Date.now();
     // Only allow POST method
     if (req.method !== 'POST') {
-        (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, { error: 'Method not allowed' });
+        recordMetric('api', 'query', Date.now() - startTime, false, { error: 'Method not allowed' });
         return res.status(405).json({ error: 'Method not allowed' });
     }
     try {
+        // Verify Supabase connection
+        const isSupabaseConnected = await testSupabaseConnection();
+        if (!isSupabaseConnected) {
+            logWarning('Supabase connection failed, falling back to local data if available');
+        }
+        else {
+            logInfo('Supabase connected successfully');
+        }
         // Load modules dynamically
         const modules = await importModules();
         // Extract query parameters
         const { query, limit = 5, useContextualRetrieval = true, includeSourceDocuments = false, includeSourceCitations = true, conversationHistory = '', searchMode = 'hybrid', includeVisualContent = false, visualTypes = [] } = req.body;
         // Validate query
         if (!query || typeof query !== 'string') {
-            (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, { error: 'Invalid query' });
+            recordMetric('api', 'query', Date.now() - startTime, false, { error: 'Invalid query' });
             return res.status(400).json({ error: 'Query is required and must be a string' });
         }
         // Track query timing
@@ -90,46 +84,78 @@ async function handler(req, res) {
         // Analyze query and determine the best search strategy
         const queryAnalysis = await modules.analyzeQuery(query);
         // Check if contextual retrieval is enabled by feature flags
-        const contextualRetrievalEnabled = (0, featureFlags_1.isFeatureEnabled)('contextualReranking') &&
-            (0, featureFlags_1.isFeatureEnabled)('contextualEmbeddings') &&
+        // TEMPORARY FIX: Use hardcoded flags instead of isFeatureEnabled
+        const contextualRetrievalEnabled = FEATURE_FLAGS.contextualReranking &&
+            FEATURE_FLAGS.contextualEmbeddings &&
             useContextualRetrieval;
         // Flag to check if we should use multi-modal search
-        const useMultiModal = includeVisualContent && (0, featureFlags_1.isFeatureEnabled)('multiModalSearch');
+        // TEMPORARY FIX: Use hardcoded flags instead of isFeatureEnabled
+        const useMultiModal = includeVisualContent &&
+            FEATURE_FLAGS.multiModalSearch &&
+            'performMultiModalSearch' in modules;
         let searchResults;
+        let searchError = null;
+        logInfo(`Performing ${searchMode} search for query: "${query}"`);
         // Choose search strategy based on inputs and feature flags
-        if (useMultiModal) {
-            // Use multi-modal search if visual content is requested
-            searchResults = await modules.performMultiModalSearch(query, {
-                limit: Math.max(limit * 3, 15), // Retrieve more than needed for reranking
-                includeVisualContent,
-                visualTypes: visualTypes
-            });
+        try {
+            if (useMultiModal) {
+                // Use multi-modal search if visual content is requested
+                if (!modules.performMultiModalSearch) {
+                    throw new Error('Multi-modal search requested but not available');
+                }
+                searchResults = await modules.performMultiModalSearch(query, {
+                    limit: Math.max(limit * 3, 15), // Retrieve more than needed for reranking
+                    includeVisualContent,
+                    visualTypes: visualTypes
+                });
+            }
+            else if (searchMode === 'hybrid' || searchMode === 'vector') {
+                // Use hybrid search for both hybrid and vector modes
+                // For 'vector' mode, we can set vectorWeight to 1.0 to make it pure vector search
+                const vectorWeight = searchMode === 'vector' ? 1.0 : 0.7;
+                const keywordWeight = searchMode === 'vector' ? 0.0 : 0.3;
+                searchResults = await modules.hybridSearch(query, {
+                    limit: Math.max(limit * 3, 15),
+                    vectorWeight,
+                    keywordWeight
+                });
+            }
+            else if (searchMode === 'fts' || searchMode === 'keyword') {
+                // Use FTS search if specified (renamed from bm25 to fts)
+                if (!modules.performFtsSearch) {
+                    throw new Error('FTS search requested but not available');
+                }
+                searchResults = await modules.performFtsSearch(query, {
+                    limit: Math.max(limit * 3, 15)
+                });
+            }
+            else {
+                // Default to hybrid search
+                searchResults = await modules.hybridSearch(query, {
+                    limit: Math.max(limit * 3, 15)
+                });
+            }
         }
-        else if (searchMode === 'hybrid') {
-            // Use hybrid search as default
-            searchResults = await modules.hybridSearch(query, {
-                limit: Math.max(limit * 3, 15) // Retrieve more than needed for reranking
-            });
-        }
-        else if (searchMode === 'vector') {
-            // Use vector search if specified
-            searchResults = await modules.performVectorSearch(query, Math.max(limit * 3, 15));
-        }
-        else if (searchMode === 'bm25') {
-            // Use BM25 search if specified
-            searchResults = await modules.performBM25Search(query, Math.max(limit * 3, 15));
-        }
-        else {
-            // Default to hybrid search
-            searchResults = await modules.hybridSearch(query, {
-                limit: Math.max(limit * 3, 15)
-            });
+        catch (error) {
+            // Log search error
+            const errorMessage = error instanceof Error ? error.message : 'Unknown search error';
+            logError(`Search error (${searchMode} mode):`, error);
+            searchError = error instanceof Error ? error : new Error(errorMessage);
+            // Try fallback search if primary search fails
+            try {
+                logInfo('Attempting fallback keyword search');
+                searchResults = await modules.fallbackSearch(query);
+            }
+            catch (fallbackError) {
+                logError('Fallback search also failed:', fallbackError);
+                // Continue with empty results - we'll handle this below
+            }
         }
         const retrievalDuration = Date.now() - retrievalStartTime;
         // If no results, return early
-        if (!searchResults || searchResults.length === 0) {
-            (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, {
-                error: 'No results found',
+        if (!searchResults || (Array.isArray(searchResults) ? searchResults.length === 0 : Object.keys(searchResults).length === 0)) {
+            recordMetric('api', 'query', Date.now() - startTime, false, {
+                error: searchError ? searchError.message : 'No results found',
                 retrievalDuration
             });
             return res.status(404).json({
@@ -138,122 +164,172 @@ async function handler(req, res) {
                 timings: { retrievalMs: retrievalDuration }
             });
         }
-        // Rerank results if contextual retrieval is enabled
+        // Rerank results
         const rerankStartTime = Date.now();
         let rerankedResults;
-        if (contextualRetrievalEnabled) {
-            // Use contextual information in reranking
-            rerankedResults = await modules.rerank(query, searchResults, limit, {
-                useContextualInfo: true,
-                includeExplanations: false
-            });
+        // Prepare results for reranker input
+        const resultsForReranker = (Array.isArray(searchResults) ? searchResults : Object.values(searchResults))
+            .map((result, index) => ({
+            item: {
+                id: result.id || `initial-result-${index}`,
+                text: result.text || result.originalText || '',
+                metadata: result.metadata || {},
+                visualContent: result.visualContent || result.metadata?.visualContent
+            },
+            score: result.score || 0
+        }));
+        if (contextualRetrievalEnabled && resultsForReranker.length > 0) {
+            logInfo(`Reranking ${resultsForReranker.length} results for query: "${query}"`);
+            // Analyze query for visual focus
+            const visualAnalysis = analyzeVisualQuery(query);
+            // Prepare reranking options
+            const rerankOptions = {
+                limit: limit,
+                includeScores: true,
+                useVisualContext: true,
+                visualFocus: visualAnalysis.isVisualQuery,
+                visualTypes: visualAnalysis.visualTypes,
+                timeoutMs: 5000
+            };
+            // Call the new reranker function
+            rerankedResults = await modules.rerankWithGemini(query, resultsForReranker, rerankOptions);
         }
         else {
-            // Use standard reranking
-            rerankedResults = await modules.rerank(query, searchResults, limit);
+            logInfo(`Skipping reranking for query: "${query}"`);
+            rerankedResults = resultsForReranker
+                .sort((a, b) => (b.score || 0) - (a.score || 0))
+                .slice(0, limit)
+                .map(r => ({
+                ...r,
+                originalScore: r.score,
+                explanation: 'Reranking skipped',
+                item: {
+                    ...r.item,
+                    metadata: {
+                        ...r.item.metadata,
+                        rerankScore: r.score,
+                        originalScore: r.score
+                    }
+                }
+            }));
         }
         const rerankDuration = Date.now() - rerankStartTime;
         // Generate an answer from the results
         const answerStartTime = Date.now();
-        // Process the search results for answer generation
-        const searchContext = rerankedResults.map((result) => {
-            var _a;
-            const item = result.item || result;
-            // Extract visual content if available and requested
-            let visualContent = null;
-            if (includeVisualContent && 'visualContent' in item && Array.isArray(item.visualContent)) {
-                visualContent = item.visualContent.map((vc) => ({
-                    type: vc.type,
-                    description: vc.description,
-                    text: vc.extractedText
-                }));
+        // Check if we have valid results before processing
+        if (!rerankedResults || !Array.isArray(rerankedResults) || rerankedResults.length === 0) {
+            logWarning('No reranked results available, returning empty response');
+            return res.status(404).json({
+                error: 'No results found after reranking',
+                query,
+                timings: {
+                    retrievalMs: retrievalDuration,
+                    rerankingMs: rerankDuration
+                }
+            });
+        }
+        // Process the search results for answer generation with better error handling
+        const searchContext = rerankedResults.map((result, index) => {
+            // Handle potentially malformed results by providing defaults
+            if (!result) {
+                logWarning(`Result at index ${index} is undefined or null, using default values`);
+                return {
+                    text: 'No content available',
+                    source: 'Unknown',
+                    score: 0,
+                    metadata: {}
+                };
             }
-            // Format the chunk for the answer generation
+            // Extract the item safely
+            const item = result.item || result;
+            if (!item) {
+                logWarning(`Item at index ${index} could not be extracted, using default values`);
+                return {
+                    text: 'No content available',
+                    source: 'Unknown',
+                    score: result.score || 0,
+                    metadata: {}
+                };
+            }
+            // Extract visual content if available and requested
+            // let visualContent = null;
+            // if (includeVisualContent && 
+            //     item.visualContent && 
+            //     Array.isArray(item.visualContent)) {
+            //   visualContent = item.visualContent.map((vc: any) => ({
+            //     type: vc.type || 'unknown',
+            //     description: vc.description || '',
+            //     text: vc.extractedText || ''
+            //   }));
+            // }
+            // Format the chunk for the answer generation with safe fallbacks
             return {
-                text: item.text,
-                source: ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) || 'Unknown',
-                score: result.score,
+                text: item.text || item.content || 'No content available',
+                source: (item.metadata && item.metadata.source) || item.source || 'Unknown',
+                score: result.score || 0,
                 metadata: item.metadata || {},
-                visualContent
+                // visualContent // Commented out
             };
         });
         // Get system prompt for this query
-        const systemPrompt = (0, modelConfig_1.getSystemPromptForQuery)(query);
+        const systemPrompt = modelConfig.getSystemPromptForQuery(query);
         // Generate the answer
         const answer = await modules.generateAnswer(query, searchContext, {
             systemPrompt,
             includeSourceCitations,
             maxSourcesInAnswer: includeSourceDocuments ? limit : 3,
             conversationHistory: conversationHistory || '',
-            useContextualInformation: contextualRetrievalEnabled
         });
         const answerDuration = Date.now() - answerStartTime;
         const totalDuration = Date.now() - startTime;
-        // Prepare the response
-        let response = {
-            query,
-            answer,
-            timings: {
-                retrievalMs: retrievalDuration,
-                rerankMs: rerankDuration,
-                answerMs: answerDuration,
-                totalMs: totalDuration
-            }
-        };
-        // Include source documents if requested
-        if (includeSourceDocuments) {
-            response.sourceDocuments = rerankedResults.map((result) => {
-                const item = result.item || result;
-                // Create a simplified representation without embeddings to reduce payload size
-                const document = {
-                    text: item.text,
-                    metadata: item.metadata,
-                    score: result.score
-                };
-                // Include visual content if requested and available
-                if (includeVisualContent && 'visualContent' in item && Array.isArray(item.visualContent)) {
-                    // Only include necessary visual fields, omitting raw image data to reduce payload size
-                    document.visualContent = item.visualContent.map((vc) => ({
-                        type: vc.type,
-                        description: vc.description,
-                        extractedText: vc.extractedText,
-                        imageUrl: vc.imageUrl
-                    }));
-                }
-                return document;
-            });
-        }
-        // Include query analysis if available
-        if (queryAnalysis) {
-            response.queryAnalysis = {
-                intent: queryAnalysis.intent,
-                topics: queryAnalysis.topics,
-                entities: queryAnalysis.entities,
-                technicalLevel: queryAnalysis.technicalLevel
-            };
-        }
-        // Record successful query metric
-        (0, performanceMonitoring_1.recordMetric)('api', 'query', totalDuration, true, {
+        // Record success metrics
+        recordMetric('api', 'query', totalDuration, true, {
+            queryLength: query.length,
+            resultCount: rerankedResults.length,
             retrievalDuration,
             rerankDuration,
-            answerDuration,
-            resultCount: rerankedResults.length,
-            characters: answer.length,
-            useContextual: contextualRetrievalEnabled,
-            useMultiModal
+            answerDuration
         });
-        // Return the response
+        // Prepare the response
+        const response = {
+            answer,
+            query,
+            timings: {
+                totalMs: totalDuration,
+                retrievalMs: retrievalDuration,
+                rerankingMs: rerankDuration,
+                answerGenerationMs: answerDuration
+            }
+        };
+        // Add source documents if requested
+        if (includeSourceDocuments) {
+            // Add source documents to the response
+            Object.assign(response, {
+                sourceDocuments: rerankedResults.map((result) => {
+                    const item = result.item || result;
+                    return {
+                        text: item.text || item.content || '',
+                        source: item.metadata?.source || item.source || 'Unknown',
+                        score: result.score,
+                        metadata: item.metadata || {}
+                    };
+                })
+            });
+        }
         return res.status(200).json(response);
     }
     catch (error) {
-        console.error('Error processing query:', error);
-        // Record failed query metric
-        (0, performanceMonitoring_1.recordMetric)('api', 'query', Date.now() - startTime, false, {
-            error: error.message
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error processing query';
+        // Log the error
+        logError('Error processing query:', error);
+        // Record error metrics
+        recordMetric('api', 'query', Date.now() - startTime, false, {
+            error: errorMessage
         });
+        // Return a standardized error response
         return res.status(500).json({
             error: 'Error processing your query',
-            message: error.message
+            message: errorMessage
         });
     }
 }

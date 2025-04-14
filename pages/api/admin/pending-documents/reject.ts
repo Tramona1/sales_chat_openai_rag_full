@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { approveOrRejectDocument } from '@/utils/adminWorkflow';
-import { logError, logInfo } from '@/utils/errorHandling';
+import { logError, logInfo } from '@/utils/logger';
 
 /**
  * API endpoint for rejecting pending documents

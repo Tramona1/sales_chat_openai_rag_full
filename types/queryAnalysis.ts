@@ -88,6 +88,7 @@ export interface RetrievalParameters {
   limit: number;
   rerank: boolean;
   rerankCount: number;
+  matchThreshold?: number;
   
   /** Whether to expand the query for better results */
   expandQuery: boolean;

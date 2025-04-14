@@ -7,7 +7,7 @@
 
 import { 
   DocumentCategoryType, 
-  QualityControlFlag,
+  QualityControlFlag as ImportedQualityFlag,
   ConfidenceLevel as ImportedConfidenceLevel,
   EntityType as ImportedEntityType
 } from '../utils/documentCategories';
@@ -16,35 +16,40 @@ import {
  * Types related to document metadata and approval workflows
  */
 
-// Document categories
-export type DocumentCategory = 
-  | 'PRODUCT' 
-  | 'TECHNICAL' 
-  | 'FEATURES' 
-  | 'PRICING' 
-  | 'COMPARISON' 
-  | 'CUSTOMER_CASE' 
-  | 'GENERAL';
+// Document categories - updated to match STANDARD_CATEGORIES in tagUtils.ts
+// export type DocumentCategory = 
+//   | 'GENERAL'
+//   | 'PRODUCT' 
+//   | 'TECHNICAL' 
+//   | 'FEATURES' 
+//   | 'SALES'
+//   | 'INDUSTRY'
+//   | 'COMPETITIVE'
+//   | 'REFERENCE'
+//   | 'INTERNAL'
+//   | 'PRICING' 
+//   | 'COMPARISON' 
+//   | 'CUSTOMER_CASE';
 
-// Entity types for extraction
-export type EntityType = 
-  | 'PRODUCT_NAME' 
-  | 'FEATURE_NAME' 
-  | 'PRICING_PLAN' 
-  | 'VERSION_NUMBER' 
-  | 'CUSTOMER_NAME' 
-  | 'COMPETITOR_NAME';
+// Entity types for extraction - Use the imported enum
+// export type EntityType = 
+//   | 'PRODUCT_NAME' 
+//   | 'FEATURE_NAME' 
+//   | 'PRICING_PLAN' 
+//   | 'VERSION_NUMBER' 
+//   | 'CUSTOMER_NAME' 
+//   | 'COMPETITOR_NAME';
 
-// Confidence levels for metadata extraction
-export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+// Confidence levels for metadata extraction - Use the imported enum
+// export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
 
-// Document quality flags
-export type QualityFlag = 
-  | 'OUTDATED' 
-  | 'CONTRADICTORY' 
-  | 'INCOMPLETE' 
-  | 'DUPLICATE' 
-  | 'NEEDS_CLARIFICATION';
+// Document quality flags - Use the imported enum
+// export type QualityFlag = 
+//   | 'OUTDATED' 
+//   | 'CONTRADICTORY' 
+//   | 'INCOMPLETE' 
+//   | 'DUPLICATE' 
+//   | 'NEEDS_CLARIFICATION';
 
 // Review status of a document
 export type ReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -65,21 +70,21 @@ export interface EnhancedMetadata {
   contentType?: string;             // Content MIME type (e.g., text/plain, application/pdf)
   
   // Classification metadata
-  primaryCategory: DocumentCategoryType;  // Primary document category
-  secondaryCategories: DocumentCategoryType[]; // Additional categories
+  primaryCategory: DocumentCategoryType;  // Use imported enum
+  secondaryCategories: DocumentCategoryType[]; // Use imported enum
   confidenceScore: number;          // Confidence score for categorization (0-1)
   
   // Content analysis
   summary: string;                  // Brief summary of the content
   keyTopics: string[];              // Key topics covered in the document
-  technicalLevel: number;           // Technical complexity level (1-5)
+  technicalLevel: number;           // Technical complexity level (1-10 scale)
   keywords: string[];               // Extracted keywords from content
   
   // Extracted entities
   entities: ExtractedEntity[];      // Entities extracted from the document
   
   // Quality control
-  qualityFlags: QualityControlFlag[]; // Any quality control flags
+  qualityFlags: ImportedQualityFlag[]; // Use imported enum
   approved: boolean;                // Whether content is approved
   approvedBy?: string;              // Who approved the content
   approvalDate?: string;            // When content was approved
@@ -109,8 +114,8 @@ export interface EnhancedMetadata {
  */
 export interface ExtractedEntity {
   name: string;                     // Entity name
-  type: ImportedEntityType;         // Entity type
-  confidence: ImportedConfidenceLevel;      // Confidence level
+  type: ImportedEntityType;         // Use imported enum
+  confidence: ImportedConfidenceLevel;      // Use imported enum
   mentions: number;                 // Number of mentions in document
   metadata?: Record<string, any>;   // Additional entity metadata
   
@@ -151,7 +156,7 @@ export interface CategoryFilter {
   excludeCategories?: DocumentCategoryType[];
   minConfidenceScore?: number;      // Minimum confidence score (0-1)
   onlyApproved?: boolean;           // Only retrieve approved content
-  technicalLevelRange?: {min: number, max: number}; // Technical level range
+  technicalLevelRange?: {min: number, max: number}; // Technical level range (1-10)
 }
 
 /**
@@ -176,10 +181,10 @@ export function createDefaultMetadata(source: string): EnhancedMetadata {
     confidenceScore: 0,
     summary: '',
     keyTopics: [],
-    technicalLevel: 1,
+    technicalLevel: 5, // Default technical level (mid-range on 1-10 scale)
     keywords: [],
     entities: [],
-    qualityFlags: [QualityControlFlag.PENDING_REVIEW],
+    qualityFlags: [ImportedQualityFlag.PENDING_REVIEW],
     approved: false,
     routingPriority: 5
   };
@@ -191,20 +196,32 @@ export function createDefaultMetadata(source: string): EnhancedMetadata {
 export function needsManualReview(metadata: EnhancedMetadata): boolean {
   // Check for quality flags that require review
   const hasReviewFlag = metadata.qualityFlags.some(flag => 
-    flag === QualityControlFlag.PENDING_REVIEW ||
-    flag === QualityControlFlag.NEEDS_CLARIFICATION ||
-    flag === QualityControlFlag.CONTAINS_CONTRADICTIONS
+    flag === ImportedQualityFlag.PENDING_REVIEW ||
+    flag === ImportedQualityFlag.NEEDS_CLARIFICATION ||
+    flag === ImportedQualityFlag.CONTAINS_CONTRADICTIONS ||
+    flag === ImportedQualityFlag.UNRELIABLE_SOURCE ||
+    flag === ImportedQualityFlag.OUTDATED ||
+    flag === ImportedQualityFlag.OUTDATED_CONTENT ||
+    flag === ImportedQualityFlag.INCOMPLETE_CONTENT
   );
   
   // Check for low confidence score
   const hasLowConfidence = metadata.confidenceScore < 0.7;
   
-  // Check for sensitive categories
-  const hasSensitiveCategory = 
-    metadata.primaryCategory === DocumentCategoryType.CUSTOMER ||
-    metadata.primaryCategory === DocumentCategoryType.PRICING ||
-    metadata.primaryCategory === DocumentCategoryType.COMPETITORS ||
-    metadata.primaryCategory === DocumentCategoryType.INTERNAL_POLICY;
+  // Check for sensitive categories based on the updated list from CATEGORY_ATTRIBUTES
+  const sensitiveCategories = [
+    DocumentCategoryType.PAYROLL,
+    DocumentCategoryType.COMPLIANCE,
+    DocumentCategoryType.TAX_COMPLIANCE,
+    DocumentCategoryType.SECURITY_PRIVACY,
+    DocumentCategoryType.HR_MANAGEMENT, // Often contains sensitive employee data
+    DocumentCategoryType.DOCUMENTS, // Can contain sensitive contracts/info
+    DocumentCategoryType.BACKGROUND_CHECKS,
+    DocumentCategoryType.DIGITAL_SIGNATURES,
+    DocumentCategoryType.PERFORMANCE_TRACKING // Performance data is sensitive
+    // Add others if CATEGORY_ATTRIBUTES defines them as potentiallySensitive
+  ];
+  const hasSensitiveCategory = sensitiveCategories.includes(metadata.primaryCategory);
   
   return hasReviewFlag || (hasLowConfidence && hasSensitiveCategory);
 }
@@ -236,7 +253,7 @@ export function mergeMetadata(metadataList: EnhancedMetadata[]): EnhancedMetadat
   const topicsSet = new Set<string>();
   
   // Collect all quality flags
-  const qualityFlagsSet = new Set<QualityControlFlag>();
+  const qualityFlagsSet = new Set<ImportedQualityFlag>();
   
   // Calculate average confidence score and technical level
   let totalConfidenceScore = 0;
@@ -332,17 +349,17 @@ function confidenceLevelValue(level: ImportedConfidenceLevel): number {
 
 // Response from LLM for metadata extraction
 export interface ExtractedMetadata {
-  categories: DocumentCategory[];
-  primaryCategory: DocumentCategory;
-  technicalLevel: number; // 1-10 scale
+  categories: DocumentCategoryType[]; // Use imported enum
+  primaryCategory: DocumentCategoryType; // Use imported enum
+  technicalLevel: number; // 1-10 scale - Updated
   entities: {
-    type: EntityType;
+    type: ImportedEntityType; // Use imported enum
     value: string;
-    confidence: ConfidenceLevel;
+    confidence: ImportedConfidenceLevel; // Use imported enum
   }[];
   keywords: string[];
   summary: string;
-  qualityFlags: QualityFlag[];
+  qualityFlags: ImportedQualityFlag[]; // Use imported enum
 }
 
 // Approval options for documents
@@ -390,11 +407,11 @@ export interface DocumentMetadata {
   // Content classification
   title?: string;
   summary?: string;
-  categories: DocumentCategory[];
-  primaryCategory: DocumentCategory;
+  categories: DocumentCategoryType[]; // Use imported enum
+  primaryCategory: DocumentCategoryType; // Use imported enum
   
   // Technical aspects
-  technicalLevel: number; // 1-10 scale
+  technicalLevel: number; // 1-10 scale - Updated
   lastUpdated?: string; // ISO date string
   
   // Source information
@@ -403,7 +420,7 @@ export interface DocumentMetadata {
   
   // Semantic enrichment
   keywords: string[];
-  entities: DocumentEntity[];
+  entities: DocumentEntity[]; // DocumentEntity uses string for type, consider aligning?
   
   // Additional metadata
   language?: string;
@@ -413,7 +430,7 @@ export interface DocumentMetadata {
 
 // Search filter options
 export interface MetadataFilter {
-  categories?: DocumentCategory[];
+  categories?: DocumentCategoryType[]; // Use imported enum
   strictCategoryMatch?: boolean;
   technicalLevelMin?: number;
   technicalLevelMax?: number;

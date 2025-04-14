@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const Chip = ({ label, onDelete, color = 'default', variant = 'filled', size = 'medium', className = '', icon, clickable = false, onClick }) => {
     // Size styles
     const sizeStyles = {
@@ -60,4 +55,4 @@ const Chip = ({ label, onDelete, color = 'default', variant = 'filled', size = '
         </button>)}
     </div>);
 };
-exports.default = Chip;
+export default Chip;

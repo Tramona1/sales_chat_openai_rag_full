@@ -1,4 +1,3 @@
-"use strict";
 /**
  * Visual Storage Manager
  *
@@ -6,73 +5,23 @@
  * Current implementation uses local file system storage, designed to be easily
  * migrated to cloud storage (S3, Google Cloud Storage, etc.) in the future.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.VisualType = exports.VISUAL_STORAGE_ROOT = void 0;
-exports.initVisualStorage = initVisualStorage;
-exports.storeVisual = storeVisual;
-exports.getVisual = getVisual;
-exports.getVisualsForDocument = getVisualsForDocument;
-exports.deleteVisual = deleteVisual;
-exports.updateVisualMetadata = updateVisualMetadata;
-exports.getVisualUrl = getVisualUrl;
-exports.readVisualContent = readVisualContent;
-exports.visualExists = visualExists;
-exports.getVisualStorageStats = getVisualStorageStats;
-exports.prepareForCloudMigration = prepareForCloudMigration;
-exports.cleanupUnusedVisuals = cleanupUnusedVisuals;
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const crypto_1 = __importDefault(require("crypto"));
-const util_1 = require("util");
-const performanceMonitoring_1 = require("./performanceMonitoring");
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { promisify } from 'util';
+import { recordMetric } from './performanceMonitoring';
 // Promisify file system operations
-const mkdir = (0, util_1.promisify)(fs_1.default.mkdir);
-const writeFile = (0, util_1.promisify)(fs_1.default.writeFile);
-const readFile = (0, util_1.promisify)(fs_1.default.readFile);
-const unlink = (0, util_1.promisify)(fs_1.default.unlink);
-const access = (0, util_1.promisify)(fs_1.default.access);
+const mkdir = promisify(fs.mkdir);
+const writeFile = promisify(fs.writeFile);
+const readFile = promisify(fs.readFile);
+const unlink = promisify(fs.unlink);
+const access = promisify(fs.access);
 // Constants
-exports.VISUAL_STORAGE_ROOT = process.env.VISUAL_STORAGE_PATH || path_1.default.join(process.cwd(), 'data', 'visuals');
-const VISUAL_CONTENT_INDEX = path_1.default.join(exports.VISUAL_STORAGE_ROOT, 'index.json');
+export const VISUAL_STORAGE_ROOT = process.env.VISUAL_STORAGE_PATH || path.join(process.cwd(), 'data', 'visuals');
+const VISUAL_CONTENT_INDEX = path.join(VISUAL_STORAGE_ROOT, 'index.json');
 const THUMBNAIL_SIZE = '300x300'; // Default thumbnail size
 // Visual content types
-var VisualType;
+export var VisualType;
 (function (VisualType) {
     VisualType["IMAGE"] = "image";
     VisualType["CHART"] = "chart";
@@ -81,27 +30,27 @@ var VisualType;
     VisualType["GRAPH"] = "graph";
     VisualType["SCREENSHOT"] = "screenshot";
     VisualType["OTHER"] = "other";
-})(VisualType || (exports.VisualType = VisualType = {}));
+})(VisualType || (VisualType = {}));
 /**
  * Initialize the visual storage system
  * Creates necessary directories if they don't exist
  */
-async function initVisualStorage() {
+export async function initVisualStorage() {
     try {
         // Ensure the base directory exists
-        await ensureDirectoryExists(exports.VISUAL_STORAGE_ROOT);
+        await ensureDirectoryExists(VISUAL_STORAGE_ROOT);
         // Create subdirectories for different types of visuals
         const visualTypes = Object.values(VisualType);
         for (const type of visualTypes) {
-            await ensureDirectoryExists(path_1.default.join(exports.VISUAL_STORAGE_ROOT, type));
+            await ensureDirectoryExists(path.join(VISUAL_STORAGE_ROOT, type));
         }
         // Create thumbnails directory
-        await ensureDirectoryExists(path_1.default.join(exports.VISUAL_STORAGE_ROOT, 'thumbnails'));
+        await ensureDirectoryExists(path.join(VISUAL_STORAGE_ROOT, 'thumbnails'));
         // Initialize index file if it doesn't exist
-        if (!fs_1.default.existsSync(VISUAL_CONTENT_INDEX)) {
+        if (!fs.existsSync(VISUAL_CONTENT_INDEX)) {
             await writeFile(VISUAL_CONTENT_INDEX, JSON.stringify({ visuals: [] }));
         }
-        console.log(`Visual storage initialized at ${exports.VISUAL_STORAGE_ROOT}`);
+        console.log(`Visual storage initialized at ${VISUAL_STORAGE_ROOT}`);
     }
     catch (error) {
         console.error('Failed to initialize visual storage:', error);
@@ -127,7 +76,7 @@ async function ensureDirectoryExists(dir) {
  * @param analysisResult - Optional pre-existing analysis result
  * @returns Visual metadata including storage path
  */
-async function storeVisual(sourceFilePath, metadata, analysisResult) {
+export async function storeVisual(sourceFilePath, metadata, analysisResult) {
     const startTime = Date.now();
     try {
         // Initialize storage if needed
@@ -135,9 +84,9 @@ async function storeVisual(sourceFilePath, metadata, analysisResult) {
         // Generate a unique ID if not provided
         const id = metadata.id || generateVisualId();
         // Get file information
-        const fileStats = fs_1.default.statSync(sourceFilePath);
-        const fileExtension = path_1.default.extname(sourceFilePath);
-        const originalFilename = metadata.originalFilename || path_1.default.basename(sourceFilePath);
+        const fileStats = fs.statSync(sourceFilePath);
+        const fileExtension = path.extname(sourceFilePath);
+        const originalFilename = metadata.originalFilename || path.basename(sourceFilePath);
         const mimeType = metadata.mimeType || getMimeTypeFromExtension(fileExtension);
         // Determine visual type from analysis or filename
         let type = metadata.type;
@@ -149,8 +98,8 @@ async function storeVisual(sourceFilePath, metadata, analysisResult) {
         }
         // Create destination path in appropriate subdirectory
         const destinationFilename = `${id}${fileExtension}`;
-        const destinationDir = path_1.default.join(exports.VISUAL_STORAGE_ROOT, String(type));
-        const destinationPath = path_1.default.join(destinationDir, destinationFilename);
+        const destinationDir = path.join(VISUAL_STORAGE_ROOT, String(type));
+        const destinationPath = path.join(destinationDir, destinationFilename);
         // Ensure destination directory exists
         await ensureDirectoryExists(destinationDir);
         // Copy file to destination
@@ -171,20 +120,20 @@ async function storeVisual(sourceFilePath, metadata, analysisResult) {
             ...metadata,
             // Add analysis results if available
             analysisResults: hasBeenAnalyzed ? {
-                detectedType: (analysisToStore === null || analysisToStore === void 0 ? void 0 : analysisToStore.type) || type,
-                description: (analysisToStore === null || analysisToStore === void 0 ? void 0 : analysisToStore.description) || '',
-                extractedText: (analysisToStore === null || analysisToStore === void 0 ? void 0 : analysisToStore.detectedText) || (analysisToStore === null || analysisToStore === void 0 ? void 0 : analysisToStore.extractedText) || '',
-                structuredData: (analysisToStore === null || analysisToStore === void 0 ? void 0 : analysisToStore.data) || (analysisToStore === null || analysisToStore === void 0 ? void 0 : analysisToStore.structuredData)
+                detectedType: analysisToStore?.type || type,
+                description: analysisToStore?.description || '',
+                extractedText: analysisToStore?.detectedText || analysisToStore?.extractedText || '',
+                structuredData: analysisToStore?.data || analysisToStore?.structuredData
             } : undefined
         };
         // Add contextual information if available from analysis
         if (analysisResult) {
             // Get document level context
-            const documentContext = await Promise.resolve().then(() => __importStar(require('./imageAnalysis/imageAnalyzer.js'))).then(module => module.ImageAnalyzer.generateDocumentContext(analysisResult));
+            const documentContext = await import('./imageAnalysis/imageAnalyzer').then(module => module.ImageAnalyzer.generateDocumentContext(analysisResult));
             if (documentContext) {
                 visualMetadata.contextualMetadata = {
                     documentContext,
-                    chunkContext: await Promise.resolve().then(() => __importStar(require('./imageAnalysis/imageAnalyzer.js'))).then(module => module.ImageAnalyzer.generateChunkContext(analysisResult))
+                    chunkContext: await import('./imageAnalysis/imageAnalyzer').then(module => module.ImageAnalyzer.generateChunkContext(analysisResult))
                 };
             }
         }
@@ -206,7 +155,7 @@ async function storeVisual(sourceFilePath, metadata, analysisResult) {
         }
         // Record performance metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('visualStorage', 'storeVisual', duration, true, {
+        recordMetric('visualStorage', 'storeVisual', duration, true, {
             visualId: id,
             visualType: type,
             fileSize: fileStats.size,
@@ -216,7 +165,7 @@ async function storeVisual(sourceFilePath, metadata, analysisResult) {
     }
     catch (error) {
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('visualStorage', 'storeVisual', duration, false, {
+        recordMetric('visualStorage', 'storeVisual', duration, false, {
             error: error instanceof Error ? error.message : 'Unknown error'
         });
         console.error('Failed to store visual:', error);
@@ -260,7 +209,7 @@ async function addToVisualIndex(visualMetadata) {
  * @param id - Visual ID
  * @returns Visual metadata
  */
-async function getVisual(id) {
+export async function getVisual(id) {
     try {
         const indexContent = await readFile(VISUAL_CONTENT_INDEX, 'utf8');
         const index = JSON.parse(indexContent);
@@ -278,7 +227,7 @@ async function getVisual(id) {
  * @param documentId - Document ID
  * @returns Array of visual metadata
  */
-async function getVisualsForDocument(documentId) {
+export async function getVisualsForDocument(documentId) {
     try {
         const indexContent = await readFile(VISUAL_CONTENT_INDEX, 'utf8');
         const index = JSON.parse(indexContent);
@@ -295,7 +244,7 @@ async function getVisualsForDocument(documentId) {
  * @param id - Visual ID
  * @returns Success status
  */
-async function deleteVisual(id) {
+export async function deleteVisual(id) {
     try {
         // Get visual metadata
         const visual = await getVisual(id);
@@ -303,11 +252,11 @@ async function deleteVisual(id) {
             return false;
         }
         // Delete the file
-        if (visual.filePath && fs_1.default.existsSync(visual.filePath)) {
+        if (visual.filePath && fs.existsSync(visual.filePath)) {
             await unlink(visual.filePath);
         }
         // Delete thumbnail if it exists
-        if (visual.thumbnailPath && fs_1.default.existsSync(visual.thumbnailPath)) {
+        if (visual.thumbnailPath && fs.existsSync(visual.thumbnailPath)) {
             await unlink(visual.thumbnailPath);
         }
         // Update index
@@ -329,7 +278,7 @@ async function deleteVisual(id) {
  * @param updatedMetadata - Updated metadata
  * @returns Updated visual metadata
  */
-async function updateVisualMetadata(id, updatedMetadata) {
+export async function updateVisualMetadata(id, updatedMetadata) {
     try {
         // Get current visual metadata
         const currentVisual = await getVisual(id);
@@ -355,7 +304,7 @@ async function updateVisualMetadata(id, updatedMetadata) {
  * Generate a unique ID for a visual
  */
 function generateVisualId() {
-    return `vis_${crypto_1.default.randomBytes(16).toString('hex')}`;
+    return `vis_${crypto.randomBytes(16).toString('hex')}`;
 }
 /**
  * Determine MIME type from file extension
@@ -390,7 +339,7 @@ function determineVisualTypeFromMimeType(mimeType) {
  * @param options - Options for URL generation
  * @returns URL for accessing the visual
  */
-function getVisualUrl(id, options = {}) {
+export function getVisualUrl(id, options = {}) {
     const { useThumbnail = false, forceDownload = false, baseUrl = '/api/visuals' } = options;
     let url = `${baseUrl}/${id}`;
     const queryParams = [];
@@ -412,7 +361,7 @@ function getVisualUrl(id, options = {}) {
  * @param useThumbnail - Whether to return the thumbnail instead of full image
  * @returns Buffer containing visual data or null if not found
  */
-async function readVisualContent(id, useThumbnail = false) {
+export async function readVisualContent(id, useThumbnail = false) {
     try {
         const startTime = Date.now();
         // Get the visual metadata
@@ -437,7 +386,7 @@ async function readVisualContent(id, useThumbnail = false) {
         const data = await readFile(filePath);
         // Record performance metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('visualStorage', 'readVisualContent', duration, true, {
+        recordMetric('visualStorage', 'readVisualContent', duration, true, {
             visualId: id,
             useThumbnail,
             fileSize: data.length
@@ -447,7 +396,7 @@ async function readVisualContent(id, useThumbnail = false) {
     catch (error) {
         console.error('Error reading visual content:', error);
         // Record error
-        (0, performanceMonitoring_1.recordMetric)('visualStorage', 'readVisualContent', 0, false, {
+        recordMetric('visualStorage', 'readVisualContent', 0, false, {
             error: error instanceof Error ? error.message : 'Unknown error',
             visualId: id
         });
@@ -460,16 +409,16 @@ async function readVisualContent(id, useThumbnail = false) {
  * @param id - Visual ID
  * @returns Boolean indicating if the visual exists
  */
-async function visualExists(id) {
+export async function visualExists(id) {
     const visual = await getVisual(id);
-    return visual !== null && fs_1.default.existsSync(visual.filePath);
+    return visual !== null && fs.existsSync(visual.filePath);
 }
 /**
  * Get statistics about stored visuals
  *
  * @returns Visual storage statistics
  */
-async function getVisualStorageStats() {
+export async function getVisualStorageStats() {
     try {
         const indexContent = await readFile(VISUAL_CONTENT_INDEX, 'utf8');
         const index = JSON.parse(indexContent);
@@ -508,7 +457,7 @@ async function getVisualStorageStats() {
  *
  * @returns Cloud migration preparation data
  */
-async function prepareForCloudMigration() {
+export async function prepareForCloudMigration() {
     try {
         const indexContent = await readFile(VISUAL_CONTENT_INDEX, 'utf8');
         const index = JSON.parse(indexContent);
@@ -538,7 +487,7 @@ async function prepareForCloudMigration() {
  * @param options - Cleanup options
  * @returns Cleanup results
  */
-async function cleanupUnusedVisuals(options) {
+export async function cleanupUnusedVisuals(options) {
     try {
         const { olderThan, onlyUnreferenced = true } = options;
         // Read index
@@ -605,11 +554,11 @@ function isImageMimeType(mimeType) {
 async function generateThumbnail(imagePath, id) {
     try {
         // Create thumbnails directory if it doesn't exist
-        const thumbnailsDir = path_1.default.join(exports.VISUAL_STORAGE_ROOT, 'thumbnails');
+        const thumbnailsDir = path.join(VISUAL_STORAGE_ROOT, 'thumbnails');
         await ensureDirectoryExists(thumbnailsDir);
         // Determine thumbnail extension based on original
-        const extension = path_1.default.extname(imagePath);
-        const thumbnailPath = path_1.default.join(thumbnailsDir, `${id}_thumb${extension}`);
+        const extension = path.extname(imagePath);
+        const thumbnailPath = path.join(thumbnailsDir, `${id}_thumb${extension}`);
         // For now, just copy the file as a placeholder
         // In a real implementation, you would use a library like sharp to resize the image
         await copyFile(imagePath, thumbnailPath);

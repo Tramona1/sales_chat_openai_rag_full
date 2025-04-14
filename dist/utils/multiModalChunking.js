@@ -1,19 +1,14 @@
-"use strict";
 /**
  * Multi-Modal Chunking Utilities
  *
  * This file provides functionality for processing documents that contain
  * both text and visual elements, ensuring proper association between them.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.findRelevantVisualElements = findRelevantVisualElements;
-exports.prepareMultiModalChunkForEmbedding = prepareMultiModalChunkForEmbedding;
-exports.createMultiModalChunks = createMultiModalChunks;
-exports.processDocumentWithVisualContent = processDocumentWithVisualContent;
-const performanceMonitoring_1 = require("./performanceMonitoring");
-const geminiClient_1 = require("./geminiClient");
-const multiModalProcessing_1 = require("./multiModalProcessing");
-const uuid_1 = require("uuid");
+import { VisualContentType } from '../types/baseTypes';
+import { recordMetric } from './performanceMonitoring';
+import { generateChunkContext } from './geminiClient';
+import { analyzeImage } from './multiModalProcessing';
+import { v4 as uuidv4 } from 'uuid';
 // No longer need the type alias since we're using the proper types now
 // type MultiModalChunk = TypedMultiModalChunk;
 // Simple logger implementation to replace the missing logger module
@@ -56,7 +51,7 @@ function overlappingTextSplit(text, maxTokens, overlap) {
  * @param options - Configuration options
  * @returns Array of relevant visuals
  */
-function findRelevantVisualElements(chunk, visuals, options = {}) {
+export function findRelevantVisualElements(chunk, visuals, options = {}) {
     const { maxDistance = 3, maxVisuals = 3, requirePageMatch = false } = options;
     const chunkText = chunk.text.toLowerCase();
     const chunkMetadata = chunk.metadata || {};
@@ -86,7 +81,7 @@ function findRelevantVisualElements(chunk, visuals, options = {}) {
     // If we have explicit matches from references, prioritize those
     if (explicitMatches.length > 0) {
         const duration = performance.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('multiModalChunking', 'findRelevantVisualElements', duration, true, {
+        recordMetric('multiModalChunking', 'findRelevantVisualElements', duration, true, {
             visualCount: explicitMatches.length,
             method: 'explicitReference'
         });
@@ -124,7 +119,7 @@ function findRelevantVisualElements(chunk, visuals, options = {}) {
         .slice(0, maxVisuals)
         .map(item => item.visual);
     const duration = performance.now() - startTime;
-    (0, performanceMonitoring_1.recordMetric)('multiModalChunking', 'findRelevantVisualElements', duration, true, {
+    recordMetric('multiModalChunking', 'findRelevantVisualElements', duration, true, {
         visualCount: sortedVisuals.length,
         method: 'keywordMatching'
     });
@@ -212,21 +207,28 @@ async function createMultiModalChunk(chunk, relevantVisuals, documentContext) {
             .map(visual => visual.analysis && visual.analysis.extractedText)
             .filter(text => text && text.length > 0);
         // Generate enhanced context that incorporates visual information
-        const enhancedContext = await (0, geminiClient_1.generateChunkContext)(chunk.text + (visualTexts.length > 0 ? '\n\n' + visualTexts.join('\n') : ''), documentContext);
+        const enhancedContext = await generateChunkContext(chunk.text + (visualTexts.length > 0 ? '\n\n' + visualTexts.join('\n') : ''), documentContext);
         // Create the multi-modal chunk
         const multiModalChunk = {
-            id: (0, uuid_1.v4)(),
+            id: uuidv4(),
+            text: chunk.text,
             content: chunk.text,
             metadata: {
                 ...metadata,
                 hasVisualContent: relevantVisuals.length > 0,
                 visualCount: relevantVisuals.length,
-                context: enhancedContext
+                context: {
+                    description: enhancedContext.summary || '',
+                    keyPoints: enhancedContext.keyPoints || [],
+                    isDefinition: false,
+                    containsExample: false,
+                    relatedTopics: []
+                }
             },
             // Map the visuals to the expected structure
             visualContent: relevantVisuals.map(visual => ({
-                type: visual.analysis && visual.analysis.type,
-                description: visual.analysis && visual.analysis.description,
+                type: (visual.analysis && visual.analysis.type) || VisualContentType.UNKNOWN,
+                description: (visual.analysis && visual.analysis.description) || 'No description available',
                 detectedText: visual.analysis && visual.analysis.extractedText,
                 data: visual.analysis && visual.analysis.structuredData,
                 path: visual.path,
@@ -234,7 +236,7 @@ async function createMultiModalChunk(chunk, relevantVisuals, documentContext) {
             }))
         };
         const duration = performance.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('multiModalChunking', 'createMultiModalChunk', duration, true, {
+        recordMetric('multiModalChunking', 'createMultiModalChunk', duration, true, {
             visualCount: relevantVisuals.length
         });
         return multiModalChunk;
@@ -243,11 +245,12 @@ async function createMultiModalChunk(chunk, relevantVisuals, documentContext) {
         logger.error('Error creating multi-modal chunk:', error);
         // Return a basic chunk without the enhanced context if there's an error
         const duration = performance.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('multiModalChunking', 'createMultiModalChunk', duration, false, {
+        recordMetric('multiModalChunking', 'createMultiModalChunk', duration, false, {
             error: error instanceof Error ? error.message : 'Unknown error'
         });
         return {
-            id: (0, uuid_1.v4)(),
+            id: uuidv4(),
+            text: chunk.text,
             content: chunk.text,
             metadata: {
                 ...(chunk.metadata || {}),
@@ -256,8 +259,8 @@ async function createMultiModalChunk(chunk, relevantVisuals, documentContext) {
                 processingError: error instanceof Error ? error.message : 'Error processing chunk'
             },
             visualContent: relevantVisuals.map(visual => ({
-                type: visual.analysis && visual.analysis.type || 'unknown',
-                description: visual.analysis && visual.analysis.description || 'No description available',
+                type: (visual.analysis && visual.analysis.type) || VisualContentType.UNKNOWN,
+                description: (visual.analysis && visual.analysis.description) || 'No description available',
                 detectedText: visual.analysis && visual.analysis.extractedText,
                 path: visual.path,
                 page: visual.page
@@ -271,7 +274,7 @@ async function createMultiModalChunk(chunk, relevantVisuals, documentContext) {
  * @param chunk - The multi-modal chunk to prepare
  * @returns Text string optimized for embedding
  */
-function prepareMultiModalChunkForEmbedding(chunk) {
+export function prepareMultiModalChunkForEmbedding(chunk) {
     const originalText = chunk.content || chunk.text || '';
     const contextParts = [];
     // --- DOCUMENT METADATA ---
@@ -358,7 +361,7 @@ function prepareMultiModalChunkForEmbedding(chunk) {
             }
             else {
                 // Multiple visuals of this type
-                visualDescriptions.push(`${visuals.length} ${type}s: ${visuals.map(v => { var _a; return ((_a = v.description) === null || _a === void 0 ? void 0 : _a.substring(0, 30)) || 'No description'; }).join(' | ')}`);
+                visualDescriptions.push(`${visuals.length} ${type}s: ${visuals.map(v => v.description?.substring(0, 30) || 'No description').join(' | ')}`);
             }
         }
         contextParts.push(`Visual content: ${visualDescriptions.join(' | ')}`);
@@ -387,7 +390,7 @@ function prepareMultiModalChunkForEmbedding(chunk) {
  * @param options - Chunking options
  * @returns Array of multi-modal chunks
  */
-async function createMultiModalChunks(text, visuals, metadata = {}, options = {}) {
+export async function createMultiModalChunks(text, visuals, metadata = {}, options = {}) {
     const startTime = Date.now();
     const { chunkSize = 500, chunkOverlap = 100, keepSeparateVisualChunks = true } = options;
     logger.info(`Creating multi-modal chunks from ${text.length} chars of text and ${visuals.length} visuals`);
@@ -428,7 +431,8 @@ async function createMultiModalChunks(text, visuals, metadata = {}, options = {}
     for (const { text, relevantVisuals } of chunksWithVisuals) {
         // Create a new chunk with text and its relevant visuals
         const chunk = {
-            id: (0, uuid_1.v4)(),
+            id: uuidv4(),
+            text: text,
             content: text,
             metadata: {
                 ...metadata,
@@ -436,8 +440,8 @@ async function createMultiModalChunks(text, visuals, metadata = {}, options = {}
                 visualCount: relevantVisuals.length
             },
             visualContent: relevantVisuals.map(visual => ({
-                type: visual.type,
-                description: visual.description,
+                type: visual.type || VisualContentType.UNKNOWN,
+                description: visual.description || 'No description available',
                 detectedText: visual.detectedText,
                 data: visual.data,
                 path: visual.path,
@@ -451,28 +455,39 @@ async function createMultiModalChunks(text, visuals, metadata = {}, options = {}
     if (keepSeparateVisualChunks) {
         for (const visual of visuals) {
             // Create descriptive content for the visual
-            let content = `[${visual.type}] ${visual.description}`;
+            let visualText = `[${visual.type}] ${visual.description}`;
             if (visual.detectedText) {
-                content += `\n\nText content: ${visual.detectedText}`;
+                visualText += `\n\nText content: ${visual.detectedText}`;
             }
-            if (content) {
+            if (visualText) {
                 const visualChunk = {
-                    id: (0, uuid_1.v4)(),
-                    content: content,
+                    id: uuidv4(),
+                    text: visualText, // Ensure text property is always set
+                    content: visualText,
                     metadata: {
                         ...metadata,
                         hasVisualContent: true,
                         visualCount: 1,
-                        isStandaloneVisual: true
+                        isStandaloneVisual: true,
+                        // Set page to undefined if it doesn't exist
+                        page: visual.page || undefined
                     },
-                    visualContent: [visual]
+                    visualContent: [{
+                            ...visual,
+                            // Handle missing properties to ensure type safety
+                            path: visual.path,
+                            type: visual.type || VisualContentType.UNKNOWN,
+                            description: visual.description || 'No description available',
+                            // Ensure page is properly handled (could be undefined)
+                            page: visual.page || undefined
+                        }]
                 };
                 multiModalChunks.push(visualChunk);
             }
         }
     }
     const duration = Date.now() - startTime;
-    (0, performanceMonitoring_1.recordMetric)('multiModalChunking', 'createMultiModalChunks', duration, true, {
+    recordMetric('multiModalChunking', 'createMultiModalChunks', duration, true, {
         chunkCount: multiModalChunks.length,
         visualCount: visuals.length,
         textLength: text.length
@@ -488,7 +503,7 @@ async function createMultiModalChunks(text, visuals, metadata = {}, options = {}
  * @param sourceMetadata - Document source metadata
  * @returns Array of multi-modal chunks
  */
-async function processDocumentWithVisualContent(textContent, imagePaths, sourceMetadata, options = {}) {
+export async function processDocumentWithVisualContent(textContent, imagePaths, sourceMetadata, options = {}) {
     const startTime = Date.now();
     logger.info(`Processing document with ${imagePaths.length} images`);
     // 1. Process all images to extract information
@@ -498,10 +513,10 @@ async function processDocumentWithVisualContent(textContent, imagePaths, sourceM
         try {
             const imagePath = imagePaths[i];
             const pageNumber = getPageNumberFromImagePath(imagePath);
-            const analysisResult = await (0, multiModalProcessing_1.analyzeImage)(imagePath);
+            const analysisResult = await analyzeImage(imagePath);
             const visualContent = {
                 path: imagePath,
-                page: pageNumber,
+                page: pageNumber ?? undefined, // Use nullish coalescing to convert null to undefined
                 figureNumber: i + 1, // Simple sequential numbering
                 type: analysisResult.type,
                 description: analysisResult.description,
@@ -522,7 +537,7 @@ async function processDocumentWithVisualContent(textContent, imagePaths, sourceM
     };
     const chunks = await createMultiModalChunks(textContent, visualContents, enhancedMetadata, options);
     const duration = Date.now() - startTime;
-    (0, performanceMonitoring_1.recordMetric)('multiModalChunking', 'processDocumentWithVisualContent', duration, true, {
+    recordMetric('multiModalChunking', 'processDocumentWithVisualContent', duration, true, {
         chunkCount: chunks.length,
         visualCount: visualContents.length,
         textLength: textContent.length
@@ -535,7 +550,7 @@ async function processDocumentWithVisualContent(textContent, imagePaths, sourceM
  * Expected format: something_page_X.jpg or similar
  *
  * @param imagePath - Path to the image file
- * @returns Page number if found, otherwise null
+ * @returns Page number if found, otherwise undefined
  */
 function getPageNumberFromImagePath(imagePath) {
     // Extract page number from filename patterns like page_X or page-X
@@ -543,5 +558,5 @@ function getPageNumberFromImagePath(imagePath) {
     if (pageMatch && pageMatch[1]) {
         return parseInt(pageMatch[1], 10);
     }
-    return null;
+    return undefined;
 }

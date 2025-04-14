@@ -1,81 +1,55 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importStar(require("react"));
-const Button_1 = __importDefault(require("../ui/Button"));
-const Card_1 = require("../ui/Card");
-const CircularProgress_1 = __importDefault(require("../ui/CircularProgress"));
-const Dialog_1 = __importDefault(require("../ui/Dialog"));
-const Divider_1 = __importDefault(require("../ui/Divider"));
-const Select_1 = __importDefault(require("../ui/Select"));
-const Paper_1 = __importDefault(require("../ui/Paper"));
-const Box_1 = __importDefault(require("../ui/Box"));
-const Typography_1 = __importDefault(require("../ui/Typography"));
-const Alert_1 = __importDefault(require("../ui/Alert"));
+import React, { useState, useEffect, useCallback } from 'react';
+import Button from '../ui/Button';
+import Chip from '../ui/Chip';
+import CircularProgress from '../ui/CircularProgress';
+import Dialog from '../ui/Dialog';
+import Select from '../ui/Select';
+import Paper from '../ui/Paper';
+import Box from '../ui/Box';
+import Typography from '../ui/Typography';
+import Alert from '../ui/Alert';
+import TextField from '../ui/TextField';
+import { parseEntities } from '../../utils/metadataUtils';
+import { debounce, get } from 'lodash';
+import { parseTagInput, normalizeTags, STANDARD_CATEGORIES, getCategoryFilterOptions, getCategoryLabel } from '../../utils/tagUtils';
 const PendingDocuments = () => {
-    var _a, _b;
     // Component state
-    const [documents, setDocuments] = (0, react_1.useState)([]);
-    const [selectedDocuments, setSelectedDocuments] = (0, react_1.useState)([]);
-    const [loading, setLoading] = (0, react_1.useState)(true);
-    const [dialogState, setDialogState] = (0, react_1.useState)({
-        open: false,
-        documentIds: [],
-        action: null
-    });
-    const [processResult, setProcessResult] = (0, react_1.useState)(null);
-    const [conflicts, setConflicts] = (0, react_1.useState)({
+    const [documents, setDocuments] = useState([]);
+    const [selectedDocuments, setSelectedDocuments] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [processResult, setProcessResult] = useState(null);
+    const [conflicts, setConflicts] = useState({
         hasConflicts: false,
         conflictingDocs: []
     });
-    const [page, setPage] = (0, react_1.useState)(0);
-    const [pageSize, setPageSize] = (0, react_1.useState)(10);
-    const [totalDocs, setTotalDocs] = (0, react_1.useState)(0);
+    const [page, setPage] = useState(0);
+    const [pageSize, setPageSize] = useState(10);
+    const [totalDocs, setTotalDocs] = useState(0);
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const [selectedDocument, setSelectedDocument] = useState(null);
+    const [editedMetadata, setEditedMetadata] = useState(null);
+    const [selectedCategory, setSelectedCategory] = useState('all');
+    const [secondaryCategoryFilter, setSecondaryCategoryFilter] = useState('all');
+    const [searchTerm, setSearchTerm] = useState('');
+    // Debounced fetch function
+    const debouncedFetch = useCallback(debounce(fetchPendingDocuments, 300), []);
     // Load pending documents
-    (0, react_1.useEffect)(() => {
-        fetchPendingDocuments();
-    }, [page, pageSize]);
-    const fetchPendingDocuments = async () => {
+    useEffect(() => {
+        // Call debounced fetch on relevant state changes
+        debouncedFetch(page, pageSize, selectedCategory, secondaryCategoryFilter, searchTerm);
+        // Cleanup debounce timer on unmount
+        return debouncedFetch.cancel;
+    }, [page, pageSize, selectedCategory, secondaryCategoryFilter, searchTerm, debouncedFetch]);
+    // Modified fetch function to accept filters
+    async function fetchPendingDocuments(currentPage = page, currentPageSize = pageSize, category = selectedCategory, secondaryCategory = secondaryCategoryFilter, search = searchTerm) {
         setLoading(true);
         try {
             const queryParams = new URLSearchParams({
-                page: String(page + 1),
-                limit: String(pageSize),
+                page: String(currentPage + 1),
+                limit: String(currentPageSize),
+                category: category,
+                secondaryCategory: secondaryCategory,
+                search: search,
             });
             const response = await fetch(`/api/admin/pending?${queryParams.toString()}`);
             const data = await response.json();
@@ -90,75 +64,89 @@ const PendingDocuments = () => {
         finally {
             setLoading(false);
         }
-    };
+    }
     // Handle document selection
     const handleSelectDocuments = (newSelection) => {
-        // Reset previous result when selection changes
         setProcessResult(null);
-        setConflicts({
-            hasConflicts: false,
-            conflictingDocs: []
-        });
+        setConflicts({ hasConflicts: false, conflictingDocs: [] });
         setSelectedDocuments(newSelection);
     };
-    // Open approval/rejection dialog
-    const handleOpenDialog = (action) => {
-        if (selectedDocuments.length === 0)
-            return;
-        setDialogState({
-            open: true,
-            documentIds: selectedDocuments,
-            action
-        });
-    };
-    // Close dialog
-    const handleCloseDialog = () => {
-        setDialogState({
-            ...dialogState,
-            open: false
-        });
-    };
-    // Process approval/rejection
-    const handleConfirmAction = async () => {
-        if (!dialogState.action || dialogState.documentIds.length === 0)
+    // NEW function to handle direct approval/rejection from top buttons
+    const handleConfirmActionDirectly = async (action) => {
+        const documentIds = selectedDocuments;
+        if (!action || documentIds.length === 0)
             return;
         try {
             setLoading(true);
-            handleCloseDialog();
-            const endpoint = dialogState.action === 'approve'
+            const endpoint = action === 'approve'
                 ? '/api/admin/documents/approve'
                 : '/api/admin/documents/reject';
+            const body = { documentIds };
+            if (action === 'reject') {
+                body.reviewerComments = "Rejected in batch by admin.";
+                // TODO: Consider adding a prompt for rejection comments in batch mode
+            }
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    documentIds: dialogState.documentIds
-                })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
             });
             const result = await response.json();
             if (!response.ok) {
                 if (result.conflicts) {
-                    setConflicts({
-                        hasConflicts: true,
-                        conflictingDocs: result.conflicts
-                    });
+                    setConflicts({ hasConflicts: true, conflictingDocs: result.conflicts });
                 }
-                throw new Error(result.message || 'Failed to process documents');
+                throw new Error(result.message || `Failed to ${action} documents`);
             }
             setProcessResult({
                 success: true,
-                message: result.message || `Documents ${dialogState.action}d successfully`,
-                documentsProcessed: result.documentsProcessed
+                message: result.message || `Documents ${action}d successfully`,
+                documentsProcessed: result.documentsProcessed || documentIds.length
             });
-            // Refresh the list after successful action
-            fetchPendingDocuments();
-            // Clear selection
-            setSelectedDocuments([]);
+            fetchPendingDocuments(); // Refresh list
+            setSelectedDocuments([]); // Clear selection
         }
         catch (error) {
-            console.error(`Error ${dialogState.action}ing documents:`, error);
+            console.error(`Error ${action}ing documents directly:`, error);
+            setProcessResult({
+                success: false,
+                message: error instanceof Error ? error.message : 'Unknown error occurred'
+            });
+        }
+        finally {
+            setLoading(false);
+        }
+    };
+    // NEW function to handle REJECTING a SINGLE document from its row button
+    const handleRejectSingleDocument = async (docId) => {
+        // Optionally add a confirmation dialog here if desired for single reject
+        // const confirmed = window.confirm('Are you sure you want to reject this document?');
+        // if (!confirmed) return;
+        try {
+            setLoading(true);
+            const endpoint = '/api/admin/documents/reject';
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    documentIds: [docId],
+                    reviewerComments: "Rejected via row action" // Or prompt/use default
+                })
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.message || `Failed to reject document ${docId}`);
+            }
+            setProcessResult({
+                success: true,
+                message: result.message || `Document ${docId} rejected successfully`,
+                documentsProcessed: 1
+            });
+            fetchPendingDocuments(); // Refresh list
+            // DO NOT modify selectedDocuments here
+        }
+        catch (error) {
+            console.error(`Error rejecting document ${docId}:`, error);
             setProcessResult({
                 success: false,
                 message: error instanceof Error ? error.message : 'Unknown error occurred'
@@ -170,16 +158,20 @@ const PendingDocuments = () => {
     };
     // DataGrid columns
     const columns = [
-        { field: 'id', headerName: 'ID', width: 100 },
-        { field: 'title', headerName: 'Title', width: 200 },
-        { field: 'url', headerName: 'URL', width: 300 },
+        {
+            field: 'metadata.primaryCategory',
+            headerName: 'Primary Category',
+            width: 160,
+            renderCell: (params) => (<Chip label={get(params.row, 'metadata.primaryCategory', 'N/A')} size="small"/>)
+        },
+        { field: 'title', headerName: 'Title', width: 230 },
+        { field: 'url', headerName: 'URL', width: 230 },
         {
             field: 'contentPreview',
             headerName: 'Content Preview',
-            width: 400,
+            width: 280,
             renderCell: (params) => {
-                var _a;
-                const content = ((_a = params.value) === null || _a === void 0 ? void 0 : _a.toString()) || '';
+                const content = get(params.row, 'contentPreview', '').toString();
                 return content.length > 100 ? `${content.substring(0, 100)}...` : content;
             }
         },
@@ -194,174 +186,213 @@ const PendingDocuments = () => {
         {
             field: 'actions',
             headerName: 'Actions',
-            width: 150,
+            width: 220,
             renderCell: (params) => (<div className="flex gap-1">
-          <Button_1.default size="small" variant="primary" onClick={(event) => {
-                    event === null || event === void 0 ? void 0 : event.stopPropagation();
-                    setSelectedDocuments([params.row.id]);
-                    handleOpenDialog('approve');
-                }}>
-            Approve AI Tags
-          </Button_1.default>
-          <Button_1.default size="small" variant="error" onClick={(e) => {
+          <Button size="small" variant="primary" onClick={(event) => {
+                    event?.stopPropagation();
+                    handleOpenPreview(params.row.id);
+                }} disabled={loading}>
+            Review & Approve
+          </Button>
+          <Button size="small" variant="error" onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedDocuments([params.row.id]);
-                    handleOpenDialog('reject');
-                }}>
+                    handleRejectSingleDocument(params.row.id);
+                }} disabled={loading}>
             Reject
-          </Button_1.default>
+          </Button>
         </div>),
         },
     ];
-    const categoryOptions = [
-        { value: 'all', label: 'All Categories' },
-        { value: 'PRODUCT', label: 'Product' },
-        { value: 'TECHNICAL', label: 'Technical' },
-        { value: 'FEATURES', label: 'Features' },
-        { value: 'PRICING', label: 'Pricing' },
-        { value: 'COMPARISON', label: 'Comparison' },
-        { value: 'CUSTOMER_CASE', label: 'Customer Case' },
-        { value: 'GENERAL', label: 'General' }
-    ];
-    // Dialog actions for confirm dialog
-    const dialogActions = (<>
-      <Button_1.default onClick={handleCloseDialog} variant="secondary">
-        Cancel
-      </Button_1.default>
-      <Button_1.default onClick={handleConfirmAction} variant={dialogState.action === 'approve' ? 'primary' : 'error'} autoFocus>
-        Confirm {dialogState.action}
-      </Button_1.default>
-    </>);
+    const categoryOptions = getCategoryFilterOptions();
+    // Handle opening the preview modal
+    const handleOpenPreview = (docId) => {
+        const doc = documents.find(d => d.id === docId);
+        if (doc) {
+            setSelectedDocument(doc);
+            setEditedMetadata(doc.metadata && typeof doc.metadata === 'object' ? { ...doc.metadata } : {});
+            setPreviewOpen(true);
+        }
+    };
+    // Handle metadata changes in the preview modal
+    const handleMetadataChange = (field, value) => {
+        if (editedMetadata) {
+            setEditedMetadata({
+                ...editedMetadata,
+                [field]: value
+            });
+        }
+    };
+    // NEW function to handle approval from the preview modal
+    const handleConfirmApprovalFromModal = async () => {
+        if (!selectedDocument)
+            return;
+        const documentId = selectedDocument.id;
+        try {
+            setLoading(true);
+            setPreviewOpen(false); // Close modal immediately
+            const endpoint = '/api/admin/documents/approve';
+            // Prepare body, potentially include edited metadata if API supports it later
+            const body = { documentIds: [documentId] };
+            // if (editedMetadata) { body.metadata = editedMetadata; } // Example for future API enhancement
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                if (result.conflicts) {
+                    setConflicts({ hasConflicts: true, conflictingDocs: result.conflicts });
+                }
+                // Check specifically for the constraint violation error if possible
+                if (result.error && result.error.includes('violates not-null constraint')) {
+                    throw new Error('Database error: Failed to insert document chunk. Please check server logs.');
+                }
+                else {
+                    throw new Error(result.message || 'Failed to approve document');
+                }
+            }
+            setProcessResult({
+                success: true,
+                message: result.message || `Document ${documentId} approved successfully`,
+                documentsProcessed: 1
+            });
+            fetchPendingDocuments(); // Refresh list
+            setSelectedDocuments([]); // Clear selection
+        }
+        catch (error) {
+            console.error(`Error approving document ${documentId} from modal:`, error);
+            setProcessResult({
+                success: false,
+                message: error instanceof Error ? error.message : 'Unknown error occurred'
+            });
+        }
+        finally {
+            setLoading(false);
+            setSelectedDocument(null); // Clear selected document
+            setEditedMetadata(null);
+        }
+    };
+    // Handle category filter change
+    const handleCategoryChange = (value) => {
+        setSelectedCategory(value);
+        setPage(0); // Reset to first page when filter changes
+        // fetchPendingDocuments will be triggered by useEffect
+    };
     return (<div className="space-y-4">
-      <Box_1.default display="flex" justifyContent="space-between" alignItems="center" className="mb-2">
-        <Typography_1.default variant="h5" className="font-semibold">
+      <Box display="flex" justifyContent="space-between" alignItems="center" className="mb-2">
+        <Typography variant="h5" className="font-semibold">
           Pending Documents Review
-        </Typography_1.default>
+        </Typography>
         
-        <Box_1.default display="flex" gap={2}>
+        <Box display="flex" gap={2}>
           {selectedDocuments.length > 0 && (<>
-              <Button_1.default variant="primary" onClick={() => handleOpenDialog('approve')} size="small">
-                Approve Selected with AI Tags
-              </Button_1.default>
-              <Button_1.default variant="error" onClick={() => handleOpenDialog('reject')} size="small">
-                Reject Selected
-              </Button_1.default>
+              <Button variant="primary" onClick={() => handleConfirmActionDirectly('approve')} size="small" disabled={loading}>
+                Approve Selected ({selectedDocuments.length})
+              </Button>
+              <Button variant="error" onClick={() => handleConfirmActionDirectly('reject')} size="small" disabled={loading}>
+                Reject Selected ({selectedDocuments.length})
+              </Button>
             </>)}
-        </Box_1.default>
-      </Box_1.default>
+        </Box>
+      </Box>
       
       {/* Results notification */}
-      {processResult && (<Alert_1.default severity={processResult.success ? "success" : "error"} className="mb-4" onClose={() => setProcessResult(null)}>
+      {processResult && (<Alert severity={processResult.success ? "success" : "error"} className="mb-4" onClose={() => setProcessResult(null)}>
           {processResult.message}
           {processResult.documentsProcessed && ` (${processResult.documentsProcessed} documents processed)`}
-        </Alert_1.default>)}
+        </Alert>)}
       
       {/* Conflicts notification */}
-      {conflicts.hasConflicts && (<Alert_1.default severity="warning" className="mb-4" onClose={() => setConflicts({ hasConflicts: false, conflictingDocs: [] })}>
+      {conflicts.hasConflicts && (<Alert severity="warning" className="mb-4" onClose={() => setConflicts({ hasConflicts: false, conflictingDocs: [] })}>
           Conflicts detected with {conflicts.conflictingDocs.length} documents. 
           Please review and try again.
-        </Alert_1.default>)}
+        </Alert>)}
 
       {/* Admin role explanation */}
-      <Alert_1.default severity="info" className="mb-4">
+      <Alert severity="info" className="mb-4">
         <strong>Automatic Document Tagging:</strong> All uploaded documents are automatically tagged by Gemini AI. 
         Your role is to review the document content and AI-generated tags, then either approve or reject.
-      </Alert_1.default>
+      </Alert>
 
-      {/* Category filter */}
-      <div className="mb-4">
-        <Box_1.default display="flex" alignItems="center" gap={2}>
-          <Box_1.default width="300px">
-            <Select_1.default label="Category" value={selectedDocuments.length > 0 ? ((_b = (_a = documents.find(d => d.id === selectedDocuments[0])) === null || _a === void 0 ? void 0 : _a.metadata) === null || _b === void 0 ? void 0 : _b.primaryCategory) || 'all' : 'all'} onChange={(value) => handleSelectDocuments(value === 'all' ? [] : [value])} options={categoryOptions} fullWidth/>
-          </Box_1.default>
-        </Box_1.default>
+      {/* --- FILTERS --- */} 
+      <div className="mb-4 flex space-x-4 items-start">
+          {/* Category filter */}
+          <Box width="300px" className="relative z-20">
+            <Select label="Filter by Primary Category" value={selectedCategory} onChange={(value) => {
+            setSelectedCategory(value);
+            setPage(0); // Reset page
+        }} options={categoryOptions} fullWidth/>
+          </Box>
+          {/* Secondary Category Filter - Added */}
+          <Box width="300px" className="relative z-10">
+            <Select label="Filter by Secondary Category" value={secondaryCategoryFilter} onChange={(value) => {
+            setSecondaryCategoryFilter(value);
+            setPage(0); // Reset page
+        }} options={getCategoryFilterOptions()} fullWidth/>
+          </Box>
       </div>
       
       {/* DataGrid with pending documents */}
-      <Paper_1.default className="shadow-sm overflow-hidden">
-        <div className="border-b border-gray-200 bg-white">
+      <Paper className="shadow-sm overflow-hidden">
+        <div className="overflow-x-auto border-b border-gray-200 bg-white">
           <table className="min-w-full divide-y divide-gray-200">
             <thead>
               <tr>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th scope="col" className="sticky left-0 z-10 bg-gray-50 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   <input type="checkbox" className="h-4 w-4 text-blue-600 border-gray-300 rounded" onChange={(e) => {
+            const currentPageIds = documents.map(d => d.id);
             if (e.target.checked) {
-                handleSelectDocuments(documents.map(d => d.id));
+                handleSelectDocuments([...new Set([...selectedDocuments, ...currentPageIds])]);
             }
             else {
-                handleSelectDocuments([]);
+                handleSelectDocuments(selectedDocuments.filter(id => !currentPageIds.includes(id)));
             }
-        }} checked={selectedDocuments.length > 0 && selectedDocuments.length === documents.length}/>
+        }} checked={documents.length > 0 && documents.every(d => selectedDocuments.includes(d.id))} ref={el => {
+            if (el) {
+                const someSelected = documents.some(d => selectedDocuments.includes(d.id));
+                const allSelected = documents.length > 0 && documents.every(d => selectedDocuments.includes(d.id));
+                el.indeterminate = someSelected && !allSelected;
+            }
+        }}/>
                 </th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">URL</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Content</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                {columns.map((col) => (<th key={col.field} scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ width: col.width }}>
+                      {col.headerName}
+                   </th>))}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (<tr>
-                  <td colSpan={7} className="px-4 py-8 text-center">
-                    <CircularProgress_1.default />
+                  <td colSpan={columns.length} className="px-4 py-8 text-center">
+                    <CircularProgress />
                   </td>
                 </tr>) : documents.length === 0 ? (<tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={columns.length} className="px-4 py-8 text-center text-gray-500">
                     No pending documents found
                   </td>
-                </tr>) : (documents.map((doc) => (<tr key={doc.id} className={`hover:bg-gray-50 ${selectedDocuments.includes(doc.id) ? 'bg-blue-50' : ''}`} onClick={() => {
-                if (selectedDocuments.includes(doc.id)) {
-                    handleSelectDocuments(selectedDocuments.filter(id => id !== doc.id));
+                </tr>) : (documents.map((doc) => (<tr key={doc.id} className={`hover:bg-gray-50 ${selectedDocuments.includes(doc.id) ? 'bg-blue-50' : ''}`} onClick={(e) => {
+                if (e.target.closest('button, a')) {
+                    return;
                 }
-                else {
-                    handleSelectDocuments([...selectedDocuments, doc.id]);
-                }
+                const isChecked = e.target instanceof HTMLInputElement && e.target.checked;
+                handleSelectDocuments(isChecked
+                    ? [...selectedDocuments, doc.id]
+                    : selectedDocuments.filter(id => id !== doc.id));
             }}>
-                    <td className="px-4 py-2 whitespace-nowrap">
+                    <td className="sticky left-0 z-10 bg-white px-4 py-2 whitespace-nowrap">
                       <input type="checkbox" className="h-4 w-4 text-blue-600 border-gray-300 rounded" checked={selectedDocuments.includes(doc.id)} onChange={(e) => {
                 e.stopPropagation();
-                if (e.target.checked) {
-                    handleSelectDocuments([...selectedDocuments, doc.id]);
-                }
-                else {
-                    handleSelectDocuments(selectedDocuments.filter(id => id !== doc.id));
-                }
+                const isChecked = e.target.checked;
+                handleSelectDocuments(isChecked
+                    ? [...selectedDocuments, doc.id]
+                    : selectedDocuments.filter(id => id !== doc.id));
             }}/>
                     </td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">{doc.id}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">{doc.title}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-blue-600 truncate max-w-[200px]">
-                      <a href={doc.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                        {doc.url}
-                      </a>
-                    </td>
-                    <td className="px-4 py-2 text-sm text-gray-500 truncate max-w-[200px]">
-                      {doc.contentPreview && doc.contentPreview.length > 100
-                ? `${doc.contentPreview.substring(0, 100)}...`
-                : doc.contentPreview}
-                    </td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(doc.createdAt).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm">
-                      <div className="flex space-x-2">
-                        <Button_1.default size="small" variant="primary" onClick={(event) => {
-                event === null || event === void 0 ? void 0 : event.stopPropagation();
-                setSelectedDocuments([doc.id]);
-                handleOpenDialog('approve');
-            }}>
-                          Approve AI Tags
-                        </Button_1.default>
-                        <Button_1.default size="small" variant="error" onClick={(e) => {
-                e.stopPropagation();
-                setSelectedDocuments([doc.id]);
-                handleOpenDialog('reject');
-            }}>
-                          Reject
-                        </Button_1.default>
-                      </div>
-                    </td>
+                    {columns.map((col) => (<td key={`${doc.id}-${col.field}`} className="px-4 py-2 whitespace-nowrap text-sm text-gray-500 overflow-hidden text-ellipsis" style={{ maxWidth: col.width }}>
+                             {col.renderCell
+                    ? col.renderCell({ row: doc, value: get(doc, col.field) })
+                    : get(doc, col.field, '')}
+                         </td>))}
                   </tr>)))}
             </tbody>
           </table>
@@ -370,12 +401,12 @@ const PendingDocuments = () => {
         {/* Pagination */}
         <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
           <div className="flex-1 flex justify-between sm:hidden">
-            <Button_1.default onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} variant="secondary" size="small">
+            <Button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} variant="secondary" size="small">
               Previous
-            </Button_1.default>
-            <Button_1.default onClick={() => setPage(page + 1)} disabled={page >= Math.ceil(totalDocs / pageSize) - 1} variant="secondary" size="small">
+            </Button>
+            <Button onClick={() => setPage(page + 1)} disabled={page >= Math.ceil(totalDocs / pageSize) - 1} variant="secondary" size="small">
               Next
-            </Button_1.default>
+            </Button>
           </div>
           <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
             <div>
@@ -389,214 +420,150 @@ const PendingDocuments = () => {
             </div>
             <div>
               <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
-                <Button_1.default onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} variant="outline" size="small" className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                <Button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} variant="outline" size="small" className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                   Previous
-                </Button_1.default>
+                </Button>
                 {Array.from({ length: Math.min(5, Math.ceil(totalDocs / pageSize)) }).map((_, i) => (<button key={i} onClick={() => setPage(i)} className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${page === i
                 ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
                 : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'}`} type="button">
                     {i + 1}
                   </button>))}
-                <Button_1.default onClick={() => setPage(Math.min(Math.ceil(totalDocs / pageSize) - 1, page + 1))} disabled={page >= Math.ceil(totalDocs / pageSize) - 1} variant="outline" size="small" className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                <Button onClick={() => setPage(Math.min(Math.ceil(totalDocs / pageSize) - 1, page + 1))} disabled={page >= Math.ceil(totalDocs / pageSize) - 1} variant="outline" size="small" className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                   Next
-                </Button_1.default>
+                </Button>
               </nav>
             </div>
           </div>
         </div>
-      </Paper_1.default>
+      </Paper>
       
-      {/* Document Preview */}
-      {selectedDocuments.length === 1 && (<Card_1.Card className="mt-4 shadow-sm">
-          <Card_1.CardContent>
-            <Box_1.default display="flex" justifyContent="space-between" alignItems="center" className="mb-4">
-              <div>
-                <Typography_1.default variant="h6" className="font-medium">Document Preview</Typography_1.default>
-                <Typography_1.default variant="body2" color="textSecondary">
-                  ID: {selectedDocuments[0]}
-                </Typography_1.default>
-              </div>
-              <div className="flex space-x-2">
-                <Button_1.default variant="primary" onClick={() => handleOpenDialog('approve')} size="small">
-                  Approve with AI Tags
-                </Button_1.default>
-                <Button_1.default variant="error" onClick={() => handleOpenDialog('reject')} size="small">
-                  Reject
-                </Button_1.default>
-              </div>
-            </Box_1.default>
+      {/* Document Preview Modal - Adjust maxWidth */}
+      <Dialog open={previewOpen} onClose={() => setPreviewOpen(false)} title="Document Preview & AI-Generated Metadata" maxWidth="2xl" actions={<>
+            <Button variant="secondary" onClick={() => setPreviewOpen(false)} disabled={loading}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={handleConfirmApprovalFromModal} disabled={loading}>
+              Approve Document
+            </Button>
+          </>}>
+        {selectedDocument && (<div className="space-y-4">
+            <Alert severity="info">
+              <strong>All document tagging is done automatically by Gemini AI.</strong> You can review and edit the metadata below before approving the document.
+            </Alert>
             
-            <Divider_1.default className="mb-4"/>
-            
-            <Alert_1.default severity="info" className="mb-4">
-              <strong>All document tagging is done automatically by Gemini AI.</strong> Your role is to review the content and generated tags for accuracy, then approve or reject the document.
-            </Alert_1.default>
-            
-            <MetadataViewer document={documents.find(d => d.id === selectedDocuments[0])}/>
-          </Card_1.CardContent>
-        </Card_1.Card>)}
-      
-      {/* Approval/Rejection Dialog */}
-      <Dialog_1.default open={dialogState.open} onClose={handleCloseDialog} title={dialogState.action === 'approve' ? 'Approve Documents with AI Tagging' : 'Reject Documents'} actions={dialogActions}>
-        <p className="text-gray-700">
-          Are you sure you want to {dialogState.action} {dialogState.documentIds.length} selected document(s)?
-          {dialogState.action === 'approve' && " This will process and index them for search using the AI-generated tags."}
-          {dialogState.action === 'reject' && " This will remove them from the pending queue."}
-        </p>
-        {dialogState.action === 'approve' && (<Alert_1.default severity="info" className="mt-3">
-            Documents are automatically tagged by Gemini AI. Approving will accept these AI-generated tags without modification.
-          </Alert_1.default>)}
-      </Dialog_1.default>
+            <EditableMetadataViewer document={selectedDocument} editedMetadata={editedMetadata} onChange={handleMetadataChange}/>
+          </div>)}
+        {loading && <CircularProgress />}
+      </Dialog>
     </div>);
 };
-const MetadataViewer = ({ document }) => {
-    if (!document.metadata)
+const EditableMetadataViewer = ({ document, editedMetadata, onChange }) => {
+    if (!editedMetadata)
         return <p>No metadata available</p>;
-    const { primaryCategory, technicalLevel, summary, keywords = [], secondaryCategories = [], industryCategories = [], functionCategories = [], useCases = [], entities, } = document.metadata;
-    // Parse entities from JSON string if needed
-    let parsedEntities = {};
-    try {
-        if (typeof entities === 'string') {
-            parsedEntities = JSON.parse(entities);
+    // Safely extract properties from editedMetadata
+    const primaryCategory = editedMetadata.primaryCategory || '';
+    const technicalLevel = editedMetadata.technicalLevel || 5;
+    const summary = editedMetadata.summary || '';
+    const keywords = editedMetadata.keywords || [];
+    const secondaryCategories = editedMetadata.secondaryCategories || [];
+    const industryCategories = editedMetadata.industryCategories || [];
+    const functionCategories = editedMetadata.functionCategories || [];
+    const useCases = editedMetadata.useCases || [];
+    const entities = editedMetadata.entities || '';
+    // Use our utility function to parse entities
+    const parsedEntities = parseEntities(entities);
+    // Group entities by type for display
+    const groupedEntities = {
+        people: parsedEntities.filter(e => e.type?.toLowerCase() === 'person'),
+        companies: parsedEntities.filter(e => e.type?.toLowerCase() === 'organization'),
+        products: parsedEntities.filter(e => e.type?.toLowerCase() === 'product'),
+        features: parsedEntities.filter(e => e.type?.toLowerCase() === 'feature')
+    };
+    const [selectedSecondaryCategory, setSelectedSecondaryCategory] = useState('');
+    // Modify the component to handle secondary categories and keywords consistently
+    const handleArrayChange = (field, inputValue) => {
+        // If adding a single value (e.g., from Select)
+        if (inputValue && !inputValue.includes(',')) {
+            const newValue = inputValue.trim().toUpperCase().replace(/\s+/g, '_');
+            if (!newValue)
+                return;
+            let currentArray = editedMetadata[field] || [];
+            // Add only if it's a valid category and not already present
+            if (STANDARD_CATEGORIES.some(cat => cat.value === newValue) && !currentArray.includes(newValue)) {
+                const combinedArray = normalizeTags([...currentArray, newValue]);
+                onChange(field, combinedArray);
+            }
+            return; // Added single value, exit
         }
-        else if (entities) {
-            parsedEntities = entities;
+        // If using comma-separated input (for keywords)
+        if (!inputValue.trim())
+            return;
+        const newValues = parseTagInput(inputValue);
+        if (newValues.length === 0)
+            return;
+        let currentArray = editedMetadata[field] || [];
+        const combinedArray = normalizeTags([...currentArray, ...newValues]);
+        onChange(field, combinedArray);
+    };
+    // Handler specifically for adding from the Secondary Category dropdown
+    const handleAddSecondaryCategory = () => {
+        if (selectedSecondaryCategory) {
+            handleArrayChange('secondaryCategories', selectedSecondaryCategory);
+            setSelectedSecondaryCategory(''); // Reset dropdown after adding
         }
-    }
-    catch (e) {
-        console.error('Error parsing entities', e);
-    }
+    };
+    // Filter out already selected categories from dropdown options
+    const availableSecondaryCategories = STANDARD_CATEGORIES.filter(cat => !secondaryCategories.includes(cat.value));
     return (<div className="bg-white rounded-lg shadow overflow-hidden">
-      <div className="bg-blue-50 p-4 border-b">
-        <h3 className="text-lg font-medium text-blue-800">AI-Generated Metadata</h3>
-        <p className="text-sm text-gray-600">
-          These tags were automatically generated by Gemini AI and determine how this document will be found in searches
-        </p>
-      </div>
-      
-      <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Primary metadata */}
-        <div className="space-y-3">
+      <div className="p-4 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-500">Document Summary</label>
+          <TextField multiline rows={3} fullWidth value={summary || ''} onChange={(e) => onChange('summary', e.target.value)} placeholder="Enter document summary" variant="outlined" className="mt-1"/>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-500">Primary Category</label>
-            <span className="mt-1 text-sm text-gray-900 bg-blue-50 px-2 py-1 rounded inline-block">
-              {primaryCategory || 'Uncategorized'}
-            </span>
+            <Select value={primaryCategory || ''} onChange={(value) => onChange('primaryCategory', value)} options={STANDARD_CATEGORIES} className="mt-1" fullWidth/>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-500">Technical Level</label>
-            <div className="mt-1 flex items-center">
-              <div className="relative w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                <div className="absolute h-full bg-blue-600" style={{ width: `${(technicalLevel || 1) * 10}%` }}></div>
-              </div>
-              <span className="ml-2 text-sm text-gray-700">
-                {technicalLevel || 1}/10
-              </span>
-            </div>
+            <label className="block text-sm font-medium text-gray-500">Technical Level (1-10)</label>
+            <TextField type="number" min={1} max={10} value={technicalLevel || 5} onChange={(e) => onChange('technicalLevel', parseInt(e.target.value, 10))} className="mt-1" fullWidth/>
           </div>
           
-          <div>
-            <label className="block text-sm font-medium text-gray-500">Summary</label>
-            <p className="mt-1 text-sm text-gray-900 bg-gray-50 p-2 rounded">
-              {summary || document.contentPreview}
-            </p>
-          </div>
-        </div>
-        
-        {/* Category hierarchy */}
-        <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-500">Secondary Categories</label>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {secondaryCategories.length > 0 ? (secondaryCategories.map((cat) => (<span key={cat} className="text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded">
-                    {cat}
-                  </span>))) : (<span className="text-xs text-gray-500">None</span>)}
+            <div className="mt-1 flex flex-wrap gap-1 items-start">
+              {secondaryCategories.length > 0 && secondaryCategories.map((cat, idx) => (<Chip key={idx} label={getCategoryLabel(cat)} onDelete={() => {
+                onChange('secondaryCategories', secondaryCategories.filter((_, i) => i !== idx));
+            }} className="m-0.5"/>))}
+            </div>
+            <div className="flex items-center gap-1 mt-2">
+              <Select value={selectedSecondaryCategory} onChange={(value) => setSelectedSecondaryCategory(value)} options={[{ value: '', label: 'Select category...' }, ...availableSecondaryCategories]} className="flex-grow"/>
+              <Button size="small" variant="outlined" color="secondary" onClick={handleAddSecondaryCategory} disabled={!selectedSecondaryCategory}>
+                Add
+              </Button>
             </div>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-500">Industry Categories</label>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {industryCategories.length > 0 ? (industryCategories.map((cat) => (<span key={cat} className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded">
-                    {cat}
-                  </span>))) : (<span className="text-xs text-gray-500">None</span>)}
+            <label className="block text-sm font-medium text-gray-500">Keywords</label>
+            <div className="mt-1 flex flex-wrap gap-1 items-start">
+              {Array.isArray(keywords) && keywords.length > 0 && keywords.map((keyword, idx) => (<Chip key={idx} label={keyword} onDelete={() => {
+                onChange('keywords', keywords.filter((_, i) => i !== idx));
+            }} className="m-0.5"/>))}
             </div>
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-500">Function Categories</label>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {functionCategories.length > 0 ? (functionCategories.map((cat) => (<span key={cat} className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
-                    {cat}
-                  </span>))) : (<span className="text-xs text-gray-500">None</span>)}
-            </div>
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-500">Use Cases</label>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {useCases.length > 0 ? (useCases.map((uc) => (<span key={uc} className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
-                    {uc}
-                  </span>))) : (<span className="text-xs text-gray-500">None</span>)}
-            </div>
+            <TextField placeholder="Add keywords (comma-separated)" size="small" onKeyDown={(e) => {
+            if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                e.preventDefault();
+                handleArrayChange('keywords', e.currentTarget.value);
+                e.currentTarget.value = '';
+            }
+        }} className="mt-2" fullWidth/>
           </div>
         </div>
-      </div>
-      
-      {/* Entities and keywords */}
-      <div className="px-4 pb-4 space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-gray-500">Entities</label>
-          <div className="mt-1 grid grid-cols-1 md:grid-cols-3 gap-2">
-            {/* People */}
-            <div>
-              <label className="block text-xs font-medium text-gray-400">People</label>
-              <ul className="mt-1 text-xs text-gray-900">
-                {parsedEntities.people && parsedEntities.people.length > 0 ? (parsedEntities.people.map((person, idx) => (<li key={idx} className="bg-red-50 px-2 py-1 mb-1 rounded">
-                      {typeof person === 'string' ? person : person.name}
-                    </li>))) : (<li className="text-gray-500">None</li>)}
-              </ul>
-            </div>
-            
-            {/* Companies */}
-            <div>
-              <label className="block text-xs font-medium text-gray-400">Companies</label>
-              <ul className="mt-1 text-xs text-gray-900">
-                {parsedEntities.companies && parsedEntities.companies.length > 0 ? (parsedEntities.companies.map((company, idx) => (<li key={idx} className="bg-blue-50 px-2 py-1 mb-1 rounded">
-                      {typeof company === 'string' ? company : company.name}
-                    </li>))) : (<li className="text-gray-500">None</li>)}
-              </ul>
-            </div>
-            
-            {/* Products */}
-            <div>
-              <label className="block text-xs font-medium text-gray-400">Products</label>
-              <ul className="mt-1 text-xs text-gray-900">
-                {parsedEntities.products && parsedEntities.products.length > 0 ? (parsedEntities.products.map((product, idx) => (<li key={idx} className="bg-green-50 px-2 py-1 mb-1 rounded">
-                      {typeof product === 'string' ? product : product.name}
-                    </li>))) : (<li className="text-gray-500">None</li>)}
-              </ul>
-            </div>
-          </div>
-        </div>
-        
-        <div>
-          <label className="block text-sm font-medium text-gray-500">Keywords</label>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {Array.isArray(keywords) && keywords.length > 0 ? (keywords.map((keyword, idx) => (<span key={idx} className="text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded">
-                  {keyword}
-                </span>))) : (<span className="text-xs text-gray-500">None</span>)}
-          </div>
-        </div>
-      </div>
-      
-      <div className="bg-yellow-50 p-3 border-t border-yellow-100">
-        <p className="text-xs text-yellow-800">
-          <strong>Note:</strong> All tags are automatically generated by Gemini AI.
-          Your role is to review the document content and ensure the AI-generated tags are appropriate before approval.
-        </p>
       </div>
     </div>);
 };
-exports.default = PendingDocuments;
+export default PendingDocuments;

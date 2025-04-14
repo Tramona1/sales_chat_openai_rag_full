@@ -5,7 +5,7 @@
  * document storage, and retrieval.
  */
 
-import { DocumentCategory } from './metadata';
+import { DocumentCategoryType } from '../utils/documentCategories';
 
 /**
  * Basic document interface
@@ -27,7 +27,7 @@ export interface DocumentEmbedding extends Document {
  * Metadata filter for search operations
  */
 export interface MetadataFilter {
-  categories?: DocumentCategory[];
+  categories?: DocumentCategoryType[];
   strictCategoryMatch?: boolean;
   technicalLevelMin?: number;
   technicalLevelMax?: number;

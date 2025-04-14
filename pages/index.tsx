@@ -209,7 +209,7 @@ export default function Home() {
         {/* Main hero section */}
         <div className="text-center mb-16 mt-8">
           <h1 className="text-4xl font-bold text-neutral-900 mb-6">
-            Sales Knowledge Assistant
+            Workstream Knowledge Assistant
           </h1>
           <p className="text-xl text-neutral-600 max-w-3xl mx-auto leading-relaxed">
             Access all your sales knowledge instantly. Get answers about products, pricing, 

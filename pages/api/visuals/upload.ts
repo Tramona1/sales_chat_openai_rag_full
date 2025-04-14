@@ -2,9 +2,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import fs from 'fs';
 import path from 'path';
-import { storeVisual, VisualType } from '../../../utils/visualStorageManager';
-import { recordMetric } from '../../../utils/performanceMonitoring';
-import { ImageAnalyzer } from '../../../utils/imageAnalysis/imageAnalyzer';
+import { storeVisual } from '@/utils/visualStorageManager';
+import { recordMetric } from '@/utils/performanceMonitoring';
+import { ImageAnalyzer } from '@/utils/imageAnalysis/imageAnalyzer';
 import { IncomingForm } from 'formidable';
 
 // Disable body parser to handle file uploads
@@ -72,8 +72,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         
         // If analysis is requested, analyze the visual
         if (analyzeVisuals) {
-          // Analyze the image
-          const analysisResult = await ImageAnalyzer.analyze(file.filepath);
+          // Analyze the image using the correct static method name
+          const analysisResult = await ImageAnalyzer.analyzeImage(file.filepath);
           
           // Update the visual metadata with analysis results
           if (analysisResult.success) {

@@ -1,8 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const chatStorage_1 = require("@/utils/chatStorage");
-const errorHandling_1 = require("@/utils/errorHandling");
+import { saveChatSession, listChatSessions, getChatSession, searchChatSessions, searchChatSessionsByContent, deleteChatSession, updateChatSession } from '@/utils/chatStorage';
+import { logError } from '@/utils/logger';
 // Simple authorization check for admin routes
 // In a production app, this would use proper authentication
 function isAuthorized(req) {
@@ -11,7 +8,7 @@ function isAuthorized(req) {
     const adminKey = req.headers['x-admin-key'];
     return adminKey === process.env.ADMIN_API_KEY || process.env.NODE_ENV === 'development';
 }
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Handle different HTTP methods
     switch (req.method) {
         case 'GET':
@@ -35,7 +32,7 @@ async function handleGetRequest(req, res) {
         const { id, search, type, content } = req.query;
         // If session ID is provided, get that specific session
         if (id) {
-            const session = await (0, chatStorage_1.getChatSession)(id);
+            const session = await getChatSession(id);
             if (!session) {
                 return res.status(404).json({ error: 'Session not found' });
             }
@@ -43,12 +40,12 @@ async function handleGetRequest(req, res) {
         }
         // If content search is provided, search sessions by content
         if (content) {
-            const sessions = await (0, chatStorage_1.searchChatSessionsByContent)(content);
+            const sessions = await searchChatSessionsByContent(content);
             return res.status(200).json({ sessions });
         }
         // If search query is provided, search sessions
         if (search) {
-            const sessions = await (0, chatStorage_1.searchChatSessions)(search);
+            const sessions = await searchChatSessions(search);
             // Filter by session type if provided
             if (type) {
                 const filteredSessions = sessions.filter(s => s.sessionType === type);
@@ -57,7 +54,7 @@ async function handleGetRequest(req, res) {
             return res.status(200).json({ sessions });
         }
         // Otherwise, list all sessions, possibly filtered by type
-        let sessions = await (0, chatStorage_1.listChatSessions)();
+        let sessions = await listChatSessions();
         // Filter by session type if provided
         if (type) {
             sessions = sessions.filter(s => s.sessionType === type);
@@ -65,7 +62,7 @@ async function handleGetRequest(req, res) {
         return res.status(200).json({ sessions });
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error in chat sessions API', error);
+        logError('Error in chat sessions API', error);
         return res.status(500).json({ error: 'Failed to process request' });
     }
 }
@@ -82,21 +79,23 @@ async function handlePostRequest(req, res) {
                 error: 'Missing required fields: messages'
             });
         }
+        // Ensure sessionType is always set to a valid value
+        const sessionType = body.sessionType || (body.companyName ? 'company' : 'general');
         // In company mode, companyName and companyInfo are required
-        if (body.sessionType === 'company' && (!body.companyName || !body.companyInfo)) {
+        if (sessionType === 'company' && (!body.companyName || !body.companyInfo)) {
             return res.status(400).json({
                 error: 'For company sessions, companyName and companyInfo are required'
             });
         }
         // For general sessions, title is required
-        if (body.sessionType === 'general' && !body.title) {
+        if (sessionType === 'general' && !body.title) {
             return res.status(400).json({
                 error: 'For general sessions, title is required'
             });
         }
         // Save the session
-        const sessionId = await (0, chatStorage_1.saveChatSession)({
-            sessionType: body.sessionType,
+        const sessionId = await saveChatSession({
+            sessionType: sessionType,
             title: body.title || body.companyName || 'Untitled Session',
             companyName: body.companyName,
             companyInfo: body.companyInfo,
@@ -110,7 +109,7 @@ async function handlePostRequest(req, res) {
         return res.status(200).json({ success: true, sessionId });
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error in chat sessions API', error);
+        logError('Error in chat sessions API', error);
         return res.status(500).json({ error: 'Failed to save chat session' });
     }
 }
@@ -136,7 +135,7 @@ async function handlePutRequest(req, res) {
             });
         }
         // Update the session
-        const success = await (0, chatStorage_1.updateChatSession)(id, {
+        const success = await updateChatSession(id, {
             companyName: body.companyName,
             companyInfo: body.companyInfo,
             salesNotes: body.salesNotes || '',
@@ -151,7 +150,7 @@ async function handlePutRequest(req, res) {
         return res.status(200).json({ success: true });
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error updating chat session', error);
+        logError('Error updating chat session', error);
         return res.status(500).json({ error: 'Failed to update chat session' });
     }
 }
@@ -165,14 +164,14 @@ async function handleDeleteRequest(req, res) {
         if (!id) {
             return res.status(400).json({ error: 'Session ID is required' });
         }
-        const success = await (0, chatStorage_1.deleteChatSession)(id);
+        const success = await deleteChatSession(id);
         if (!success) {
             return res.status(404).json({ error: 'Failed to delete session' });
         }
         return res.status(200).json({ success: true });
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error in chat sessions API', error);
+        logError('Error in chat sessions API', error);
         return res.status(500).json({ error: 'Failed to delete chat session' });
     }
 }

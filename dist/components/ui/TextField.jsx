@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const TextField = ({ label, helperText, error = false, fullWidth = false, variant = 'outlined', size = 'medium', multiline = false, rows = 1, className = '', ...inputProps }) => {
     // Base styles
     const baseStyles = 'transition-colors focus:outline-none border rounded';
@@ -36,4 +31,4 @@ const TextField = ({ label, helperText, error = false, fullWidth = false, varian
         </p>)}
     </div>);
 };
-exports.default = TextField;
+export default TextField;

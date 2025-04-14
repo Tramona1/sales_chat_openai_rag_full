@@ -1,28 +1,23 @@
-"use strict";
 /**
  * Gemini Document Processing Utility
  *
  * This module handles interaction with Google's Gemini API for document analysis,
  * metadata extraction, categorization, and conflict detection.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.processDocumentWithGemini = processDocumentWithGemini;
-exports.processDocumentWithEnhancedLabels = processDocumentWithEnhancedLabels;
-exports.analyzeQueryWithGemini = analyzeQueryWithGemini;
-exports.detectConflictWithGemini = detectConflictWithGemini;
-exports.convertAnalysisToMetadata = convertAnalysisToMetadata;
-exports.convertEnhancedAnalysisToMetadata = convertEnhancedAnalysisToMetadata;
-const generative_ai_1 = require("@google/generative-ai");
-const errorHandling_1 = require("./errorHandling");
-const documentCategories_1 = require("./documentCategories");
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { logError, logInfo } from './logger';
+import { getStandardCategories } from './documentCategories';
+import { STANDARD_CATEGORIES } from './tagUtils';
 // Initialize Gemini API client
 const API_KEY = process.env.GEMINI_API_KEY || '';
-const genAI = new generative_ai_1.GoogleGenerativeAI(API_KEY);
+const genAI = new GoogleGenerativeAI(API_KEY);
 const MODEL_NAME = 'gemini-pro';
 /**
  * Generate system prompt for document analysis
  */
 function generateDocumentAnalysisPrompt(text) {
+    // Get the category values from STANDARD_CATEGORIES to use in the prompt
+    const categoryValues = STANDARD_CATEGORIES.map(cat => cat.value).join(', ');
     return `
 You are an AI assistant specializing in document analysis and categorization for a knowledge base system.
 
@@ -35,9 +30,9 @@ Provide a detailed analysis in the following JSON format:
 {
   "summary": "A concise summary of the document (max 150 words)",
   "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitors, other]",
-  "primaryCategory": "The main category of this document",
-  "secondaryCategories": ["Other relevant categories"],
-  "technicalLevel": "A number from 0-3 where 0 is non-technical and 3 is highly technical",
+  "primaryCategory": "The main category of this document. Must be one of the following standardized values: ${categoryValues}",
+  "secondaryCategories": ["Other relevant categories from the same standardized list: ${categoryValues} (0-3 categories recommended)"],
+  "technicalLevel": "A number from 1 to 10 indicating technical complexity (1=very basic, 10=highly technical/expert)",
   "entities": {
     "people": [
       {"name": "Person name", "role": "Their role if mentioned", "importance": "high/medium/low"}
@@ -48,25 +43,22 @@ Provide a detailed analysis in the following JSON format:
     "products": ["List of products mentioned"],
     "features": ["List of features mentioned"]
   },
-  "keywords": ["Important keywords from the document"],
-  "topics": ["Main topics covered"],
+  "keywords": ["Important keywords from the document (5-10 recommended)"],
+  "topics": ["Main topics covered (3-5 recommended)"],
   "confidenceScore": "A number from 0-1 indicating your confidence in this analysis"
 }
 
-Focus particularly on:
-1. Leadership information - identify CEOs, founders, and executives
-2. Company-specific information
-3. Product details and features
-4. Technical specifications
-5. Pricing information
-
 Be as accurate and comprehensive as possible. If information is not present, use empty arrays or null values rather than inventing information.
+
+IMPORTANT: For the primaryCategory and secondaryCategories fields, you MUST use ONLY values from this standardized list: ${categoryValues}. Do not invent new categories.
 `;
 }
 /**
  * Generate system prompt for enhanced document analysis with more detailed categorization
  */
 function generateEnhancedAnalysisPrompt(text) {
+    // Get the category values from STANDARD_CATEGORIES to use in the prompt
+    const categoryValues = STANDARD_CATEGORIES.map(cat => cat.value).join(', ');
     return `
 You are an AI assistant specializing in document analysis and detailed categorization for an advanced knowledge base system.
 
@@ -80,17 +72,17 @@ Provide a detailed analysis in the following JSON format:
   "summary": "A concise summary of the document (max 150 words)",
   "contentType": "One of: [leadership, product, pricing, technical, company_info, feature, support, competitor, partner, market, training, legal, policy, other]",
   
-  "primaryCategory": "The main category of this document",
-  "secondaryCategories": ["Other relevant categories"],
+  "primaryCategory": "The main category of this document. Must be one of the following standardized values: ${categoryValues}",
+  "secondaryCategories": ["Other relevant categories from the same standardized list: ${categoryValues} (0-3 categories recommended)"],
   "industryCategories": ["Relevant industry sectors like healthcare, finance, retail, etc."],
   "functionCategories": ["Relevant business functions like marketing, sales, support, development"],
   "useCases": ["Specific use cases the document addresses"],
   
-  "technicalLevel": "A number from 0-3 where 0 is non-technical and 3 is highly technical",
+  "technicalLevel": "A number from 1 to 10 indicating technical complexity (1=very basic, 10=highly technical/expert)",
   "complexityScore": "A number from 0-5 rating the complexity of content (0=simple, 5=very complex)",
   
-  "topics": ["Main topics covered in the document"],
-  "subtopics": ["More specific subtopics covered"],
+  "topics": ["Main topics covered in the document (3-5 recommended)"],
+  "subtopics": ["More specific subtopics covered (3-5 recommended)"],
   
   "entities": {
     "people": [
@@ -155,9 +147,9 @@ Be as detailed and accurate as possible, but do not invent information not prese
  * @param text Document text
  * @returns Structured analysis of the document
  */
-async function processDocumentWithGemini(text) {
+export async function processDocumentWithGemini(text) {
     try {
-        (0, errorHandling_1.logInfo)('Processing document with Gemini', {
+        logInfo('Processing document with Gemini', {
             textLength: text.length,
             textPreview: text.substring(0, 100) + '...'
         });
@@ -166,12 +158,12 @@ async function processDocumentWithGemini(text) {
             model: MODEL_NAME,
             safetySettings: [
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
             ],
         });
@@ -188,7 +180,7 @@ async function processDocumentWithGemini(text) {
         }
         // Parse JSON
         const analysis = JSON.parse(jsonMatch[0]);
-        (0, errorHandling_1.logInfo)('Document processed successfully with Gemini', {
+        logInfo('Document processed successfully with Gemini', {
             contentType: analysis.contentType,
             primaryCategory: analysis.primaryCategory,
             confidenceScore: analysis.confidenceScore
@@ -196,7 +188,7 @@ async function processDocumentWithGemini(text) {
         return analysis;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error processing document with Gemini', error);
+        logError('Error processing document with Gemini', error);
         // Return fallback minimal analysis
         return {
             summary: 'Failed to generate summary due to processing error',
@@ -224,10 +216,9 @@ async function processDocumentWithGemini(text) {
  * @param text Document text
  * @returns Enhanced document analysis with detailed categorization
  */
-async function processDocumentWithEnhancedLabels(text) {
-    var _a, _b;
+export async function processDocumentWithEnhancedLabels(text) {
     try {
-        (0, errorHandling_1.logInfo)('Processing document with enhanced labeling', {
+        logInfo('Processing document with enhanced labeling', {
             textLength: text.length,
             textPreview: text.substring(0, 100) + '...'
         });
@@ -236,12 +227,12 @@ async function processDocumentWithEnhancedLabels(text) {
             model: MODEL_NAME,
             safetySettings: [
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
             ],
         });
@@ -258,17 +249,17 @@ async function processDocumentWithEnhancedLabels(text) {
         }
         // Parse JSON
         const analysis = JSON.parse(jsonMatch[0]);
-        (0, errorHandling_1.logInfo)('Document processed successfully with enhanced labeling', {
+        logInfo('Document processed successfully with enhanced labeling', {
             contentType: analysis.contentType,
             primaryCategory: analysis.primaryCategory,
-            industryCategories: ((_a = analysis.industryCategories) === null || _a === void 0 ? void 0 : _a.length) || 0,
-            functionCategories: ((_b = analysis.functionCategories) === null || _b === void 0 ? void 0 : _b.length) || 0,
+            industryCategories: analysis.industryCategories?.length || 0,
+            functionCategories: analysis.functionCategories?.length || 0,
             confidenceScore: analysis.confidenceScore
         });
         return analysis;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error processing document with enhanced labeling', error);
+        logError('Error processing document with enhanced labeling', error);
         // Return fallback minimal analysis
         return {
             summary: 'Failed to generate summary due to processing error',
@@ -306,9 +297,9 @@ async function processDocumentWithEnhancedLabels(text) {
  * @param query User query text
  * @returns Analysis of query intent and structure
  */
-async function analyzeQueryWithGemini(query) {
+export async function analyzeQueryWithGemini(query) {
     try {
-        (0, errorHandling_1.logInfo)('Analyzing query with Gemini', { query });
+        logInfo('Analyzing query with Gemini', { query });
         // Create model
         const model = genAI.getGenerativeModel({ model: MODEL_NAME });
         // Generate prompt
@@ -349,7 +340,7 @@ Provide your analysis in the following JSON format:
         }
         // Parse JSON
         const analysis = JSON.parse(jsonMatch[0]);
-        (0, errorHandling_1.logInfo)('Query analyzed successfully with Gemini', {
+        logInfo('Query analyzed successfully with Gemini', {
             intent: analysis.intent,
             entityCount: analysis.entities.length,
             confidence: analysis.confidence
@@ -357,7 +348,7 @@ Provide your analysis in the following JSON format:
         return analysis;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error analyzing query with Gemini', error);
+        logError('Error analyzing query with Gemini', error);
         // Return fallback analysis
         return {
             intent: 'factual',
@@ -374,7 +365,7 @@ Provide your analysis in the following JSON format:
  * @param doc2 Second document
  * @returns Analysis of potential conflicts
  */
-async function detectConflictWithGemini(doc1, doc2) {
+export async function detectConflictWithGemini(doc1, doc2) {
     try {
         // Create model
         const model = genAI.getGenerativeModel({ model: MODEL_NAME });
@@ -418,7 +409,7 @@ Only report genuine conflicts where information directly contradicts, not just d
         }
         // Parse JSON
         const analysis = JSON.parse(jsonMatch[0]);
-        (0, errorHandling_1.logInfo)('Conflict detection completed with Gemini', {
+        logInfo('Conflict detection completed with Gemini', {
             hasConflict: analysis.hasConflict,
             conflictType: analysis.conflictType,
             confidence: analysis.confidence,
@@ -427,7 +418,7 @@ Only report genuine conflicts where information directly contradicts, not just d
         return analysis;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error detecting conflicts with Gemini', error);
+        logError('Error detecting conflicts with Gemini', error);
         // Return fallback result
         return {
             hasConflict: false,
@@ -436,42 +427,50 @@ Only report genuine conflicts where information directly contradicts, not just d
     }
 }
 /**
+ * Find matching standardized category based on input from Gemini analysis
+ * This function ensures we always use standardized values across the application
+ * @param category Category name from Gemini
+ * @returns Standardized category value
+ */
+export function findStandardizedCategory(category) {
+    if (!category || typeof category !== 'string') {
+        return 'GENERAL';
+    }
+    const standardCategories = getStandardCategories(); // Use the function to get current enum values
+    const formattedCategory = category.toUpperCase().trim().replace(/\s+/g, '_');
+    // Check if the formatted category is a valid value in the enum
+    if (standardCategories.includes(formattedCategory)) {
+        return formattedCategory;
+    }
+    // If not a direct match, check labels from STANDARD_CATEGORIES in tagUtils.ts
+    const matchingStandardCategory = STANDARD_CATEGORIES.find(sc => sc.label.toLowerCase() === category.toLowerCase() ||
+        sc.value === formattedCategory);
+    if (matchingStandardCategory) {
+        return matchingStandardCategory.value; // Return the VALUE (enum key)
+    }
+    // Log a warning if no match is found after checking labels
+    logError(`Could not map category "${category}" (formatted: ${formattedCategory}) to a standard category value. Defaulting to GENERAL.`);
+    // Default to GENERAL if no match found
+    return 'GENERAL';
+}
+/**
  * Convert Gemini analysis to document metadata
  * @param analysis Gemini document analysis
  * @returns Metadata suitable for storage in vector database
  */
-function convertAnalysisToMetadata(analysis) {
-    // Map content type to document category
-    const categoryMapping = {
-        'leadership': documentCategories_1.DocumentCategoryType.PRODUCT,
-        'product': documentCategories_1.DocumentCategoryType.PRODUCT,
-        'pricing': documentCategories_1.DocumentCategoryType.PRICING,
-        'technical': documentCategories_1.DocumentCategoryType.TECHNICAL,
-        'company_info': documentCategories_1.DocumentCategoryType.GENERAL,
-        'feature': documentCategories_1.DocumentCategoryType.FEATURES,
-        'support': documentCategories_1.DocumentCategoryType.FAQ,
-        'competitor': documentCategories_1.DocumentCategoryType.COMPETITORS,
-        'partner': documentCategories_1.DocumentCategoryType.CUSTOMER,
-        'market': documentCategories_1.DocumentCategoryType.MARKET,
-        'training': documentCategories_1.DocumentCategoryType.TRAINING,
-        'legal': documentCategories_1.DocumentCategoryType.INTERNAL_POLICY,
-        'policy': documentCategories_1.DocumentCategoryType.INTERNAL_POLICY,
-        'other': documentCategories_1.DocumentCategoryType.OTHER
-    };
+export function convertAnalysisToMetadata(analysis) {
     // Extract CEO information if present
-    const ceoInfo = analysis.entities.people.find(p => {
-        var _a, _b, _c;
-        return ((_a = p.role) === null || _a === void 0 ? void 0 : _a.toLowerCase().includes('ceo')) ||
-            ((_b = p.role) === null || _b === void 0 ? void 0 : _b.toLowerCase().includes('chief executive')) ||
-            ((_c = p.role) === null || _c === void 0 ? void 0 : _c.toLowerCase().includes('founder'));
-    });
+    const ceoInfo = analysis.entities.people.find(p => p.role?.toLowerCase().includes('ceo') ||
+        p.role?.toLowerCase().includes('chief executive') ||
+        p.role?.toLowerCase().includes('founder'));
     return {
         // Core metadata
-        category: categoryMapping[analysis.contentType] || documentCategories_1.DocumentCategoryType.GENERAL,
-        primaryCategory: categoryMapping[analysis.primaryCategory] || documentCategories_1.DocumentCategoryType.GENERAL,
+        category: findStandardizedCategory(analysis.contentType),
+        primaryCategory: findStandardizedCategory(analysis.primaryCategory),
         secondaryCategories: analysis.secondaryCategories
-            .map(c => categoryMapping[c] || null)
-            .filter(Boolean),
+            .filter(category => category && category.trim() !== '') // Filter out empty categories
+            .map(category => findStandardizedCategory(category))
+            .filter((value, index, self) => self.indexOf(value) === index), // Remove duplicates
         technicalLevel: analysis.technicalLevel,
         // Enhanced metadata
         summary: analysis.summary,
@@ -482,7 +481,7 @@ function convertAnalysisToMetadata(analysis) {
             .join(','),
         // Special fields
         hasCeoInfo: !!ceoInfo,
-        ceoName: (ceoInfo === null || ceoInfo === void 0 ? void 0 : ceoInfo.name) || null,
+        ceoName: ceoInfo?.name || null,
         // Confidence and timestamps
         confidenceScore: analysis.confidenceScore,
         createdAt: new Date().toISOString(),
@@ -496,56 +495,37 @@ function convertAnalysisToMetadata(analysis) {
  * @param analysis Enhanced document analysis from Gemini
  * @returns Metadata record for storage
  */
-function convertEnhancedAnalysisToMetadata(analysis) {
-    var _a, _b, _c, _d, _e, _f;
-    // Map content type to document category
-    const categoryMapping = {
-        'leadership': documentCategories_1.DocumentCategoryType.PRODUCT,
-        'product': documentCategories_1.DocumentCategoryType.PRODUCT,
-        'pricing': documentCategories_1.DocumentCategoryType.PRICING,
-        'technical': documentCategories_1.DocumentCategoryType.TECHNICAL,
-        'company_info': documentCategories_1.DocumentCategoryType.GENERAL,
-        'feature': documentCategories_1.DocumentCategoryType.FEATURES,
-        'support': documentCategories_1.DocumentCategoryType.FAQ,
-        'competitor': documentCategories_1.DocumentCategoryType.COMPETITORS,
-        'partner': documentCategories_1.DocumentCategoryType.CUSTOMER,
-        'market': documentCategories_1.DocumentCategoryType.MARKET,
-        'training': documentCategories_1.DocumentCategoryType.TRAINING,
-        'legal': documentCategories_1.DocumentCategoryType.INTERNAL_POLICY,
-        'policy': documentCategories_1.DocumentCategoryType.INTERNAL_POLICY,
-        'other': documentCategories_1.DocumentCategoryType.OTHER
-    };
+export function convertEnhancedAnalysisToMetadata(analysis) {
     // Extract CEO information if present
-    const ceoInfo = analysis.entities.people.find(p => {
-        var _a, _b, _c;
-        return ((_a = p.role) === null || _a === void 0 ? void 0 : _a.toLowerCase().includes('ceo')) ||
-            ((_b = p.role) === null || _b === void 0 ? void 0 : _b.toLowerCase().includes('chief executive')) ||
-            ((_c = p.role) === null || _c === void 0 ? void 0 : _c.toLowerCase().includes('founder'));
-    });
+    const ceoInfo = analysis.entities.people.find(p => p.role?.toLowerCase().includes('ceo') ||
+        p.role?.toLowerCase().includes('chief executive') ||
+        p.role?.toLowerCase().includes('founder'));
     // Extract product information
-    const primaryProduct = (_a = analysis.entities.products[0]) === null || _a === void 0 ? void 0 : _a.name;
+    const primaryProduct = analysis.entities.products[0]?.name;
     // Build hierarchical category structure
     const hierarchicalCategories = {
-        primary: categoryMapping[analysis.primaryCategory] || documentCategories_1.DocumentCategoryType.GENERAL,
+        primary: findStandardizedCategory(analysis.primaryCategory),
         secondary: analysis.secondaryCategories
-            .map(c => categoryMapping[c] || null)
-            .filter(Boolean),
+            .filter(category => category && category.trim() !== '') // Filter out empty categories
+            .map(category => findStandardizedCategory(category))
+            .filter((value, index, self) => self.indexOf(value) === index), // Remove duplicates
         industry: analysis.industryCategories || [],
         function: analysis.functionCategories || [],
         useCases: analysis.useCases || []
     };
     return {
         // Core metadata
-        category: categoryMapping[analysis.contentType] || documentCategories_1.DocumentCategoryType.GENERAL,
-        primaryCategory: categoryMapping[analysis.primaryCategory] || documentCategories_1.DocumentCategoryType.GENERAL,
+        category: findStandardizedCategory(analysis.contentType),
+        primaryCategory: findStandardizedCategory(analysis.primaryCategory),
         secondaryCategories: analysis.secondaryCategories
-            .map(c => categoryMapping[c] || null)
-            .filter(Boolean),
+            .filter(category => category && category.trim() !== '') // Filter out empty categories
+            .map(category => findStandardizedCategory(category))
+            .filter((value, index, self) => self.indexOf(value) === index), // Remove duplicates
         technicalLevel: analysis.technicalLevel,
         // Enhanced metadata
         summary: analysis.summary,
         keywords: analysis.keywords.join(','),
-        semanticKeywords: ((_b = analysis.semanticKeywords) === null || _b === void 0 ? void 0 : _b.join(',')) || '',
+        semanticKeywords: analysis.semanticKeywords?.join(',') || '',
         // Hierarchical categories
         hierarchicalCategories: JSON.stringify(hierarchicalCategories),
         // Entity information
@@ -559,18 +539,18 @@ function convertEnhancedAnalysisToMetadata(analysis) {
         features: analysis.entities.features.map(f => f.name).join(','),
         // Special fields
         hasCeoInfo: !!ceoInfo,
-        ceoName: (ceoInfo === null || ceoInfo === void 0 ? void 0 : ceoInfo.name) || null,
+        ceoName: ceoInfo?.name || null,
         // Topics and subtopics
         topics: analysis.topics.join(','),
-        subtopics: ((_c = analysis.subtopics) === null || _c === void 0 ? void 0 : _c.join(',')) || '',
+        subtopics: analysis.subtopics?.join(',') || '',
         // Document quality metrics
         complexityScore: analysis.complexityScore,
         authorityScore: analysis.authorityScore,
         confidenceScore: analysis.confidenceScore,
         // Recency indicators
-        hasTimestamps: ((_d = analysis.recencyIndicators) === null || _d === void 0 ? void 0 : _d.hasTimestamps) || false,
-        mostRecentDate: ((_e = analysis.recencyIndicators) === null || _e === void 0 ? void 0 : _e.mostRecentDate) || null,
-        likelyOutdated: ((_f = analysis.recencyIndicators) === null || _f === void 0 ? void 0 : _f.likelyOutdated) || false,
+        hasTimestamps: analysis.recencyIndicators?.hasTimestamps || false,
+        mostRecentDate: analysis.recencyIndicators?.mostRecentDate || null,
+        likelyOutdated: analysis.recencyIndicators?.likelyOutdated || false,
         // Timestamps
         createdAt: new Date().toISOString(),
         lastUpdated: new Date().toISOString()

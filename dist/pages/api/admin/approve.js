@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const errorHandling_1 = require("../../../utils/errorHandling");
-const adminWorkflow_1 = require("../../../utils/adminWorkflow");
-async function handler(req, res) {
+import { standardizeApiErrorResponse } from '../../../utils/errorHandling';
+import { approveOrRejectDocument, checkForContentConflicts, getPendingDocumentById } from '../../../utils/adminWorkflow';
+export default async function handler(req, res) {
     // Only allow POST requests
     if (req.method !== 'POST') {
         return res.status(405).json({
@@ -42,7 +39,7 @@ async function handler(req, res) {
             });
         }
         // First get the document to check for conflicts
-        const pendingDoc = await (0, adminWorkflow_1.getPendingDocumentById)(docId);
+        const pendingDoc = await getPendingDocumentById(docId);
         if (!pendingDoc && decision === 'approve') {
             return res.status(404).json({
                 error: {
@@ -53,7 +50,7 @@ async function handler(req, res) {
         }
         // Then check for conflicts with the document's metadata and text
         if (decision === 'approve' && pendingDoc) {
-            const conflicts = await (0, adminWorkflow_1.checkForContentConflicts)(pendingDoc.metadata, pendingDoc.text);
+            const conflicts = await checkForContentConflicts(pendingDoc.metadata, pendingDoc.text);
             if (conflicts.hasConflicts && conflicts.conflictingDocIds.length > 0) {
                 return res.status(409).json({
                     error: {
@@ -65,7 +62,7 @@ async function handler(req, res) {
             }
         }
         // Process the approval or rejection with correct interface structure
-        const result = await (0, adminWorkflow_1.approveOrRejectDocument)(docId, {
+        const result = await approveOrRejectDocument(docId, {
             approved: decision === 'approve',
             reviewerComments: reason || '',
             reviewedBy: req.body.reviewerId || 'system'
@@ -79,7 +76,7 @@ async function handler(req, res) {
     }
     catch (error) {
         console.error('Error processing document approval/rejection:', error);
-        const errorResponse = (0, errorHandling_1.standardizeApiErrorResponse)(error);
+        const errorResponse = standardizeApiErrorResponse(error);
         return res.status(500).json(errorResponse);
     }
 }

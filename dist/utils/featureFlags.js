@@ -1,30 +1,14 @@
-"use strict";
 /**
- * Feature Flags Module
+ * Feature Flags Module (Simplified Version)
  *
  * This module provides utility functions to manage feature flags
  * for enabling/disabling specific features in the RAG system.
+ *
+ * Note: This is a simplified version of the feature flags module
+ * that always returns defaults to get the chat working.
  */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.initFeatureFlags = initFeatureFlags;
-exports.getFlag = getFlag;
-exports.isFeatureEnabled = isFeatureEnabled;
-exports.setFlag = setFlag;
-exports.enableAllContextualFeatures = enableAllContextualFeatures;
-exports.disableAllContextualFeatures = disableAllContextualFeatures;
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const dotenv_1 = __importDefault(require("dotenv"));
-const errorHandling_1 = require("./errorHandling");
-// Load environment variables
-dotenv_1.default.config({ path: path_1.default.resolve(process.cwd(), '.env.local') });
-// Constants
-const FLAGS_FILE = path_1.default.join(process.cwd(), 'data', 'feature_flags.json');
 // Default flags configuration
-const DEFAULT_FLAGS = {
+export const featureFlags = {
     // Contextual retrieval flags
     contextualEmbeddings: true,
     contextualChunking: true,
@@ -32,7 +16,7 @@ const DEFAULT_FLAGS = {
     enhancedQueryAnalysis: true,
     // Gemini-specific flags
     useGeminiForContextGeneration: true,
-    useGeminiForEmbeddings: false,
+    useGeminiForEmbeddings: true,
     useGeminiForReranking: true,
     // Feature monitoring flags
     enablePerformanceMonitoring: true,
@@ -42,123 +26,52 @@ const DEFAULT_FLAGS = {
     // Last updated timestamp
     lastUpdated: new Date().toISOString()
 };
-// In-memory cache of feature flags
-let featureFlags = { ...DEFAULT_FLAGS };
 /**
- * Initialize feature flags from file or create default configuration
+ * Initialize feature flags (simplified - just returns defaults)
  */
-function initFeatureFlags() {
-    try {
-        if (fs_1.default.existsSync(FLAGS_FILE)) {
-            // Load existing flags
-            const data = fs_1.default.readFileSync(FLAGS_FILE, 'utf8');
-            const parsedFlags = JSON.parse(data);
-            // Merge with defaults to ensure all flags exist
-            featureFlags = {
-                ...DEFAULT_FLAGS,
-                ...parsedFlags,
-                lastUpdated: parsedFlags.lastUpdated || new Date().toISOString()
-            };
-        }
-        else {
-            // Create default flags
-            featureFlags = { ...DEFAULT_FLAGS };
-            // Ensure the directory exists
-            const dir = path_1.default.dirname(FLAGS_FILE);
-            if (!fs_1.default.existsSync(dir)) {
-                fs_1.default.mkdirSync(dir, { recursive: true });
-            }
-            // Save default flags
-            fs_1.default.writeFileSync(FLAGS_FILE, JSON.stringify(featureFlags, null, 2));
-        }
-        // Check for environment variable overrides
-        if (process.env.ENABLE_CONTEXTUAL_FEATURES === 'false') {
-            featureFlags.enableContextualFeatures = false;
-        }
-        if (process.env.USE_GEMINI_EMBEDDINGS === 'true') {
-            featureFlags.useGeminiForEmbeddings = true;
-        }
-        return featureFlags;
-    }
-    catch (error) {
-        (0, errorHandling_1.logError)('Error initializing feature flags', error);
-        return { ...DEFAULT_FLAGS };
-    }
+export function initFeatureFlags() {
+    return { ...featureFlags };
 }
 /**
- * Get the value of a specific feature flag
+ * Get the value of a specific feature flag (simplified)
  */
-function getFlag(flagName) {
-    // Initialize if not already done
-    if (featureFlags === null) {
-        initFeatureFlags();
-    }
-    // Return the flag value
+export function getFlag(flagName) {
     return featureFlags[flagName];
 }
 /**
- * Check if a boolean feature flag is enabled
+ * Check if a boolean feature flag is enabled (simplified)
  */
-function isFeatureEnabled(flagName) {
-    const flag = getFlag(flagName);
+export function isFeatureEnabled(flagName) {
     // If the master contextual switch is off, disable all contextual features
     if (typeof flagName === 'string' && flagName.startsWith('contextual') && !featureFlags.enableContextualFeatures) {
         return false;
     }
-    return Boolean(flag);
+    return Boolean(featureFlags[flagName]);
 }
 /**
- * Set a feature flag value (and persist to disk)
+ * Set a feature flag value (in-memory only in this simplified version)
  */
-function setFlag(flagName, value, persist = true) {
-    // Update in-memory flag
+export function setFlag(flagName, value) {
     featureFlags[flagName] = value;
     featureFlags.lastUpdated = new Date().toISOString();
-    // Persist to disk if requested
-    if (persist) {
-        try {
-            fs_1.default.writeFileSync(FLAGS_FILE, JSON.stringify(featureFlags, null, 2));
-        }
-        catch (error) {
-            (0, errorHandling_1.logError)('Error persisting feature flags', error);
-        }
-    }
 }
 /**
- * Enable all contextual features
+ * Enable all contextual features (in-memory only)
  */
-function enableAllContextualFeatures(persist = true) {
+export function enableAllContextualFeatures() {
     featureFlags.enableContextualFeatures = true;
     featureFlags.contextualEmbeddings = true;
     featureFlags.contextualChunking = true;
     featureFlags.contextualReranking = true;
     featureFlags.enhancedQueryAnalysis = true;
     featureFlags.lastUpdated = new Date().toISOString();
-    if (persist) {
-        try {
-            fs_1.default.writeFileSync(FLAGS_FILE, JSON.stringify(featureFlags, null, 2));
-        }
-        catch (error) {
-            (0, errorHandling_1.logError)('Error persisting feature flags', error);
-        }
-    }
 }
 /**
- * Disable all contextual features
+ * Disable all contextual features (in-memory only)
  */
-function disableAllContextualFeatures(persist = true) {
+export function disableAllContextualFeatures() {
     featureFlags.enableContextualFeatures = false;
     featureFlags.lastUpdated = new Date().toISOString();
-    if (persist) {
-        try {
-            fs_1.default.writeFileSync(FLAGS_FILE, JSON.stringify(featureFlags, null, 2));
-        }
-        catch (error) {
-            (0, errorHandling_1.logError)('Error persisting feature flags', error);
-        }
-    }
 }
-// Initialize feature flags on module import
-initFeatureFlags();
-// Export feature flags
-exports.default = featureFlags;
+// Export default
+export default featureFlags;

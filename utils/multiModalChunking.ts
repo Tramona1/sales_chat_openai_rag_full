@@ -306,7 +306,13 @@ async function createMultiModalChunk(
         ...metadata,
         hasVisualContent: relevantVisuals.length > 0,
         visualCount: relevantVisuals.length,
-        context: enhancedContext
+        context: {
+          description: enhancedContext.summary || '',
+          keyPoints: enhancedContext.keyPoints || [],
+          isDefinition: false,
+          containsExample: false,
+          relatedTopics: []
+        }
       },
       // Map the visuals to the expected structure
       visualContent: relevantVisuals.map(visual => ({

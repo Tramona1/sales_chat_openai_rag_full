@@ -1,4 +1,3 @@
-"use strict";
 /**
  * Query Analysis Module for Intelligent Query Routing
  *
@@ -9,61 +8,101 @@
  *
  * This information is used to optimize retrieval parameters and improve results.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.analyzeQuery = analyzeQuery;
-exports.getRetrievalParameters = getRetrievalParameters;
-exports.analyzeQueryForContext = analyzeQueryForContext;
-exports.isQueryAboutVisuals = isQueryAboutVisuals;
-exports.analyzeVisualQuery = analyzeVisualQuery;
-const performanceMonitoring_1 = require("./performanceMonitoring");
-const featureFlags_1 = require("./featureFlags");
-const generative_ai_1 = require("@google/generative-ai");
+import { logError, logWarning, logDebug } from './logger';
+import { cacheWithExpiry, getFromCache } from './caching';
+import { recordMetric } from './performanceMonitoring';
+// TEMPORARY FIX: Hardcode feature flags instead of importing
+// import { isFeatureEnabled, FeatureFlag } from './featureFlags';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { DocumentCategoryType } from './documentCategories';
+// TEMPORARY FIX: Hardcode feature flags
+const ENHANCED_QUERY_ANALYSIS_ENABLED = true;
 // Cache timeout for query analysis (10 minutes)
 const QUERY_ANALYSIS_CACHE_TIMEOUT = 10 * 60 * 1000;
+const QUERY_ANALYSIS_CACHE_KEY_PREFIX = 'queryAnalysis:';
+/**
+ * Robustly extract a JSON object from text that may contain markdown, code blocks, or other formatting
+ */
+function extractJsonFromText(text) {
+    // Try direct parsing first
+    try {
+        return JSON.parse(text);
+    }
+    catch (e) {
+        // Check for JSON in code blocks (```json {...} ```)
+        const codeBlockMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+        if (codeBlockMatch) {
+            try {
+                return JSON.parse(codeBlockMatch[1]);
+            }
+            catch (innerError) {
+                // Continue to other approaches
+            }
+        }
+        // Try to extract any JSON object with balanced braces
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            try {
+                return JSON.parse(jsonMatch[0]);
+            }
+            catch (innerError) {
+                // If still failing, try cleaning the text
+                try {
+                    const cleanedText = jsonMatch[0]
+                        .replace(/(\w+):/g, '"$1":') // Convert unquoted keys to quoted keys
+                        .replace(/'/g, '"'); // Replace single quotes with double quotes
+                    return JSON.parse(cleanedText);
+                }
+                catch (finalError) {
+                    // All approaches failed
+                }
+            }
+        }
+        throw new Error('Failed to extract valid JSON from text: ' + text.substring(0, 100) + '...');
+    }
+}
+// Assume mapToDocumentCategory exists or copy its definition here
+// Example: (Copy/adapt from documentAnalysis.ts if needed)
+function mapToDocumentCategory(category) {
+    if (!category)
+        return null;
+    const formattedCategory = category.toLowerCase().replace(/\s+/g, '_');
+    // Add specific mappings if needed
+    const categoryMap = {
+    // Example explicit mappings:
+    // 'product_info': DocumentCategoryType.PRODUCT,
+    };
+    if (categoryMap[formattedCategory]) {
+        return categoryMap[formattedCategory];
+    }
+    // Check if formatted string matches enum value
+    if (Object.values(DocumentCategoryType).includes(formattedCategory)) {
+        return formattedCategory;
+    }
+    logWarning(`LLM suggested category \"${category}\" (formatted as \"${formattedCategory}\") does not match any standard DocumentCategoryType.`);
+    return null; // Return null if no match
+}
 /**
  * Analyzes a query to extract entities and determine query characteristics
  *
  * @param query The user query to analyze
  * @returns Analysis result with entities, categories, and query type
  */
-async function analyzeQuery(query) {
+export async function analyzeQuery(query) {
+    const cacheKey = `${QUERY_ANALYSIS_CACHE_KEY_PREFIX}${query}`;
+    // Try fetching from cache first
+    const cachedResult = getFromCache(cacheKey);
+    if (cachedResult) {
+        logDebug('Query analysis cache hit', { query });
+        recordMetric('queryAnalysis', 'cache', 0, true);
+        return cachedResult;
+    }
+    logDebug('Query analysis cache miss', { query });
     const startTime = Date.now();
     try {
         // Use simple analysis if feature is disabled
-        if (!(0, featureFlags_1.isFeatureEnabled)('enhancedQueryAnalysis')) {
+        // TEMPORARY FIX: Use hardcoded flag instead of isFeatureEnabled
+        if (!ENHANCED_QUERY_ANALYSIS_ENABLED) {
             return performBasicAnalysis(query);
         }
         // Get Gemini model
@@ -82,7 +121,7 @@ async function analyzeQuery(query) {
        - name: Entity name
        - type: Type of entity (PERSON, ORGANIZATION, PRODUCT, FEATURE, LOCATION, CONCEPT, TECHNICAL_TERM, OTHER)
        - score: Confidence score between 0 and 1
-    4. technicalLevel: Rating from 0 (non-technical) to 3 (highly technical)
+    4. technicalLevel: Rating from 1 (non-technical) to 5 (highly technical)
     5. primaryCategory: Most relevant category for the query
     6. keywords: Array of key terms for search expansion
     7. isAmbiguous: Boolean indicating if the query is ambiguous and needs clarification
@@ -95,7 +134,7 @@ async function analyzeQuery(query) {
         // Parse the response as JSON
         let analysis;
         try {
-            analysis = JSON.parse(responseText);
+            analysis = extractJsonFromText(responseText);
         }
         catch (error) {
             console.error('Error parsing Gemini response as JSON:', error);
@@ -118,12 +157,18 @@ async function analyzeQuery(query) {
         if (!analysis.topics || !Array.isArray(analysis.topics)) {
             analysis.topics = [];
         }
-        // Ensure technical level is a number between 0-3
+        // Ensure technical level is a number between 1-5 (Updated Scale)
         if (typeof analysis.technicalLevel !== 'number' ||
-            analysis.technicalLevel < 0 ||
-            analysis.technicalLevel > 3) {
-            analysis.technicalLevel = 1;
+            analysis.technicalLevel < 1 ||
+            analysis.technicalLevel > 5) {
+            analysis.technicalLevel = 3; // Default to mid-point
         }
+        // --- Map and Validate Categories --- 
+        const mappedPrimaryCategory = mapToDocumentCategory(analysis.primaryCategory);
+        const mappedSecondaryCategories = Array.isArray(analysis.secondaryCategories)
+            ? analysis.secondaryCategories.map(mapToDocumentCategory).filter((c) => c !== null)
+            : [];
+        // --- End Category Mapping --- 
         // Construct the complete analysis result
         const fullAnalysis = {
             originalQuery: query,
@@ -131,30 +176,34 @@ async function analyzeQuery(query) {
             topics: analysis.topics,
             entities: analysis.entities,
             technicalLevel: analysis.technicalLevel,
-            primaryCategory: analysis.primaryCategory,
-            secondaryCategories: analysis.secondaryCategories,
+            primaryCategory: mappedPrimaryCategory ?? DocumentCategoryType.GENERAL,
+            secondaryCategories: mappedSecondaryCategories,
             keywords: analysis.keywords,
             queryType: analysis.queryType,
             expandedQuery: analysis.expandedQuery,
             isAmbiguous: analysis.isAmbiguous
         };
         // Record metrics for successful analysis
-        (0, performanceMonitoring_1.recordMetric)('queryAnalysis', 'gemini', Date.now() - startTime, true, {
-            intent: fullAnalysis.intent,
-            technicalLevel: fullAnalysis.technicalLevel,
-            entityCount: fullAnalysis.entities.length,
-            isAmbiguous: fullAnalysis.isAmbiguous
+        recordMetric('queryAnalysis', 'gemini', Date.now() - startTime, true, {
+            queryLength: query.length,
+            intent: fullAnalysis.intent
         });
+        // Cache the result
+        cacheWithExpiry(cacheKey, fullAnalysis, QUERY_ANALYSIS_CACHE_TIMEOUT);
         return fullAnalysis;
     }
     catch (error) {
-        // Record the error
-        (0, performanceMonitoring_1.recordMetric)('queryAnalysis', 'gemini', Date.now() - startTime, false, {
-            error: error.message
+        // Log and record error
+        logError('Error performing query analysis', error);
+        recordMetric('queryAnalysis', 'gemini', Date.now() - startTime, false, {
+            error: error instanceof Error ? error.message : 'Unknown error'
         });
-        // Fallback to basic analysis
-        console.error('Error performing query analysis with Gemini:', error);
-        return performBasicAnalysis(query);
+        // Fall back to basic analysis
+        const fallbackResult = performBasicAnalysis(query);
+        // Cache the fallback result as well, but maybe for shorter duration?
+        // For now, cache with standard timeout
+        cacheWithExpiry(cacheKey, fallbackResult, QUERY_ANALYSIS_CACHE_TIMEOUT);
+        return fallbackResult;
     }
 }
 /**
@@ -224,7 +273,7 @@ function performBasicAnalysis(query) {
  * @param analysis The query analysis
  * @returns Parameters for optimizing retrieval
  */
-function getRetrievalParameters(analysis) {
+export function getRetrievalParameters(analysis) {
     // Base configuration
     const params = {
         hybridRatio: 0.5, // Default hybrid ratio (0.5 = balanced)
@@ -237,10 +286,10 @@ function getRetrievalParameters(analysis) {
             categories: [],
             strict: false
         },
-        // Default to wide technical level range (0-3)
+        // Default to wide technical level range (1-5) - UPDATED SCALE
         technicalLevelRange: {
-            min: 0,
-            max: 3
+            min: 1,
+            max: 5
         }
     };
     // Adjust hybrid ratio based on query type
@@ -266,9 +315,9 @@ function getRetrievalParameters(analysis) {
     if (analysis.isAmbiguous || analysis.originalQuery.length < 15) {
         params.expandQuery = true;
     }
-    // Adjust technical level range based on the query's technical level
-    params.technicalLevelRange.min = Math.max(0, analysis.technicalLevel - 1);
-    params.technicalLevelRange.max = Math.min(3, analysis.technicalLevel + 1);
+    // Adjust technical level range based on the query's technical level (1-5 scale)
+    params.technicalLevelRange.min = Math.max(1, analysis.technicalLevel - 1);
+    params.technicalLevelRange.max = Math.min(5, analysis.technicalLevel + 1);
     // If we have a primary category, use it for filtering
     if (analysis.primaryCategory) {
         params.categoryFilter.categories = [analysis.primaryCategory];
@@ -297,29 +346,29 @@ function getGeminiApiKey() {
  */
 function getQueryAnalysisModel() {
     const apiKey = getGeminiApiKey();
-    const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
+    const genAI = new GoogleGenerativeAI(apiKey);
     return genAI.getGenerativeModel({
-        model: 'gemini-2.0-pro',
+        model: 'gemini-2.0-flash',
         generationConfig: {
             temperature: 0.1,
             maxOutputTokens: 2048,
         },
         safetySettings: [
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
         ],
     });
@@ -330,7 +379,7 @@ function getQueryAnalysisModel() {
  * @param query The user query to analyze
  * @returns Analysis of query context with visual focus detection
  */
-async function analyzeQueryForContext(query) {
+export async function analyzeQueryForContext(query) {
     try {
         const startTime = Date.now();
         // Get enhanced visual analysis using our improved detection
@@ -349,7 +398,7 @@ async function analyzeQueryForContext(query) {
       - entityFocus: An array of specific entities (products, companies, etc.) the user is asking about
     `;
         // Import the Gemini client helper
-        const { generateStructuredGeminiResponse } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
+        const { generateStructuredGeminiResponse } = await import('./geminiClient');
         // Define the expected response schema
         const responseSchema = {
             searchTerms: [{ type: "string" }],
@@ -361,7 +410,7 @@ async function analyzeQueryForContext(query) {
         // Generate the structured response
         const analysis = await generateStructuredGeminiResponse("You are an expert in query analysis for a knowledge base system with visual content capabilities.", prompt, responseSchema);
         // Record performance metrics
-        (0, performanceMonitoring_1.recordMetric)('queryContextAnalysis', 'gemini', Date.now() - startTime, true, {
+        recordMetric('queryContextAnalysis', 'gemini', Date.now() - startTime, true, {
             visualFocus: visualAnalysis.isVisualQuery,
             confidence: visualAnalysis.confidence,
             visualTypes: visualAnalysis.visualTypes,
@@ -400,7 +449,7 @@ async function analyzeQueryForContext(query) {
  * @param query - The search query to analyze
  * @returns True if the query is likely about visual content
  */
-function isQueryAboutVisuals(query) {
+export function isQueryAboutVisuals(query) {
     const visualTerms = [
         // Basic visual terms
         'chart', 'graph', 'table', 'diagram', 'image', 'picture', 'figure',
@@ -493,7 +542,7 @@ function isQueryAboutVisuals(query) {
  * @param query - The search query to analyze
  * @returns Analysis of the visual aspects of the query
  */
-function analyzeVisualQuery(query) {
+export function analyzeVisualQuery(query) {
     const lowerQuery = query.toLowerCase();
     const isVisual = isQueryAboutVisuals(query);
     // Visual type detection

@@ -5,7 +5,9 @@
  * to improve retrieval performance, especially for complex or ambiguous queries.
  */
 
-import { generateChatCompletion, generateStructuredResponse } from './openaiClient';
+// Import Gemini client functions and remove OpenAI client import
+// import { generateChatCompletion, generateStructuredResponse } from './openaiClient'; 
+import { generateStructuredGeminiResponse, generateGeminiChatCompletion } from './geminiClient'; 
 import { tokenize } from './tokenization';
 import { logError } from './logger';
 import { getFromCache, cacheWithExpiry } from './caching';
@@ -19,7 +21,7 @@ export interface QueryExpansionOptions {
   
   // Model to use for semantic expansion
   // Can use faster models for simple expansion
-  model: string;
+  model: string; // Should be a Gemini model now
   
   // Whether to use semantic expansion with LLMs
   useSemanticExpansion: boolean;
@@ -52,7 +54,7 @@ export interface QueryExpansionOptions {
  */
 export const DEFAULT_EXPANSION_OPTIONS: QueryExpansionOptions = {
   maxExpandedTerms: 4, // Reduced from 5 based on test results
-  model: 'gpt-3.5-turbo',
+  model: 'gemini-2.0-flash', // UPDATED: Use Gemini model
   useSemanticExpansion: true,
   useKeywordExpansion: true,
   semanticWeight: 0.7, // Favor semantic expansion by default
@@ -103,7 +105,7 @@ export async function semanticQueryExpansion(
   
   try {
     // Create system prompt for semantic expansion
-    // More targeted prompt based on query type to improve relevance
+    // This prompt should work reasonably well with Gemini too
     const systemPrompt = `You are an expert in information retrieval helping to improve search quality.
 Your task is to expand the user's query with related terms to improve search results.
 Focus on adding precise, targeted phrases that might appear in relevant documents.
@@ -124,23 +126,29 @@ Consider:
 
 Return as a JSON array of strings.`;
 
-    // Set up timeout for semantic expansion
-    const expansionPromise = generateStructuredResponse(
-      systemPrompt,
-      userPrompt,
-      [],
-      config.model
-    );
-    
-    // Add timeout using AbortController instead of Promise.race for cleaner cancellation
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
-    
+    // Define the expected schema for the structured response
+    const responseSchema = {
+      type: "array",
+      items: { type: "string" }
+    };
+
+    // Set up timeout for semantic expansion 
+    // Note: Timeout implementation might need adjustment if geminiClient doesn't support AbortController directly
+    // For now, we assume the geminiClient handles timeouts internally or we rely on default timeouts.
+    // const controller = new AbortController(); 
+    // const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
+
     try {
-      // Try structured response first (most reliable)
-      const result = await expansionPromise;
-      clearTimeout(timeoutId);
-      
+      // Try structured response first using Gemini
+      const result = await generateStructuredGeminiResponse(
+        systemPrompt,
+        userPrompt,
+        responseSchema 
+        // Pass model if needed by geminiClient function, assuming it uses config
+        // config.model 
+      );
+      // clearTimeout(timeoutId); // Clear timeout if used
+
       if (Array.isArray(result)) {
         const validTerms = result
           .filter(term => 
@@ -160,25 +168,28 @@ Return as a JSON array of strings.`;
         return validTerms;
       }
     } catch (structuredError) {
-      // If structured response fails, try fallback
+      // If structured response fails, try fallback with Gemini chat
       if (config.debug) {
         console.log(`Structured expansion failed for "${query}". Using fallback.`);
       }
     }
     
-    // Fallback to simpler expansion if structured response fails
+    // Fallback to simpler expansion using Gemini chat completion
     try {
-      const fallbackResponse = await generateChatCompletion(
-        "You are a search query expansion expert. Provide only related search terms, no explanations.",
-        `Generate ${config.maxExpandedTerms} search terms related to: "${query}"\nReturn one term per line, no numbering or bullets.`,
-        config.model,
-        false
+      const fallbackSystemPrompt = "You are a search query expansion expert. Provide only related search terms, no explanations.";
+      const fallbackUserPrompt = `Generate ${config.maxExpandedTerms} search terms related to: "${query}"\nReturn one term per line, no numbering or bullets.`;
+      
+      const fallbackResponse = await generateGeminiChatCompletion(
+        fallbackSystemPrompt,
+        fallbackUserPrompt
+        // Pass model if needed, assuming geminiClient uses config
+        // config.model 
       );
       
       // Parse the response to extract terms (one per line)
       const terms = fallbackResponse
-        .split('\n')
-        .map(line => line.trim().replace(/^[•\-\d.\s]+/, '')) // Remove bullets, numbers
+        .split('\\n')
+        .map(line => line.trim().replace(/^[•\\-\\d.\\s]+/, '')) // Remove bullets, numbers
         .filter(line => 
           line && 
           !line.startsWith('-') && 
@@ -205,7 +216,7 @@ Return as a JSON array of strings.`;
   } finally {
     if (config.debug) {
       const duration = Date.now() - startTime;
-      console.log(`Semantic expansion took ${duration}ms for query: "${query}"`);
+      console.log(`Semantic expansion took ${duration}ms for query: \"${query}\"`);
     }
   }
 }
@@ -337,9 +348,9 @@ export function keywordQueryExpansion(
 }
 
 /**
- * Analyze query to determine domain context and technical level
+ * Analyze query to determine context for expansion (internal use)
  */
-export async function analyzeQuery(
+async function analyzeQueryExpansionContext(
   query: string
 ): Promise<{
   technicalLevel: number;
@@ -368,15 +379,24 @@ export async function analyzeQuery(
     
 Please analyze this query and return a JSON object with technicalLevel (number 1-5), domainContext (string), and complexity (number 1-5).`;
 
-    const result = await generateStructuredResponse(
+    // Define the expected schema
+    const responseSchema = {
+      type: "object",
+      properties: {
+        technicalLevel: { type: "number", minimum: 1, maximum: 5 },
+        domainContext: { type: "string", enum: ["pricing", "technical", "support", "feature", "comparison", "general"] },
+        complexity: { type: "number", minimum: 1, maximum: 5 }
+      },
+      required: ["technicalLevel", "domainContext", "complexity"]
+    };
+
+    // Use Gemini structured response
+    const result = await generateStructuredGeminiResponse(
       systemPrompt,
       userPrompt,
-      {
-        technicalLevel: 1,
-        domainContext: "general",
-        complexity: 1
-      },
-      'gpt-3.5-turbo'
+      responseSchema
+      // Assuming geminiClient uses default model from config, or pass explicitly:
+      // 'gemini-2.0-flash' 
     );
     
     const analysis = {
@@ -390,7 +410,7 @@ Please analyze this query and return a JSON object with technicalLevel (number 1
     
     return analysis;
   } catch (error) {
-    logError('analyzeQuery', error);
+    logError('analyzeQueryExpansionContext', error);
     return {
       technicalLevel: 1,
       domainContext: 'general',
@@ -428,10 +448,15 @@ export async function expandQuery(
       }
     }
     
-    // Get query analysis to determine expansion strategy
+    // Analyze query for context (technical level, domain)
     let analysis = { technicalLevel: 1, domainContext: 'general', complexity: 1 };
-    if (config.includeMetadata || config.debug) {
-      analysis = await analyzeQuery(query);
+    if (config.includeMetadata) {
+      try {
+        analysis = await analyzeQueryExpansionContext(query);
+      } catch (analysisError) {
+        logError('Failed to analyze query context for expansion', analysisError);
+        // Use defaults if analysis fails
+      }
     }
     
     // Adjust semantic/keyword weights based on query characteristics

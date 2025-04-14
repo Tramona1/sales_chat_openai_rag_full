@@ -5,7 +5,8 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { logError, logInfo, logDebug } from './logger';
+import { logError, logInfo, logDebug, logWarning } from './logger';
+import { VectorStoreItem } from './vectorStore'; // Assuming vectorStore.ts exports this
 
 // Load environment variables (only works in non-Next.js environments)
 dotenv.config();
@@ -216,66 +217,156 @@ export function getSupabaseAdmin(): SupabaseClient {
 }
 
 // For backward compatibility
-export const supabase = { get: getSupabase };
-export const supabaseAdmin = { get: getSupabaseAdmin };
+// REMOVED: Legacy proxies appear unused
+// export const supabase = { get: getSupabase };
+// export const supabaseAdmin = { get: getSupabaseAdmin };
+// 
+// // Proxy to maintain interface compatibility
+// export const supabase2 = new Proxy({} as SupabaseClient, {
+//   get: (target, prop) => {
+//     const client = getSupabase();
+//     return (client as any)[prop];
+//   }
+// });
+// 
+// // Proxy to maintain interface compatibility
+// export const supabaseAdmin2 = new Proxy({} as SupabaseClient, {
+//   get: (target, prop) => {
+//     const client = getSupabaseAdmin();
+//     return (client as any)[prop];
+//   }
+// });
 
-// Proxy to maintain interface compatibility
-export const supabase2 = new Proxy({} as SupabaseClient, {
-  get: (target, prop) => {
-    const client = getSupabase();
-    return (client as any)[prop];
-  }
-});
+// REMOVED: Duplicate/obsolete hybridSearch function. 
+// The primary implementation is in utils/hybridSearch.ts
+// /**
+//  * Performs a hybrid search using both vector similarity and PostgreSQL Full-Text Search (FTS)
+//  * @param query The search query text
+//  * @param limit Maximum number of results to return
+//  * @param threshold Minimum similarity score threshold
+//  * @returns Array of document chunks matching the query
+//  */
+// export async function hybridSearch(query: string, limit = 5, threshold = 0.5) {
+//   try {
+//     // Get vector embedding for the query using the embedText function from embeddingClient
+//     let embedding;
+//     try {
+//       // Import the embedText function from embeddingClient to use Gemini embeddings
+//       const { embedText } = await import('./embeddingClient');
+//       embedding = await embedText(query);
+//     } catch (error) {
+//       logError('Error generating embedding for search query', error);
+//       throw new Error('Failed to generate embedding for search query');
+//     }
+// 
+//     // Call the hybrid_search function we defined in our Supabase schema
+//     // with the correct parameter names based on the stored procedure
+//     const { data, error } = await getSupabaseAdmin().rpc('hybrid_search', {
+//       query_text: query,
+//       query_embedding: embedding,
+//       match_count: limit,
+//       match_threshold: threshold,
+//       vector_weight: 0.7,
+//       keyword_weight: 0.3,
+//       filter: {} // Empty filter to ensure we use the right overload
+//     });
+// 
+//     if (error) {
+//       logError('Supabase hybrid search error', error);
+//       throw error;
+//     }
+// 
+//     logDebug(`Hybrid search found ${data?.length || 0} results for query: "${query}"`);
+//     return data || [];
+//   } catch (error) {
+//     logError('Error in hybrid search', error);
+//     throw error;
+//   }
+// }
 
-// Proxy to maintain interface compatibility
-export const supabaseAdmin2 = new Proxy({} as SupabaseClient, {
-  get: (target, prop) => {
-    const client = getSupabaseAdmin();
-    return (client as any)[prop];
-  }
-});
+// Define an interface for the expected chunk structure for insertion
+export interface DocumentChunkInsertData {
+  document_id: string;
+  chunk_index: number;
+  embedding: number[];
+  text: string; // Ensure text is required and a string
+  metadata?: any;
+  context?: any;
+  // Add other relevant fields from your schema if necessary
+}
 
 /**
- * Performs a hybrid search using both vector similarity and BM25 text search
- * @param query The search query text
- * @param limit Maximum number of results to return
- * @param threshold Minimum similarity score threshold
- * @returns Array of document chunks matching the query
+ * Insert document chunks into the document_chunks table
+ * @param chunks Array of document chunk objects to insert
+ * @returns The inserted chunks
  */
-export async function hybridSearch(query: string, limit = 5, threshold = 0.5) {
+export async function insertDocumentChunks(chunks: DocumentChunkInsertData[]) {
   try {
-    // Get vector embedding for the query using the embedText function from appropriate client
-    let embedding;
-    try {
-      // We'll import the embedText function dynamically to avoid circular dependencies
-      const { embedText } = await import('./openaiClient');
-      embedding = await embedText(query);
-    } catch (error) {
-      logError('Error generating embedding for search query', error);
-      throw new Error('Failed to generate embedding for search query');
+    if (!chunks || chunks.length === 0) {
+      logWarning('insertDocumentChunks called with empty or null chunks array.');
+      return [];
     }
 
-    // Call the hybrid_search function we defined in our Supabase schema
-    // with the correct parameter names based on the stored procedure
-    const { data, error } = await getSupabaseAdmin().rpc('hybrid_search', {
-      query_text: query,
-      query_embedding: embedding,
-      match_count: limit,
-      match_threshold: threshold,
-      vector_weight: 0.7,
-      keyword_weight: 0.3,
-      filter: {} // Empty filter to ensure we use the right overload
+    // Validate and filter chunks using reduce for better type handling
+    const validChunks = chunks.reduce((acc: DocumentChunkInsertData[], chunk: any, index: number) => {
+        // Basic structure check
+        if (!chunk || typeof chunk !== 'object') {
+            logWarning(`Invalid chunk structure at index ${index}. Skipping.`);
+            return acc;
+        }
+        // Validate required fields, especially 'text'
+        if (!chunk.document_id || typeof chunk.chunk_index !== 'number' || !chunk.embedding || typeof chunk.text !== 'string' || chunk.text.trim() === '') {
+            logWarning(`Chunk at index ${index} is missing required fields or has empty text. Skipping.`, { document_id: chunk.document_id, chunk_index: chunk.chunk_index });
+            return acc;
+        }
+
+        // Construct the valid chunk object
+        const validChunk: DocumentChunkInsertData = {
+            document_id: chunk.document_id,
+            chunk_index: chunk.chunk_index,
+            embedding: chunk.embedding,
+            text: chunk.text, // Validated text
+            metadata: chunk.metadata || {},
+            context: chunk.context || {}
+            // Map other fields if needed
+        };
+        acc.push(validChunk);
+        return acc;
+    }, [] as DocumentChunkInsertData[]); // Initialize accumulator with the correct type
+
+    if (validChunks.length === 0) {
+      logError('No valid chunks remaining after validation in insertDocumentChunks.');
+      // Decide if this should be an error or just return empty
+      // throw new Error('No valid chunks to insert after validation.');
+      return []; // Or return empty array if it's not a critical error
+    }
+
+    if (validChunks.length < chunks.length) {
+        logWarning(`Skipped ${chunks.length - validChunks.length} invalid chunks during insertion.`);
+    }
+
+    // ** Add detailed logging before insert **
+    logInfo('Attempting to insert the following valid chunks:');
+    validChunks.forEach((chunk, index) => {
+        logDebug(`Chunk ${index} - document_id: ${chunk.document_id}, chunk_index: ${chunk.chunk_index}, text length: ${chunk.text?.length}, text starts with: \'${chunk.text?.substring(0, 50)}...'`);
+        // Log the full text only if debugging extensively, as it can be large
+        // logDebug(`Chunk ${index} Full Text: ${chunk.text}`); 
     });
+    // ** End detailed logging **
+
+    const { data, error } = await getSupabaseAdmin()
+      .from('document_chunks')
+      .insert(validChunks) // Insert only the validated chunks
+      .select();
 
     if (error) {
-      logError('Supabase hybrid search error', error);
+      logError('Error inserting document chunks', error);
       throw error;
     }
 
-    logDebug(`Hybrid search found ${data?.length || 0} results for query: "${query}"`);
-    return data || [];
+    return data;
   } catch (error) {
-    logError('Error in hybrid search', error);
+    logError('Document chunks insertion failed', error);
     throw error;
   }
 }
@@ -301,34 +392,6 @@ export async function insertDocument(document: any) {
     return data;
   } catch (error) {
     logError('Document insertion failed', error);
-    throw error;
-  }
-}
-
-/**
- * Insert document chunks into the document_chunks table
- * @param chunks Array of document chunk objects to insert
- * @returns The inserted chunks
- */
-export async function insertDocumentChunks(chunks: any[]) {
-  try {
-    if (!chunks || chunks.length === 0) {
-      return [];
-    }
-
-    const { data, error } = await getSupabaseAdmin()
-      .from('document_chunks')
-      .insert(chunks)
-      .select();
-
-    if (error) {
-      logError('Error inserting document chunks', error);
-      throw error;
-    }
-
-    return data;
-  } catch (error) {
-    logError('Document chunks insertion failed', error);
     throw error;
   }
 }
@@ -440,6 +503,70 @@ export async function deleteDocument(documentId: string) {
     return true;
   } catch (error) {
     logError(`Failed to delete document with ID ${documentId}`, error);
+    throw error;
+  }
+}
+
+/**
+ * Performs a pure vector similarity search using the match_documents RPC function.
+ * 
+ * @param queryEmbedding The vector embedding of the query.
+ * @param limit Max number of results.
+ * @param options Search options including match_threshold and potential filters.
+ * @returns Array of matching VectorStoreItems with similarity scores.
+ */
+export async function vectorSearch(
+  queryEmbedding: number[],
+  limit: number = 5,
+  options?: {
+    match_threshold?: number;
+    filter_category?: string; 
+    filter_technical_level?: number;
+    filter_document_ids?: string[];
+  }
+): Promise<(VectorStoreItem & { score: number })[]> {
+  const supabase = getSupabaseAdmin();
+  const match_threshold = options?.match_threshold ?? 0.7; // Default threshold if not provided
+
+  try {
+    const { data, error } = await supabase.rpc('match_documents', {
+      query_embedding: queryEmbedding,
+      match_threshold: match_threshold,
+      match_count: limit,
+      // Pass optional filters if provided in options
+      filter_category: options?.filter_category,
+      filter_technical_level: options?.filter_technical_level,
+      filter_document_ids: options?.filter_document_ids
+    });
+
+    if (error) {
+      logError('Error calling match_documents RPC', error);
+      throw error;
+    }
+
+    if (!data) {
+      return [];
+    }
+
+    // Map results, ensuring chunk_index is now included
+    const results: (VectorStoreItem & { score: number })[] = data.map((item: any) => ({
+      id: item.id,                    // Chunk UUID
+      document_id: item.document_id,  // Document UUID
+      chunk_index: item.chunk_index,  // Chunk index (now returned by SQL)
+      text: item.text,                // Processed chunk text
+      originalText: item.original_text,// Original chunk text
+      metadata: item.metadata,        // Chunk metadata
+      context: item.context,          // Chunk context (returned by SQL)
+      // visualContent: item.visual_content, // Also available if needed
+      embedding: [], // Not returned by search
+      score: item.similarity          // Similarity score
+    }));
+
+    return results;
+
+  } catch (error) {
+    logError('Error during vectorSearch', error);
+    // Re-throw or return empty depending on desired error handling
     throw error;
   }
 }

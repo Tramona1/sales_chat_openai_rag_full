@@ -1,28 +1,19 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.splitIntoChunksWithContext = void 0;
-exports.extractText = extractText;
-exports.detectStructuredInfo = detectStructuredInfo;
-exports.splitIntoChunks = splitIntoChunks;
-exports.prepareTextForEmbedding = prepareTextForEmbedding;
-const fs_1 = __importDefault(require("fs"));
-const mammoth_1 = __importDefault(require("mammoth"));
-const pdf_parse_1 = __importDefault(require("pdf-parse"));
-const geminiClient_js_1 = require("./geminiClient.js");
+import fs from 'fs';
+import mammoth from 'mammoth';
+import pdfParse from 'pdf-parse';
+import { generateChunkContext } from './geminiClient';
+import { analyzeDocument } from './documentAnalysis';
 /**
  * Extract text content from various document formats
  * @param filePath Path to the file
  * @param mimetype MIME type of the file
  * @returns Extracted text content
  */
-async function extractText(filePath, mimetype) {
+export async function extractText(filePath, mimetype) {
     try {
         if (mimetype === 'application/pdf') {
-            const dataBuffer = fs_1.default.readFileSync(filePath);
-            const result = await (0, pdf_parse_1.default)(dataBuffer);
+            const dataBuffer = fs.readFileSync(filePath);
+            const result = await pdfParse(dataBuffer);
             return result.text;
         }
         else if (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
@@ -30,7 +21,7 @@ async function extractText(filePath, mimetype) {
             return result;
         }
         else if (mimetype === 'text/plain') {
-            return fs_1.default.promises.readFile(filePath, 'utf-8');
+            return fs.promises.readFile(filePath, 'utf-8');
         }
         else {
             throw new Error(`Unsupported file type: ${mimetype}`);
@@ -44,9 +35,9 @@ async function extractText(filePath, mimetype) {
 async function extractTextFromDoc(filePath) {
     try {
         // Read the file as a buffer
-        const fileBuffer = await fs_1.default.promises.readFile(filePath);
+        const fileBuffer = await fs.promises.readFile(filePath);
         // Use the buffer directly instead of the path
-        const result = await mammoth_1.default.extractRawText(fileBuffer);
+        const result = await mammoth.extractRawText(fileBuffer);
         return result.value;
     }
     catch (error) {
@@ -58,7 +49,7 @@ async function extractTextFromDoc(filePath) {
  * Detect if text contains structured information like company values, investors,
  * leadership, pricing, or sales-related content
  */
-function detectStructuredInfo(text) {
+export function detectStructuredInfo(text) {
     const textLower = text.toLowerCase();
     // Detect company values
     const hasCompanyValues = textLower.includes('our values') ||
@@ -155,7 +146,7 @@ function detectStructuredInfo(text) {
  * @param source Optional source metadata for context-aware chunking
  * @returns Array of text chunks with metadata
  */
-function splitIntoChunks(text, chunkSize = 500, source) {
+export function splitIntoChunks(text, chunkSize = 500, source) {
     // Remove excess whitespace
     const cleanedText = text.replace(/\s+/g, ' ').trim();
     if (cleanedText.length <= chunkSize) {
@@ -187,8 +178,8 @@ function splitIntoChunks(text, chunkSize = 500, source) {
         return [{ text: cleanedText, metadata }];
     }
     // If this is a careers or about page, we may need special handling
-    const isAboutPage = (source === null || source === void 0 ? void 0 : source.includes('/about')) || (source === null || source === void 0 ? void 0 : source.toLowerCase().includes('about us'));
-    const isCareersPage = (source === null || source === void 0 ? void 0 : source.includes('/careers')) || (source === null || source === void 0 ? void 0 : source.toLowerCase().includes('careers'));
+    const isAboutPage = source?.includes('/about') || source?.toLowerCase().includes('about us');
+    const isCareersPage = source?.includes('/careers') || source?.toLowerCase().includes('careers');
     // For career and about pages, try to locate sections for special handling
     if (isAboutPage || isCareersPage) {
         return splitStructuredContent(cleanedText, chunkSize, source);
@@ -435,7 +426,7 @@ function findLastSentence(text) {
  * @param existingContext Optional existing document context to use
  * @returns Array of chunks with contextual metadata
  */
-const splitIntoChunksWithContext = async (text, chunkSize = 500, source = 'unknown', generateContext = true, existingContext) => {
+export const splitIntoChunksWithContext = async (text, chunkSize = 500, source = 'unknown', generateContext = true, existingContext) => {
     // First, generate chunks using the standard method as a base
     const baseChunks = splitIntoChunks(text, chunkSize, source);
     // If context generation is disabled, return the base chunks
@@ -451,7 +442,9 @@ const splitIntoChunksWithContext = async (text, chunkSize = 500, source = 'unkno
         }
         else {
             console.log('Extracting document context...');
-            documentContext = await (0, geminiClient_js_1.extractDocumentContext)(text);
+            // Use the new consolidated document analysis function instead
+            const documentAnalysis = await analyzeDocument(text, source);
+            documentContext = documentAnalysis.documentContext;
             console.log('Document context extracted successfully');
         }
     }
@@ -477,14 +470,21 @@ const splitIntoChunksWithContext = async (text, chunkSize = 500, source = 'unkno
                     };
                 }
                 // Generate context for this chunk
-                const chunkContext = await (0, geminiClient_js_1.generateChunkContext)(chunk.text, documentContext);
+                const chunkContext = await generateChunkContext(chunk.text, documentContext);
                 // Create enhanced chunk with context
                 return {
                     text: chunk.text,
                     metadata: {
                         ...(chunk.metadata || {}),
                         source,
-                        context: chunkContext
+                        // Map fields from generateChunkContext and add required defaults
+                        context: {
+                            description: chunkContext.summary || '', // Use summary as description, or default
+                            keyPoints: chunkContext.keyPoints || [], // Use existing keyPoints or default
+                            isDefinition: false, // Default
+                            containsExample: false, // Default
+                            relatedTopics: [] // Default
+                        }
                     }
                 };
             }
@@ -505,57 +505,54 @@ const splitIntoChunksWithContext = async (text, chunkSize = 500, source = 'unkno
     console.log(`Enhanced ${enhancedChunks.length} chunks with contextual information`);
     return enhancedChunks;
 };
-exports.splitIntoChunksWithContext = splitIntoChunksWithContext;
 /**
- * Prepares text for embedding by incorporating contextual information
- * This is a critical part of the contextual retrieval system as it enriches the text
- * with semantic information before embedding
- *
- * @param chunk The contextual chunk containing text and metadata
+ * Prepare text for embedding by adding contextual information
+ * @param chunk Chunk with text and metadata
  * @returns Enhanced text string to be embedded
  */
-function prepareTextForEmbedding(chunk) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+export function prepareTextForEmbedding(chunk) {
+    // Convert to our extended type
+    const extendedChunk = asExtendedChunk(chunk);
     // Start with original text
-    const originalText = chunk.text;
+    const originalText = extendedChunk.text;
     const contextParts = [];
-    // Add document-level context if available
-    if ((_a = chunk.metadata) === null || _a === void 0 ? void 0 : _a.parentDocument) {
-        contextParts.push(`Document: ${chunk.metadata.parentDocument}`);
-    }
-    // Add source information if available
-    if ((_b = chunk.metadata) === null || _b === void 0 ? void 0 : _b.source) {
-        contextParts.push(`Source: ${chunk.metadata.source}`);
+    // Add source if available
+    if (extendedChunk.metadata?.source) {
+        contextParts.push(`Source: ${extendedChunk.metadata.source}`);
     }
     // --- DOCUMENT CONTEXT ---
-    if ((_d = (_c = chunk.metadata) === null || _c === void 0 ? void 0 : _c.context) === null || _d === void 0 ? void 0 : _d.document) {
-        const docContext = chunk.metadata.context.document;
-        // Add document summary
-        if (docContext.summary) {
-            contextParts.push(`Document summary: ${docContext.summary}`);
-        }
-        // Add document topics
-        if (docContext.mainTopics && docContext.mainTopics.length > 0) {
-            contextParts.push(`Document topics: ${docContext.mainTopics.join(', ')}`);
-        }
-        // Add document type and technical level
-        if (docContext.documentType) {
-            let docTypeInfo = `Document type: ${docContext.documentType}`;
-            if (docContext.technicalLevel !== undefined) {
-                const techLevelTerms = ['non-technical', 'basic', 'intermediate', 'advanced'];
-                const techLevel = techLevelTerms[Math.min(docContext.technicalLevel, 3)];
-                docTypeInfo += `, ${techLevel} level`;
+    if (extendedChunk.metadata?.context) {
+        // Convert to our extended context type
+        const extendedContext = asExtendedContext(extendedChunk.metadata.context);
+        if (extendedContext.document) {
+            const docContext = extendedContext.document;
+            // Add document summary
+            if (docContext.summary) {
+                contextParts.push(`Document summary: ${docContext.summary}`);
             }
-            contextParts.push(docTypeInfo);
-        }
-        // Add audience information
-        if (docContext.audienceType && docContext.audienceType.length > 0) {
-            contextParts.push(`Audience: ${docContext.audienceType.join(', ')}`);
+            // Add document topics
+            if (docContext.mainTopics && docContext.mainTopics.length > 0) {
+                contextParts.push(`Document topics: ${docContext.mainTopics.join(', ')}`);
+            }
+            // Add document type and technical level
+            if (docContext.documentType) {
+                let docTypeInfo = `Document type: ${docContext.documentType}`;
+                if (docContext.technicalLevel !== undefined) {
+                    const techLevelTerms = ['non-technical', 'basic', 'intermediate', 'advanced'];
+                    const techLevel = techLevelTerms[Math.min(docContext.technicalLevel, 3)];
+                    docTypeInfo += `, ${techLevel} level`;
+                }
+                contextParts.push(docTypeInfo);
+            }
+            // Add audience information
+            if (docContext.audienceType && docContext.audienceType.length > 0) {
+                contextParts.push(`Audience: ${docContext.audienceType.join(', ')}`);
+            }
         }
     }
     // --- CHUNK CONTEXT ---
-    if ((_e = chunk.metadata) === null || _e === void 0 ? void 0 : _e.context) {
-        const context = chunk.metadata.context;
+    if (extendedChunk.metadata?.context) {
+        const context = extendedChunk.metadata.context;
         // Add chunk description
         if (context.description) {
             contextParts.push(`Content: ${context.description}`);
@@ -582,8 +579,8 @@ function prepareTextForEmbedding(chunk) {
     }
     // --- VISUAL CONTENT ---
     // Add visual content information if available
-    if (((_f = chunk.metadata) === null || _f === void 0 ? void 0 : _f.hasVisualContent) && Array.isArray(chunk.visualContent) && chunk.visualContent.length > 0) {
-        const visualDescriptions = chunk.visualContent.map(visual => {
+    if (extendedChunk.metadata?.hasVisualContent && Array.isArray(extendedChunk.visualContent) && extendedChunk.visualContent.length > 0) {
+        const visualDescriptions = extendedChunk.visualContent.map((visual) => {
             let desc = `${visual.type}`;
             if (visual.description) {
                 desc += `: ${visual.description.substring(0, 100)}`;
@@ -599,8 +596,8 @@ function prepareTextForEmbedding(chunk) {
         contextParts.push(`Visual content: ${visualDescriptions.join(' | ')}`);
     }
     // Add structured info type if available
-    if (((_g = chunk.metadata) === null || _g === void 0 ? void 0 : _g.isStructured) && ((_h = chunk.metadata) === null || _h === void 0 ? void 0 : _h.infoType)) {
-        contextParts.push(`Content type: ${chunk.metadata.infoType.replace(/_/g, ' ')}`);
+    if (extendedChunk.metadata?.isStructured && extendedChunk.metadata?.infoType) {
+        contextParts.push(`Content type: ${extendedChunk.metadata.infoType.replace(/_/g, ' ')}`);
     }
     // If we have contextual parts, format them as a structured context prefix
     if (contextParts.length > 0) {
@@ -609,4 +606,12 @@ function prepareTextForEmbedding(chunk) {
     }
     // If no context is available, return the original text
     return originalText;
+}
+// Type assertion function to ensure we're using our extended interfaces
+function asExtendedChunk(chunk) {
+    return chunk;
+}
+// Type assertion function to ensure we're using our extended context interface
+function asExtendedContext(context) {
+    return context;
 }

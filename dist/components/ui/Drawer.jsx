@@ -1,39 +1,4 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importStar(require("react"));
+import React, { useEffect } from 'react';
 const Drawer = ({ children, open = false, onClose, variant = 'temporary', anchor = 'left', className = '', sx = {}, ModalProps, }) => {
     // Convert sx prop to style object
     const drawerStyles = {
@@ -46,7 +11,7 @@ const Drawer = ({ children, open = false, onClose, variant = 'temporary', anchor
         }
     };
     // Handle escape key press
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         if (variant !== 'temporary' || !open || !onClose)
             return;
         const handleEscape = (e) => {
@@ -59,7 +24,7 @@ const Drawer = ({ children, open = false, onClose, variant = 'temporary', anchor
         };
     }, [variant, open, onClose]);
     // Prevent body scroll when drawer is open
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         if (variant !== 'temporary' || !open)
             return;
         const originalStyle = window.getComputedStyle(document.body).overflow;
@@ -112,7 +77,7 @@ const Drawer = ({ children, open = false, onClose, variant = 'temporary', anchor
       </>);
     }
     // For closed temporary drawers that should remain mounted
-    if (variant === 'temporary' && !open && (ModalProps === null || ModalProps === void 0 ? void 0 : ModalProps.keepMounted)) {
+    if (variant === 'temporary' && !open && ModalProps?.keepMounted) {
         return (<div className={`
           bg-white shadow-xl fixed ${positionClasses[anchor]} ${sizeClasses[anchor]} 
           overflow-auto z-50 transition-transform transform duration-300 ease-in-out
@@ -124,4 +89,4 @@ const Drawer = ({ children, open = false, onClose, variant = 'temporary', anchor
     // Don't render if drawer is closed
     return null;
 };
-exports.default = Drawer;
+export default Drawer;

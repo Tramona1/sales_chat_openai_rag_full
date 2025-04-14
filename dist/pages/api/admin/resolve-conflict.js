@@ -1,89 +1,204 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const vectorStore_1 = require("@/utils/vectorStore");
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
+import { logError, logInfo, logWarning } from '../../../utils/logger';
+import { standardizeApiErrorResponse } from '../../../utils/errorHandling';
+import { getSupabaseAdmin } from '../../../utils/supabaseClient';
 /**
- * API endpoint to resolve content conflicts in the knowledge base
+ * API endpoint to resolve content conflicts by updating metadata
+ * in the document_chunks table using the Supabase JS client.
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method not allowed' });
     }
     try {
         const { conflictTopic, entityName, preferredDocId, deprecatedDocIds } = req.body;
-        // Validate required fields
+        // --- Input Validation --- 
         if (!preferredDocId) {
             return res.status(400).json({ message: 'Missing required field: preferredDocId' });
         }
         if (!Array.isArray(deprecatedDocIds)) {
             return res.status(400).json({ message: 'deprecatedDocIds must be an array' });
         }
-        // Get vector store data
-        const vectorStoreItems = (0, vectorStore_1.getAllVectorStoreItems)();
-        // Find preferred document
-        const preferredDoc = vectorStoreItems.find(item => { var _a; return ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) === preferredDocId; });
-        if (!preferredDoc) {
-            return res.status(404).json({ message: 'Preferred document not found' });
-        }
-        // Mark preferred document as authoritative
-        if (!preferredDoc.metadata)
-            preferredDoc.metadata = {};
-        preferredDoc.metadata.isAuthoritative = 'true';
-        // Update last edited timestamp
-        preferredDoc.metadata.lastUpdated = new Date().toISOString();
-        // Track which documents were marked as deprecated
-        const markedDocIds = [];
-        // Mark deprecated documents
-        for (const deprecatedId of deprecatedDocIds) {
-            const deprecatedDoc = vectorStoreItems.find(item => { var _a; return ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) === deprecatedId; });
-            if (deprecatedDoc) {
-                if (!deprecatedDoc.metadata)
-                    deprecatedDoc.metadata = {};
-                deprecatedDoc.metadata.isDeprecated = 'true';
-                deprecatedDoc.metadata.deprecatedBy = preferredDocId;
-                deprecatedDoc.metadata.deprecatedAt = new Date().toISOString();
-                markedDocIds.push(deprecatedId);
+        // Ensure deprecated IDs don't include the preferred ID
+        const finalDeprecatedIds = deprecatedDocIds.filter(id => id !== preferredDocId);
+        logInfo('Resolving content conflict using JS client', { preferredDocId, deprecatedDocIds: finalDeprecatedIds, conflictTopic, entityName });
+        const supabase = getSupabaseAdmin();
+        const now = new Date().toISOString();
+        const results = {
+            preferred: { status: 'pending', error: null, updatedChunkCount: 0 },
+            deprecated: { status: 'pending', error: null, updatedChunkCount: 0, ids: finalDeprecatedIds }
+        };
+        // --- 1. Update Preferred Document Chunks --- 
+        try {
+            logInfo(`Fetching chunks for preferred document: ${preferredDocId}`);
+            const { data: preferredChunks, error: fetchPreferredError } = await supabase
+                .from('document_chunks')
+                .select('id, metadata') // Select ID and existing metadata
+                .eq('document_id', preferredDocId);
+            if (fetchPreferredError)
+                throw fetchPreferredError;
+            if (!preferredChunks || preferredChunks.length === 0) {
+                results.preferred.status = 'not_found';
+                logWarning('Preferred document chunks not found', { preferredDocId });
+            }
+            else {
+                const updates = preferredChunks.map(chunk => {
+                    const currentMeta = chunk.metadata || {};
+                    const updatedMeta = {
+                        ...currentMeta,
+                        isAuthoritative: true,
+                        isDeprecated: false, // Explicitly ensure not deprecated
+                        lastUpdated: now,
+                        // Remove deprecated fields if they exist
+                        deprecatedBy: undefined,
+                        deprecatedAt: undefined
+                    };
+                    // Filter out undefined values before update
+                    Object.keys(updatedMeta).forEach(key => updatedMeta[key] === undefined && delete updatedMeta[key]);
+                    return supabase
+                        .from('document_chunks')
+                        .update({ metadata: updatedMeta })
+                        .eq('id', chunk.id);
+                });
+                logInfo(`Attempting to update ${updates.length} chunks for preferred doc: ${preferredDocId}`);
+                const updateResponses = await Promise.allSettled(updates);
+                let successfulUpdates = 0;
+                updateResponses.forEach((response, index) => {
+                    if (response.status === 'rejected') {
+                        logError('Failed to update preferred chunk', { chunkId: preferredChunks[index].id, error: response.reason });
+                        // Capture the first error message
+                        if (!results.preferred.error) {
+                            results.preferred.error = response.reason?.message || 'Unknown update error';
+                        }
+                    }
+                    else if (response.value.error) {
+                        logError('Failed to update preferred chunk (Supabase error)', { chunkId: preferredChunks[index].id, error: response.value.error });
+                        if (!results.preferred.error) {
+                            results.preferred.error = response.value.error.message || 'Supabase update error';
+                        }
+                    }
+                    else {
+                        successfulUpdates++;
+                    }
+                });
+                results.preferred.updatedChunkCount = successfulUpdates;
+                if (results.preferred.error) {
+                    results.preferred.status = 'failed';
+                }
+                else {
+                    results.preferred.status = 'updated';
+                    logInfo(`Successfully updated ${successfulUpdates} chunks for preferred doc: ${preferredDocId}`);
+                }
             }
         }
-        // Save the updated vector store to disk
-        const vectorStorePath = path_1.default.join(process.cwd(), 'data', 'vectorStore.json');
-        fs_1.default.writeFileSync(vectorStorePath, JSON.stringify({
-            items: vectorStoreItems,
-            lastUpdated: Date.now()
-        }, null, 2));
-        // Also save batches if using batch system
-        if (typeof saveVectorStore === 'function') {
-            saveVectorStore();
+        catch (error) {
+            logError('Error processing preferred document update', { preferredDocId, error });
+            results.preferred.status = 'failed';
+            results.preferred.error = error.message || 'Failed to fetch or update preferred chunks';
         }
-        // Return results
+        // --- 2. Update Deprecated Document Chunks --- 
+        if (finalDeprecatedIds.length > 0) {
+            try {
+                logInfo(`Fetching chunks for ${finalDeprecatedIds.length} deprecated documents`);
+                const { data: deprecatedChunks, error: fetchDeprecatedError } = await supabase
+                    .from('document_chunks')
+                    .select('id, metadata') // Select ID and existing metadata
+                    .in('document_id', finalDeprecatedIds);
+                if (fetchDeprecatedError)
+                    throw fetchDeprecatedError;
+                if (!deprecatedChunks || deprecatedChunks.length === 0) {
+                    results.deprecated.status = 'not_found';
+                    logWarning('Deprecated document chunks not found', { deprecatedDocIds: finalDeprecatedIds });
+                }
+                else {
+                    const updates = deprecatedChunks.map(chunk => {
+                        const currentMeta = chunk.metadata || {};
+                        const updatedMeta = {
+                            ...currentMeta,
+                            isDeprecated: true,
+                            isAuthoritative: false, // Explicitly ensure not authoritative
+                            deprecatedBy: preferredDocId,
+                            deprecatedAt: now,
+                            lastUpdated: now
+                        };
+                        return supabase
+                            .from('document_chunks')
+                            .update({ metadata: updatedMeta })
+                            .eq('id', chunk.id);
+                    });
+                    logInfo(`Attempting to update ${updates.length} chunks for ${finalDeprecatedIds.length} deprecated docs`);
+                    const updateResponses = await Promise.allSettled(updates);
+                    let successfulUpdates = 0;
+                    updateResponses.forEach((response, index) => {
+                        if (response.status === 'rejected') {
+                            logError('Failed to update deprecated chunk', { chunkId: deprecatedChunks[index].id, error: response.reason });
+                            if (!results.deprecated.error) {
+                                results.deprecated.error = response.reason?.message || 'Unknown update error';
+                            }
+                        }
+                        else if (response.value.error) {
+                            logError('Failed to update deprecated chunk (Supabase error)', { chunkId: deprecatedChunks[index].id, error: response.value.error });
+                            if (!results.deprecated.error) {
+                                results.deprecated.error = response.value.error.message || 'Supabase update error';
+                            }
+                        }
+                        else {
+                            successfulUpdates++;
+                        }
+                    });
+                    results.deprecated.updatedChunkCount = successfulUpdates;
+                    if (results.deprecated.error) {
+                        results.deprecated.status = 'failed';
+                    }
+                    else {
+                        results.deprecated.status = 'updated';
+                        logInfo(`Successfully updated ${successfulUpdates} chunks for deprecated docs`);
+                    }
+                }
+            }
+            catch (error) {
+                logError('Error processing deprecated documents update', { deprecatedDocIds: finalDeprecatedIds, error });
+                results.deprecated.status = 'failed';
+                results.deprecated.error = error.message || 'Failed to fetch or update deprecated chunks';
+            }
+        }
+        else {
+            // No deprecated IDs specified
+            results.deprecated.status = 'skipped';
+            logInfo('No deprecated documents specified, skipping update.');
+        }
+        // --- 3. Determine Final Status & Respond --- 
+        const overallSuccess = results.preferred.status !== 'failed' && results.deprecated.status !== 'failed';
+        logInfo('Conflict resolution processing finished.', { overallSuccess, preferredStatus: results.preferred.status, deprecatedStatus: results.deprecated.status });
+        // Return detailed results
         return res.status(200).json({
-            message: 'Conflict resolved successfully',
+            success: overallSuccess,
+            message: `Conflict resolution processed. Preferred: ${results.preferred.status}. Deprecated: ${results.deprecated.status} (${results.deprecated.updatedChunkCount} chunks updated for ${finalDeprecatedIds.length} IDs).`,
             topic: conflictTopic,
             entityName,
-            authoritative: preferredDocId,
-            deprecated: markedDocIds
+            preferredDocument: {
+                id: preferredDocId,
+                status: results.preferred.status,
+                updatedChunkCount: results.preferred.updatedChunkCount,
+                error: results.preferred.error
+            },
+            deprecatedDocuments: {
+                ids: finalDeprecatedIds,
+                status: results.deprecated.status,
+                updatedChunkCount: results.deprecated.updatedChunkCount,
+                error: results.deprecated.error
+            }
         });
     }
     catch (error) {
-        console.error('Error resolving conflict:', error);
+        logError('Critical error resolving conflict:', error);
+        const errorResponse = standardizeApiErrorResponse(error);
         return res.status(500).json({
-            message: 'Failed to resolve conflict',
-            error: error instanceof Error ? error.message : 'Unknown error'
+            ...errorResponse,
+            success: false,
+            message: error instanceof Error ? error.message : 'An unexpected error occurred during conflict resolution.',
+            code: 'conflict_resolution_failed'
         });
     }
 }
-// Helper function for batch save (included directly to avoid import errors)
-function saveVectorStore() {
-    try {
-        // Implement batch save logic here if needed
-        console.log('Batch save function called');
-    }
-    catch (error) {
-        console.error('Error saving vector store batches:', error);
-    }
-}
+// Remove obsolete helper function
+// function saveVectorStore() { ... } 

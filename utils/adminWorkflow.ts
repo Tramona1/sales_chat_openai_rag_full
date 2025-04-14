@@ -7,6 +7,7 @@
 
 const fs = require('fs/promises');
 const path = require('path');
+import { v4 as uuidv4 } from 'uuid';
 import { 
   EnhancedMetadata, 
   PendingDocumentMetadata,
@@ -14,18 +15,25 @@ import {
 } from '../types/metadata';
 import { logError, logInfo } from './logger';
 import { 
-  addToVectorStore, 
-  VectorStoreItem 
-} from './vectorStore';
-import { calculateCorpusStatistics, saveCorpusStatistics } from './bm25';
+  addToVectorStore
+} from './vectorStoreFactory';
+import { VectorStoreItem } from './vectorStore';
 import { DocumentCategoryType, QualityControlFlag } from './documentCategories';
 import { splitIntoChunks } from './documentProcessing';
 import { embedText, embedBatch } from './embeddingClient';
 import { serializeEntities } from './metadataUtils';
-
-// File paths for storing pending documents
-const PENDING_DIR = path.join(process.cwd(), 'data', 'pending');
-const PENDING_INDEX_FILE = path.join(PENDING_DIR, 'pending_index.json');
+import { getSupabaseAdmin } from './supabaseClient';
+import crypto from 'crypto';
+import {
+  analyzeDocument
+} from './documentAnalysis';
+import {
+  splitIntoChunksWithContext,
+  prepareTextForEmbedding
+} from './documentProcessing';
+import {
+  getEmbeddingClient
+} from './embeddingClient';
 
 // Interface for pending document in storage
 interface StoredPendingDocument {
@@ -66,154 +74,10 @@ interface ContextualChunk {
 }
 
 /**
- * Initialize the pending documents directory
- */
-async function initPendingDir(): Promise<void> {
-  try {
-    await fs.mkdir(PENDING_DIR, { recursive: true });
-    
-    // Create pending index file if it doesn't exist
-    try {
-      await fs.access(PENDING_INDEX_FILE);
-    } catch {
-      await fs.writeFile(PENDING_INDEX_FILE, JSON.stringify({ items: [] }));
-    }
-  } catch (error) {
-    logError('Failed to initialize pending documents directory', error);
-  }
-}
-
-/**
- * Get all pending documents
- */
-export async function getPendingDocuments(): Promise<StoredPendingDocument[]> {
-  await initPendingDir();
-  
-  try {
-    const indexData = await fs.readFile(PENDING_INDEX_FILE, 'utf8');
-    const index = JSON.parse(indexData);
-    return index.items || [];
-  } catch (error) {
-    logError('Failed to get pending documents', error);
-    return [];
-  }
-}
-
-/**
- * Add a document to the pending queue
- * @param text The document text
- * @param metadata Document metadata
- * @param embedding Optional document embedding
- * @param contextualChunks Optional array of contextual chunks
- * @returns Document ID
- */
-export async function addToPendingDocuments(
-  text: string,
-  metadata: EnhancedMetadata,
-  embedding?: number[] | null,
-  contextualChunks?: ContextualChunk[] | null
-): Promise<string> {
-  await initPendingDir();
-  
-  try {
-    // Create a pending document with a unique ID
-    const id = `pending_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    
-    // Create pending document metadata
-    const pendingMetadata: PendingDocumentMetadata = {
-      ...metadata,
-      submittedAt: new Date().toISOString(),
-      reviewStatus: 'pending'
-    };
-    
-    // Process chunks if not provided
-    let chunks;
-    let hasContextualChunks = false;
-    
-    if (contextualChunks && contextualChunks.length > 0) {
-      logInfo(`Using ${contextualChunks.length} provided contextual chunks for document ${id}`);
-      hasContextualChunks = true;
-      
-      // Generate embeddings for all chunks in a batch
-      const chunkTexts = contextualChunks.map(chunk => chunk.text);
-      const chunkEmbeddings = await embedBatch(chunkTexts);
-      
-      // Map embeddings back to chunks
-      chunks = contextualChunks.map((chunk, index) => ({
-        text: chunk.text,
-        embedding: chunkEmbeddings[index],
-        metadata: {
-          ...chunk.metadata,
-          source: metadata.source,
-          parentDocument: id
-        }
-      }));
-    } else {
-      logInfo('No contextual chunks provided, using standard chunking', { id });
-      // Use standard chunking as a fallback
-      const standardChunks = splitIntoChunks(text, 500, metadata.source);
-      
-      // Generate embeddings for all chunks
-      const chunkTexts = standardChunks.map(chunk => chunk.text);
-      const chunkEmbeddings = await embedBatch(chunkTexts);
-      
-      chunks = standardChunks.map((chunk, index) => ({
-        text: chunk.text,
-        embedding: chunkEmbeddings[index],
-        metadata: {
-          ...chunk.metadata,
-          source: metadata.source,
-          parentDocument: id
-        }
-      }));
-    }
-    
-    // Generate document embedding if not provided
-    const docEmbedding = embedding || await embedText(text);
-    
-    // Create the stored document
-    const pendingDocument: StoredPendingDocument = {
-      id,
-      metadata: pendingMetadata,
-      text,
-      embedding: docEmbedding,
-      chunks,
-      hasContextualChunks,
-      submittedAt: new Date().toISOString()
-    };
-    
-    // Get current pending documents
-    const pendingDocs = await getPendingDocuments();
-    
-    // Add new document
-    pendingDocs.push(pendingDocument);
-    
-    // Save updated index
-    await fs.writeFile(
-      PENDING_INDEX_FILE, 
-      JSON.stringify({ items: pendingDocs }, null, 2)
-    );
-    
-    console.log(`Added document ${id} to pending queue with ${chunks.length} chunks`);
-    return id;
-  } catch (error) {
-    logError('Failed to add document to pending queue', error);
-    throw error;
-  }
-}
-
-/**
- * Get a specific pending document by ID
- */
-export async function getPendingDocumentById(id: string): Promise<StoredPendingDocument | null> {
-  const pendingDocs = await getPendingDocuments();
-  return pendingDocs.find(doc => doc.id === id) || null;
-}
-
-/**
  * Approve or reject a pending document
- * This is a critical function that ensures BM25 corpus statistics are updated 
- * when a document is approved and added to the vector store.
+ * NOTE: This function is becoming less relevant as the API endpoints now directly
+ * update Supabase. It primarily handles the vector store addition on approval.
+ * The file-based status update part is removed.
  */
 export async function approveOrRejectDocument(
   id: string,
@@ -248,12 +112,6 @@ export async function approveOrRejectDocument(
       return doc;
     });
     
-    // Save updated index
-    await fs.writeFile(
-      PENDING_INDEX_FILE, 
-      JSON.stringify({ items: updatedDocs }, null, 2)
-    );
-    
     if (decision.approved) {
       // If approved, add to vector store
       await addApprovedDocumentToVectorStore(pendingDoc);
@@ -269,158 +127,51 @@ export async function approveOrRejectDocument(
 
 /**
  * Add an approved document to the vector store
- * This function ensures BM25 corpus statistics are updated and all Gemini-generated metadata is preserved
  */
 async function addApprovedDocumentToVectorStore(
   pendingDoc: StoredPendingDocument
 ): Promise<void> {
   try {
-    // Extract document information
-    const { id, text, embedding, metadata, chunks, hasContextualChunks } = pendingDoc;
+    // Generate a proper UUID for the document
+    const documentUuid = uuidv4();
     
-    // Log approval
-    logInfo(`Adding approved document ${id} to vector store`, {
-      hasChunks: !!chunks,
-      chunkCount: chunks?.length || 0,
-      hasContextualChunks
-    });
+    logInfo(`Converting pending document ID ${pendingDoc.id} to UUID ${documentUuid} for storage`);
     
-    // Store approval metadata
-    const approvalInfo = {
-      approvedAt: new Date().toISOString(),
-      pendingDocId: id
-    };
+    // Import the document processor
+    const { processDocument } = await import('./documentProcessor');
     
-    if (chunks && chunks.length > 0) {
-      // If we have chunks, add each chunk to the vector store
-      logInfo(`Adding ${chunks.length} chunks for document ${id}`, {
-        contextual: hasContextualChunks
-      });
-      
-      // Add each chunk to the vector store with its embedding
-      for (const chunk of chunks) {
-        // Skip chunks with no text
-        if (!chunk.text.trim()) continue;
-        
-        // Create vector store item
-        const vectorItem: VectorStoreItem = {
-          embedding: chunk.embedding || [],
-          text: chunk.text,
-          metadata: {
-            ...chunk.metadata,
-            ...(metadata as any),
-            // Add approval info and override some fields
-            ...approvalInfo,
-            // Set chunk flag
-            isChunk: true,
-            isContextualChunk: hasContextualChunks,
-            approved: true,
-            reviewStatus: 'approved',
-            // Convert entities array to string using the utility function
-            entities: serializeEntities(metadata.entities),
-            // Convert keywords array to string if needed
-            keywords: metadata.keywords && Array.isArray(metadata.keywords)
-              ? metadata.keywords.join(', ')
-              : metadata.keywords
-          }
-        };
-        
-        // Add to vector store
-        addToVectorStore(vectorItem);
+    // Process the document using the unified document processor
+    const result = await processDocument(
+      pendingDoc.text,
+      pendingDoc.metadata.source || 'admin',
+      undefined, // No MIME type since we already have the text
+      {
+        documentId: documentUuid, // Use the new UUID instead of pendingDoc.id
+        useCaching: true
       }
-      
-      // Update BM25 corpus statistics
-      await updateBM25CorpusStatistics();
-      
-      logInfo(`Successfully added ${chunks.length} chunks to vector store for document ${id}`);
-      return;
-    }
-    
-    // Fallback: add entire document as a single item
-    logInfo(`No chunks available, adding full document ${id} as single item`);
-    
-    // Create vector store item
-    const vectorItem: VectorStoreItem = {
-      embedding: embedding || [],
-      text,
-      metadata: {
-        ...(metadata as any),
-        ...approvalInfo,
-        isChunk: false,
-        approved: true,
-        reviewStatus: 'approved',
-        // Convert entities array to string using the utility function
-        entities: serializeEntities(metadata.entities),
-        // Convert keywords array to string if needed
-        keywords: metadata.keywords && Array.isArray(metadata.keywords)
-          ? metadata.keywords.join(', ')
-          : metadata.keywords
-      }
-    };
-    
-    // Add to vector store
-    addToVectorStore(vectorItem);
-    
-    // Update BM25 corpus statistics
-    await updateBM25CorpusStatistics();
-    
-    logInfo(`Successfully added document ${id} to vector store`);
-  } catch (error) {
-    logError('Failed to add approved document to vector store', error);
-    throw error;
-  }
-}
-
-/**
- * Update BM25 corpus statistics after new documents are added
- */
-export async function updateBM25CorpusStatistics(): Promise<void> {
-  try {
-    // Import vector store functions to get all items
-    const { getAllVectorStoreItems } = require('./vectorStore');
-    
-    // Get all vector store items
-    const allItems = getAllVectorStoreItems();
-    
-    console.log(`Updating BM25 corpus statistics with ${allItems.length} documents`);
-    
-    // Calculate corpus statistics
-    const corpusStats = await calculateCorpusStatistics(allItems);
-    
-    // Save updated statistics
-    await saveCorpusStatistics(corpusStats);
-    
-    console.log('BM25 corpus statistics updated successfully');
-  } catch (error) {
-    logError('Failed to update BM25 corpus statistics', error);
-    throw error;
-  }
-}
-
-/**
- * Remove a document from the pending queue
- */
-export async function removePendingDocument(id: string): Promise<boolean> {
-  try {
-    const pendingDocs = await getPendingDocuments();
-    const filteredDocs = pendingDocs.filter(doc => doc.id !== id);
-    
-    if (filteredDocs.length === pendingDocs.length) {
-      // Document not found
-      return false;
-    }
-    
-    await fs.writeFile(
-      PENDING_INDEX_FILE, 
-      JSON.stringify({ items: filteredDocs }, null, 2)
     );
     
-    console.log(`Removed document ${id} from pending queue`);
-    return true;
+    if (!result.success) {
+      throw new Error(`Document processing failed: ${result.error}`);
+    }
+    
+    logInfo(`Document ${documentUuid} successfully processed and added to vector store`);
+    logInfo(`Created ${result.chunkCount} chunks with context`);
+    
+    // After successful processing, update BM25 statistics
+    // await updateBM25CorpusStatistics(); // REMOVED - FTS function does not exist / not needed
   } catch (error) {
-    logError(`Failed to remove document ${id} from pending queue`, error);
-    return false;
+    logError('Error adding document to vector store:', error);
+    throw error;
   }
+}
+
+/**
+ * Get a specific pending document by ID
+ */
+export async function getPendingDocumentById(id: string): Promise<StoredPendingDocument | null> {
+  const pendingDocs = await getPendingDocuments();
+  return pendingDocs.find(doc => doc.id === id) || null;
 }
 
 /**
@@ -431,15 +182,21 @@ export async function checkForContentConflicts(
   text: string
 ): Promise<{ hasConflicts: boolean; conflictingDocIds: string[] }> {
   try {
-    // Check only for specific sensitive categories
+    // Check only for specific sensitive categories based on the CURRENT enum
     const sensitiveCategories = [
-      DocumentCategoryType.PRICING,
-      DocumentCategoryType.CUSTOMER,
-      DocumentCategoryType.COMPETITORS,
-      DocumentCategoryType.INTERNAL_POLICY
+      // DocumentCategoryType.PRICING, // Invalid
+      // DocumentCategoryType.CUSTOMER, // Invalid
+      // DocumentCategoryType.COMPETITORS, // Invalid
+      // DocumentCategoryType.INTERNAL_POLICY, // Invalid
+      // Add valid sensitive categories from the current enum if needed
+      DocumentCategoryType.PAYROLL,
+      DocumentCategoryType.COMPLIANCE, // Was INTERNAL_POLICY
+      DocumentCategoryType.SECURITY_PRIVACY,
+      DocumentCategoryType.HR_MANAGEMENT // Potentially sensitive employee data
+      // Add others as appropriate based on the enum definition and sensitivity
     ];
     
-    if (!sensitiveCategories.includes(metadata.primaryCategory)) {
+    if (!metadata.primaryCategory || !sensitiveCategories.includes(metadata.primaryCategory)) {
       // Non-sensitive category, no conflict check needed
       return { hasConflicts: false, conflictingDocIds: [] };
     }
@@ -517,4 +274,113 @@ export async function getPendingDocumentsStats(): Promise<{
       byStatus: {}
     };
   }
-} 
+}
+
+/**
+ * Get all pending documents from storage
+ * @returns Array of pending documents
+ */
+export async function getPendingDocuments(): Promise<StoredPendingDocument[]> {
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('documents')
+      .select('*')
+      .eq('approved', false)
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      logError('Error fetching pending documents', error);
+      return [];
+    }
+    
+    // Convert the Supabase documents to our internal format
+    return data.map((doc: any) => ({
+      id: doc.id,
+      text: doc.content,
+      metadata: doc.metadata || {},
+      embedding: doc.embedding,
+      hasContextualChunks: Boolean(doc.has_chunks),
+      submittedAt: doc.created_at
+    }));
+  } catch (error) {
+    logError('Error in getPendingDocuments', error);
+    return [];
+  }
+}
+
+/**
+ * Add a document to the pending documents queue
+ * @param text Document text content
+ * @param metadata Document metadata
+ * @param embedding Optional embedding for the document
+ * @returns The ID of the created pending document
+ */
+export async function addToPendingDocuments(
+  text: string,
+  metadata: any,
+  embedding?: number[]
+): Promise<string> {
+  try {
+    // Generate a unique ID for the document
+    const id = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
+    
+    // Store the document in Supabase
+    const supabase = getSupabaseAdmin();
+    const { error } = await supabase
+      .from('documents')
+      .insert({
+        id,
+        content: text,
+        metadata,
+        embedding,
+        approved: false,
+        created_at: timestamp,
+        updated_at: timestamp
+      });
+    
+    if (error) {
+      logError('Error adding pending document', error);
+      throw new Error(`Failed to add document to pending queue: ${error.message}`);
+    }
+    
+    logInfo('Document added to pending queue', { id });
+    return id;
+  } catch (error) {
+    logError('Error in addToPendingDocuments', error);
+    throw new Error('Failed to add document to pending queue');
+  }
+}
+
+// TODO: Add more categories as needed
+// Example: Add more specific categories if needed
+function mapCategoryToDocumentCategoryType(category: string): DocumentCategoryType {
+  switch (category) {
+    case 'Hiring & Onboarding':
+      return DocumentCategoryType.HIRING; // Or ONBOARDING if more specific
+    case 'Payroll & Compliance':
+      return DocumentCategoryType.PAYROLL; // Or COMPLIANCE
+    case 'Employee Management':
+      return DocumentCategoryType.HR_MANAGEMENT;
+    // Map old categories to new/general ones
+    case 'Pricing':
+      return DocumentCategoryType.GENERAL;
+    case 'Customer Stories': // Assuming this was the intent of CUSTOMER
+      return DocumentCategoryType.GENERAL; 
+    case 'Competitor Info': // Assuming this was the intent of COMPETITORS
+      return DocumentCategoryType.GENERAL;
+    case 'Internal Policy': // Map to COMPLIANCE
+      return DocumentCategoryType.COMPLIANCE;
+    default:
+      return DocumentCategoryType.GENERAL;
+  }
+}
+
+// Example list of categories that require manager approval
+const requiresManagerApprovalCategories = [
+  DocumentCategoryType.PAYROLL,
+  DocumentCategoryType.COMPLIANCE, // Use valid enum member
+  DocumentCategoryType.SECURITY_PRIVACY // Use valid enum member
+  // Old invalid categories removed
+]; 

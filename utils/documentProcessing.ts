@@ -2,6 +2,7 @@ import fs from 'fs';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse';
 import { extractDocumentContext, generateChunkContext } from './geminiClient';
+import { analyzeDocument } from './documentAnalysis';
 import { 
   ContextualChunk as BaseContextualChunk, 
   DocumentContext, 
@@ -517,7 +518,9 @@ export const splitIntoChunksWithContext: SplitIntoChunksWithContextFn = async (
       console.log('Using provided document context');
     } else {
       console.log('Extracting document context...');
-      documentContext = await extractDocumentContext(text);
+      // Use the new consolidated document analysis function instead
+      const documentAnalysis = await analyzeDocument(text, source);
+      documentContext = documentAnalysis.documentContext;
       console.log('Document context extracted successfully');
     }
   } catch (error) {
@@ -553,7 +556,14 @@ export const splitIntoChunksWithContext: SplitIntoChunksWithContextFn = async (
           metadata: {
             ...(chunk.metadata || {}),
             source,
-            context: chunkContext
+            // Map fields from generateChunkContext and add required defaults
+            context: {
+              description: chunkContext.summary || '', // Use summary as description, or default
+              keyPoints: chunkContext.keyPoints || [], // Use existing keyPoints or default
+              isDefinition: false, // Default
+              containsExample: false, // Default
+              relatedTopics: [] // Default
+            }
           }
         } as BaseContextualChunk;
       } catch (error) {

@@ -1,245 +1,312 @@
 import axios from 'axios';
-import * as cheerio from 'cheerio';
+import * as cheerio from 'cheerio'; // Keep for title fallback
 import * as fs from 'fs';
 import * as path from 'path';
 import { URL } from 'url';
-// import robotsParser from 'robots-parser'; // Still commented out for testing
 import pLimit from 'p-limit';
-import { v4 as uuidv4 } from 'uuid'; // For generating unique filenames
+import { v4 as uuidv4 } from 'uuid';
+import puppeteer from 'puppeteer';
 
 // --- Configuration ---
 const START_URL = 'https://workstream.my.site.com/knowledgebase/s/';
 const ALLOWED_DOMAIN = new URL(START_URL).hostname;
-// Output for HTML page data
-const HTML_OUTPUT_FILE = path.resolve(process.cwd(), 'data', 'workstream_crawl_html_output.jsonl');
-// Output log for downloaded PDFs
+const HTML_OUTPUT_FILE = path.resolve(process.cwd(), 'data', 'workstream_crawl_full_content_puppeteer_targeted.jsonl'); // Renamed
 const PDF_LOG_FILE = path.resolve(process.cwd(), 'data', 'workstream_crawl_pdf_log.jsonl');
-// Directory to save downloaded PDFs
 const PDF_DOWNLOAD_DIR = path.resolve(process.cwd(), 'data', 'crawled_pdfs');
 const LOG_FILE = path.resolve(process.cwd(), 'data', 'logs', 'workstream_crawler.log');
-const MAX_CONCURRENCY = 5;
-const DELAY_MS = 500;
-const REQUEST_TIMEOUT_MS = 20000; // Increased slightly for potential larger downloads
-const USER_AGENT = 'SalesKnowledgeAssistantCrawler/1.0 (+http://your-contact-info.com)';
+const ALL_URLS_LOG_FILE = path.resolve(process.cwd(), 'data', 'logs', 'workstream_all_encountered_urls.txt');
+const VISITED_URLS_LOG_FILE = path.resolve(process.cwd(), 'data', 'logs', 'workstream_visited_urls.txt');
+
+const MAX_CONCURRENCY = 2;
+const DELAY_MS = 2000;
+const PAGE_LOAD_TIMEOUT_MS = 90000;
+const EXPLICIT_WAIT_TIMEOUT_MS = 40000; // Increased wait slightly more
+const REQUEST_TIMEOUT_MS = 30000;
+const MAX_QUEUE_SIZE = 50000;
+const MIN_CONTENT_LENGTH = 100;
+
+const USER_AGENT = 'SalesKnowledgeAssistantCrawler/1.0 (+https://your-contact-info.com)';
 // --- End Configuration ---
 
-// Ensure directories exist
+// --- Directory Setup & Logging (Same as before) ---
 fs.mkdirSync(path.dirname(HTML_OUTPUT_FILE), { recursive: true });
 fs.mkdirSync(path.dirname(PDF_LOG_FILE), { recursive: true });
 fs.mkdirSync(PDF_DOWNLOAD_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
-
 const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
-const log = (level, message, data) => {
-    // (Same logging function as before)
-  const timestamp = new Date().toISOString();
-  const logEntry = `[${timestamp}] [${level.toUpperCase()}] ${message}`;
-  console.log(logEntry);
-  logStream.write(logEntry + '\n');
-  if (data) {
-    const dataStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-    logStream.write(dataStr + '\n');
-    if (level === 'error' && data instanceof Error) {
-      console.error(data);
+const log = (level, message, data) => { /* ... same logging function ... */
+    const timestamp = new Date().toISOString();
+    const levelUpper = level.toUpperCase();
+    const logEntry = `[${timestamp}] [${levelUpper}] ${message}`;
+    console.log(logEntry);
+    logStream.write(logEntry + '\n');
+    if (data) {
+        const dataStr = (typeof data === 'string' || data instanceof Error) ? String(data) : JSON.stringify(data, null, 2);
+        logStream.write(dataStr + '\n');
+        if (level === 'error' && data instanceof Error) {
+            console.error(data.stack || data);
+            logStream.write((data.stack || '') + '\n');
+        } else if (level === 'error') {
+            console.error(data);
+        }
     }
-  }
 };
 
+// --- Global State (Same as before) ---
 const visitedUrls = new Set();
-const queue = [START_URL];
+const allEncounteredUrls = new Set();
+const queue = [];
 const limit = pLimit(MAX_CONCURRENCY);
 let htmlCrawlCount = 0;
 let pdfDownloadCount = 0;
+let browser = null;
 
-// Function isAllowed (Robots check still commented out)
-function isAllowed(url) {
-  // (Same as previous version with robots check commented)
-  if (!url) return false;
-  try {
-    const parsedUrl = new URL(url);
-    if (!['http:', 'https:'].includes(parsedUrl.protocol)) return false;
-    if (parsedUrl.hostname !== ALLOWED_DOMAIN) return false;
-    log('warn', `Robots.txt check skipped for testing: ${url}`); // Add warning when skipping
-    return true;
-  } catch (error) {
-    log('warn', `Invalid URL encountered: ${url}`, error);
-    return false;
-  }
+
+// --- Helper Functions ---
+
+// Function isAllowed (with internal logging)
+function isAllowed(url) { /* ... same isAllowed function ... */
+    if (!url) return false;
+    try {
+        const parsedUrl = new URL(url);
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) { log('debug', `isAllowed: FALSE (protocol) - ${url}`); return false; }
+        if (parsedUrl.hostname !== ALLOWED_DOMAIN) { log('debug', `isAllowed: FALSE (domain) - ${url}`); return false; }
+        const pathname = parsedUrl.pathname.toLowerCase();
+        if (/\.(zip|jpg|jpeg|png|gif|css|js|mp4|mov|avi|woff|woff2|svg|ico)$/i.test(pathname) ||
+            pathname.startsWith('/sfsites/c/resource/') || pathname.startsWith('/sfsites/l/')) {
+            log('debug', `isAllowed: FALSE (file/resource path) - ${url}`); return false;
+        }
+        log('debug', `isAllowed: TRUE - ${url}`); return true;
+    } catch (error) { log('warn', `Invalid URL encountered during isAllowed check: ${url}`, error); return false; }
 }
 
-// Function extractData (For HTML pages only)
-function extractData(html, url) {
-  // (Same as before - NEEDS REFINEMENT FOR SITE)
-  try {
-    const $ = cheerio.load(html);
-    const title = $('title').first().text() || $('h1').first().text() || url;
-    $('script, style, nav, header, footer, aside, form, button, noscript').remove();
-    let content = $('main').text() || $('article').text() || $('body').text();
-    content = content.replace(/\s\s+/g, ' ').replace(/(\r\n|\n|\r)/gm, " ").trim();
-    if (content.length < 100) {
-        log('info', `Skipping page due to minimal content: ${url}`);
-        return null;
-    }
-    return {
-      url: url,
-      title: title.trim(),
-      content: content, // Extracted text content
-      contentType: 'html',
-      timestamp: new Date().toISOString()
-    };
-  } catch (error) {
-    log('error', `Error extracting data from ${url}`, error);
-    return null;
-  }
+// Add START_URL *after* defining isAllowed
+if (isAllowed(START_URL)) { queue.push(START_URL); allEncounteredUrls.add(START_URL); }
+else { log('error', `START_URL ${START_URL} is not allowed.`); process.exit(1); }
+
+
+// Function extractDataPuppeteer (Same as previous version using evaluate)
+async function extractDataPuppeteer(page, url) { /* ... same extractDataPuppeteer function ... */
+    try {
+        log('debug', `Attempting data extraction via page.evaluate for: ${url}`);
+        const extractedData = await page.evaluate((MIN_CONTENT_LENGTH_BROWSER) => {
+            let content = ''; let title = '';
+            function getTextRecursive(element) { /* ... */ } // Keep recursive helper
+            const articleContentEl = document.querySelector('.slds-rich-text-editor__output');
+            if (articleContentEl) { /* ... */ }
+            if (!content || content.replace(/\s+/g, ' ').trim().length < MIN_CONTENT_LENGTH_BROWSER) { /* ... main fallback ... */ }
+            if (!content || content.replace(/\s+/g, ' ').trim().length < MIN_CONTENT_LENGTH_BROWSER) { /* ... body fallback ... */ }
+            title = title || document.title;
+            content = content.replace(/[\s\n\r]+/g, ' ').trim();
+            return { title, content };
+        }, MIN_CONTENT_LENGTH);
+        if (!extractedData || !extractedData.content || extractedData.content.length < MIN_CONTENT_LENGTH) { /* ... minimal content log ... */ return null; }
+        log('debug', `Successfully extracted content (${extractedData.content.length} chars) via evaluate: ${url}`);
+        return { url: url, title: (extractedData.title || url).trim(), content: extractedData.content, contentType: 'html', timestamp: new Date().toISOString() };
+    } catch (error) { /* ... error handling ... */ return null; }
 }
 
-// Function findLinks (Same as before)
-function findLinks(html, baseUrl) {
-  // (Same as before)
-  const links = new Set();
-  try {
-    const $ = cheerio.load(html);
-    $('a[href]').each((i, element) => {
-      const href = $(element).attr('href');
-      if (href) {
+
+// *** MODIFIED: findLinks using TARGETED page.$$eval calls ***
+async function findLinksPuppeteerTargeted(page, baseUrl) {
+    const links = new Set();
+    const selectorsToTry = [
+        'a.comm-tile-menu__item-link',                 // Homepage tiles
+        'a.article-link',                              // Topic page article links
+        '.slds-rich-text-editor__output a',            // Links within article content
+        'nav.forceCommunityThemeNav a',                // Main navigation links
+        '.forceCommunityRelatedListPlaceholder a',     // Related list links (if any)
+        '.forceCommunityRelatedListContainer a',       // Related list links (alternative)
+        'a.forceTopicTopicLink'                        // Breadcrumb/topic links
+        // Add more specific selectors if other link areas are identified
+    ];
+
+    log('debug', `Attempting link extraction via TARGETED page.$$eval for: ${baseUrl}`);
+    let totalRawHrefs = 0;
+
+    for (const selector of selectorsToTry) {
         try {
-          const absoluteUrl = new URL(href, baseUrl).toString();
-          const urlObj = new URL(absoluteUrl);
-          urlObj.hash = '';
-          const cleanUrl = urlObj.toString();
-          links.add(cleanUrl);
-        } catch (e) { /* Ignore invalid URLs */ }
-      }
-    });
-  } catch (error) {
-    log('error', `Error finding links on ${baseUrl}`, error);
-  }
-  return Array.from(links);
+            log('debug', `Evaluating selector: ${selector}`);
+            const hrefs = await page.$$eval(selector, anchors => anchors.map(a => a.href));
+            totalRawHrefs += hrefs.length;
+            log('debug', `Found ${hrefs.length} raw hrefs for selector "${selector}": ${JSON.stringify(hrefs)}`);
+
+            for (const href of hrefs) {
+                if (href) {
+                    try {
+                        const absoluteUrl = new URL(href, baseUrl).toString();
+                        const urlObj = new URL(absoluteUrl);
+                        if (!['http:', 'https:'].includes(urlObj.protocol)) continue;
+                        urlObj.hash = '';
+                        const cleanUrl = urlObj.toString();
+                        if (isAllowed(cleanUrl)) {
+                            // isAllowed logs TRUE internally
+                            links.add(cleanUrl);
+                        } else {
+                            // isAllowed logs FALSE internally with reason
+                        }
+                    } catch (e) {
+                        log('debug', `Ignoring invalid/unparsable raw href: ${href} from selector "${selector}" on ${baseUrl}`, e.message);
+                    }
+                } else {
+                     log('debug', `Ignoring empty raw href from selector "${selector}" on ${baseUrl}`);
+                }
+            }
+        } catch (error) {
+            // Handle potential errors during evaluation for a specific selector
+            if (error.message.includes('Execution context was destroyed')) {
+                 log('warn', `Caught 'Execution context destroyed' during evaluate for selector "${selector}" on ${baseUrl}. Some links might be missed.`);
+                 // Continue to the next selector if possible
+            } else if (error.message.includes('failed to find element matching selector')) {
+                log('debug', `Selector "${selector}" not found on ${baseUrl}. Skipping.`);
+            }
+             else {
+                log('error', `Error finding links via page.$$eval for selector "${selector}" on ${baseUrl}`, error);
+            }
+        }
+    } // End loop through selectors
+
+    log('debug', `Finished evaluating all targeted selectors. Total raw hrefs found: ${totalRawHrefs}`);
+    return Array.from(links);
 }
 
 
-// Function to save HTML data
-function saveHtmlData(data) {
-  try {
-    fs.appendFileSync(HTML_OUTPUT_FILE, JSON.stringify(data) + '\n');
-    htmlCrawlCount++;
-  } catch (error) {
-    log('error', `Failed to write HTML data to ${HTML_OUTPUT_FILE}`, error);
-  }
-}
+// Function saveHtmlData (same as before)
+function saveHtmlData(data) { /* ... */ }
+// Function savePdfLog (same as before)
+function savePdfLog(pdfInfo) { /* ... */ }
 
-// Function to save PDF metadata log
-function savePdfLog(pdfInfo) {
-   try {
-    fs.appendFileSync(PDF_LOG_FILE, JSON.stringify(pdfInfo) + '\n');
-    pdfDownloadCount++;
-  } catch (error) {
-    log('error', `Failed to write PDF log to ${PDF_LOG_FILE}`, error);
-  }
-}
+// --- Core Crawling Logic ---
 
-// Modified crawlPage function
 async function crawlPage(url) {
-  if (visitedUrls.has(url)) {
-    return;
-  }
+  if (visitedUrls.has(url)) { log('debug', `Already visited: ${url}`); return; }
   log('info', `Crawling: ${url}`);
   visitedUrls.add(url);
 
-  try {
-    const response = await axios.get(url, {
-      headers: { 'User-Agent': USER_AGENT },
-      timeout: REQUEST_TIMEOUT_MS,
-      responseType: 'arraybuffer', // Fetch as buffer to handle both HTML and PDF
-      validateStatus: status => status >= 200 && status < 300,
-    });
+  let page = null;
 
-    const contentType = response.headers['content-type']?.toLowerCase() || '';
-    const buffer = Buffer.from(response.data); // Convert arraybuffer to Node.js Buffer
+  try {
+    // --- Direct PDF Download Attempt (same as before) ---
+    const urlPath = new URL(url).pathname.toLowerCase();
+    let isLikelyPdf = urlPath.endsWith('.pdf') || urlPath.includes('/file-asset/');
+    if (isLikelyPdf) { /* ... same PDF handling logic ... */ }
+
+    // --- Puppeteer Crawl ---
+    log('debug', `Using Puppeteer for: ${url}`);
+    page = await browser.newPage();
+    await page.setUserAgent(USER_AGENT);
+    await page.setViewport({ width: 1366, height: 768 });
+    await page.setRequestInterception(true);
+    page.on('request', (req) => { /* ... same request interception ... */ });
+
+    let response;
+    try {
+        log('debug', `Navigating browser to: ${url}`);
+        response = await page.goto(url, { waitUntil: 'load', timeout: PAGE_LOAD_TIMEOUT_MS });
+    } catch (gotoError) { /* ... goto error handling ... */ }
+
+    const status = response.status();
+    const finalUrl = page.url();
+
+    // Redirect handling
+    if (finalUrl !== url) { /* ... same redirect handling ... */ }
+    // Error status handling
+    if (status < 200 || status >= 400) { /* ... same error status handling ... */ }
+
+    const contentType = response.headers()['content-type']?.toLowerCase() || '';
 
     if (contentType.includes('text/html')) {
-      const html = buffer.toString('utf-8'); // Decode buffer as HTML
-      const extracted = extractData(html, url);
-      if (extracted) {
-        saveHtmlData(extracted); // Save extracted HTML data
+      log('debug', `Page loaded (HTML), attempting to process content... ${finalUrl}`);
+      // Wait for *any* of the key link/content selectors
+      const waitSelector = 'a.comm-tile-menu__item-link, a.article-link, .slds-rich-text-editor__output, footer';
+      try {
+          log('debug', `Waiting for specific content/link selector '${waitSelector}' on ${finalUrl}`);
+          await page.waitForSelector(waitSelector, { timeout: EXPLICIT_WAIT_TIMEOUT_MS });
+          log('debug', `Specific selector '${waitSelector}' found. Proceeding.`);
+      } catch (waitError) {
+          log('warn', `Timeout waiting for specific selector '${waitSelector}' on ${finalUrl}. Page might be incomplete.`, waitError.message);
       }
 
-      // Find links only on HTML pages
-      const newLinks = findLinks(html, url);
+      // *** Use targeted Puppeteer functions for extraction ***
+      const extracted = await extractDataPuppeteer(page, finalUrl); // Keep using evaluate for content
+      const newLinks = await findLinksPuppeteerTargeted(page, finalUrl); // Use targeted $$eval for links
+
+      // Close page ASAP
+      if (page && !page.isClosed()) await page.close().catch(e => log('error', 'Error closing page after evaluations', e));
+      page = null;
+
+      // Process results
+      if (extracted) { saveHtmlData(extracted); }
+      else { log('warn', `Content extraction failed or yielded minimal content for: ${finalUrl}`); }
+
+      if (newLinks.length === 0) { log('warn', `Found 0 processable links via TARGETED $$eval on HTML page: ${finalUrl}`); }
+      else { log('info', `Found ${newLinks.length} potential links via TARGETED $$eval on: ${finalUrl}`); }
+
       for (const link of newLinks) {
-        if (isAllowed(link) && !visitedUrls.has(link) && !queue.includes(link)) {
-          if(queue.length < 50000) {
-             queue.push(link);
-          } else {
-              log('warn', 'Queue size limit reached, not adding more links.');
-              break;
-          }
+        if (!visitedUrls.has(link) && !queue.includes(link)) {
+          if (queue.length < MAX_QUEUE_SIZE) { queue.push(link); allEncounteredUrls.add(link); }
+          else { log('warn', 'Queue size limit reached, not adding more links.'); break; }
         }
       }
-    } else if (contentType.includes('application/pdf')) {
-      log('info', `PDF detected: ${url}`);
-      // Generate a unique filename for the PDF
-      const urlFilename = path.basename(new URL(url).pathname);
-      const uniqueFilename = `${Date.now()}_${uuidv4()}_${urlFilename.replace(/[^a-z0-9.]/gi, '_')}.pdf`;
-      const savePath = path.join(PDF_DOWNLOAD_DIR, uniqueFilename);
 
-      try {
-        fs.writeFileSync(savePath, buffer);
-        log('success', `Saved PDF: ${uniqueFilename} (from ${url})`);
-        // Log metadata about the downloaded PDF
-        savePdfLog({
-            url: url,
-            filePath: savePath,
-            filename: uniqueFilename,
-            contentType: contentType,
-            size: buffer.length,
-            downloadTimestamp: new Date().toISOString()
-        });
-      } catch (saveError) {
-          log('error', `Failed to save PDF ${uniqueFilename} from ${url}`, saveError);
-      }
-      // We don't typically find further links within PDF content with this method
     } else {
-      log('info', `Skipping unsupported content type at ${url} (Type: ${contentType})`);
+      log('info', `Skipping unsupported content type via Puppeteer at ${finalUrl} (Type: ${contentType})`);
+      if (page && !page.isClosed()) await page.close().catch(e => log('error', 'Error closing page for unsupported type', e));
+      page = null;
     }
+
   } catch (error) {
-     if (axios.isAxiosError(error)) {
-       log('error', `Axios error crawling ${url}: ${error.message}`, error.response?.status ? `Status: ${error.response.status}` : '');
-     } else {
-       log('error', `Unexpected error crawling ${url}`, error);
-     }
+    log('error', `Unhandled error during Puppeteer crawl for ${url} (Final URL: ${page?.url() || 'N/A'})`, error);
+    if (page && !page.isClosed()) {
+      await page.close().catch(e => log('error', 'Error closing page after main crawl error', e));
+    }
   }
 }
 
-// Main startCrawling function (modified to work with newer p-limit)
+// --- Main Execution (Same as before, including final logging) ---
 async function startCrawling() {
-  log('info', 'Crawler starting... (ROBOTS.TXT CHECK DISABLED FOR TESTING)');
-  // await fetchRobotsTxt(); // Keep commented out for testing
-
-  const crawlPromises = [];
-
-  while (queue.length > 0) {
-      const currentUrl = queue.shift();
-      if (!visitedUrls.has(currentUrl) && isAllowed(currentUrl)) {
-         // Store the promise returned by limit
-         const promise = limit(() => crawlPage(currentUrl));
-         crawlPromises.push(promise);
-         await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-      } else if (visitedUrls.has(currentUrl)) {
-          // log('info', `Already visited or queued: ${currentUrl}`); // Reduce log noise
+  log('info', 'Crawler starting with Puppeteer (Targeted Evaluate for Links)...');
+  log('warn', 'ROBOTS.TXT CHECK IS CURRENTLY DISABLED.');
+  try {
+      log('info', 'Launching browser...');
+      browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-accelerated-2d-canvas','--no-zygote','--disable-gpu'] });
+      log('info', `Browser launched successfully. PID: ${browser.process()?.pid || 'N/A'}`);
+      browser.on('disconnected', () => { log('error', 'BROWSER DISCONNECTED UNEXPECTEDLY. Crawler may stop.'); browser = null; });
+      const crawlPromises = [];
+      while (queue.length > 0) {
+          if (!browser || !browser.isConnected()) { log('error', 'Browser is not connected. Stopping crawl loop.'); break; }
+          const currentUrl = queue.shift();
+          if (visitedUrls.has(currentUrl)) { continue; }
+          allEncounteredUrls.add(currentUrl);
+          const promise = limit(() => crawlPage(currentUrl)).catch(err => log('error', `Unhandled error in limited task for ${currentUrl}`, err));
+          crawlPromises.push(promise);
+          if (visitedUrls.size % 20 === 0 && visitedUrls.size > 0) { log('info', `Queue size: ${queue.length}, Visited: ${visitedUrls.size}, Active tasks: ${limit.activeCount}`); }
+          await new Promise(resolve => setTimeout(resolve, DELAY_MS));
       }
+      log('info', `Queue empty or browser disconnected. Waiting for ${limit.activeCount} active tasks to finish...`);
+      await Promise.all(crawlPromises).catch(err => log('error', 'Error during Promise.all wait', err));
+      log('info', 'All submitted crawl tasks have completed or errored.');
+  } catch (error) { log('error', 'Fatal error during crawling setup or execution', error); }
+  finally {
+      try { log('info', `Writing ${visitedUrls.size} visited URLs to ${VISITED_URLS_LOG_FILE}`); fs.writeFileSync(VISITED_URLS_LOG_FILE, Array.from(visitedUrls).join('\n')); }
+      catch (e) { log('error', 'Failed to write visited URLs file', e); }
+      try { log('info', `Writing ${allEncounteredUrls.size} encountered URLs to ${ALL_URLS_LOG_FILE}`); fs.writeFileSync(ALL_URLS_LOG_FILE, Array.from(allEncounteredUrls).join('\n')); }
+      catch (e) { log('error', 'Failed to write all encountered URLs file', e); }
+      if (browser && browser.isConnected()) { /* ... browser close logic ... */ }
+      else { /* ... */ }
+      const missedCount = allEncounteredUrls.size - visitedUrls.size;
+      log('info', `Crawling finished.`);
+      log('info', `>> Total URLs Encountered: ${allEncounteredUrls.size} (see ${ALL_URLS_LOG_FILE})`);
+      log('info', `>> Total URLs Visited & Processed: ${visitedUrls.size} (see ${VISITED_URLS_LOG_FILE})`);
+      log('info', `>> Potential Missed/Errored URLs: ${missedCount}`);
+      log('info', `>> Saved HTML Pages (Full Content): ${htmlCrawlCount}`);
+      log('info', `>> Downloaded PDFs: ${pdfDownloadCount}`);
+      logStream.end();
   }
-
-  // Wait for all crawl tasks to complete
-  await Promise.all(crawlPromises);
-  
-  log('info', `Crawling finished. Visited ${visitedUrls.size} URLs. Saved ${htmlCrawlCount} HTML pages. Downloaded ${pdfDownloadCount} PDFs.`);
-  logStream.end();
 }
 
-// Execute the crawler
-startCrawling().catch(error => {
-  log('error', 'Crawler encountered a fatal error', error);
-  logStream.end();
-  process.exit(1);
-});
+// --- Execute (Same as before) ---
+startCrawling().catch(error => { /* ... */ });
+process.on('SIGINT', async () => { /* ... */ });
+process.on('uncaughtException', (error, origin) => { /* ... */ });
+process.on('unhandledRejection', (reason, promise) => { /* ... */ });

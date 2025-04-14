@@ -1,4 +1,217 @@
+/**
+ * Tag Utilities
+ * 
+ * Provides standardized functions for handling tags, categories, and search filters
+ * across the application.
+ * 
+ * IMPORTANT: All components that handle document tags, categories, or keywords should use 
+ * these utility functions to ensure consistency across the platform. This includes:
+ * 
+ * - Admin interfaces (PendingDocuments, DocumentManagement)
+ * - Search functionality (hybridSearch)
+ * - API endpoints that process document metadata
+ * 
+ * Using these utilities ensures that tags are consistently normalized, deduplicated,
+ * and properly formatted, which improves search accuracy and user experience.
+ */
+
 import { Tag } from '@/types/tags';
+import { HybridSearchFilter } from './hybridSearch';
+import { DocumentCategoryType } from './documentCategories'; // Import the enum
+
+/**
+ * Standardized category options for use across all components
+ * IMPORTANT: This is the central source of truth for all category options
+ */
+export const STANDARD_CATEGORIES = [
+  // Primary Categories (Based on User Input)
+  { value: 'HIRING', label: 'Hiring' },
+  { value: 'ONBOARDING', label: 'Onboarding' },
+  { value: 'HR_MANAGEMENT', label: 'HR Management' },
+  { value: 'PAYROLL', label: 'Payroll' },
+  { value: 'COMPLIANCE', label: 'Compliance' }, 
+  { value: 'SCHEDULING', label: 'Scheduling' }, // Note: Merged Time & Scheduling
+  { value: 'RETENTION', label: 'Employee Retention' },
+  { value: 'OPTIMIZATION', label: 'Workforce Optimization' },
+  { value: 'AUTOMATION', label: 'Automation' },
+  { value: 'AI_TOOLS', label: 'AI-Powered Tools' },
+  { value: 'JOB_POSTING', label: 'Job Posting' },
+  { value: 'CANDIDATE_SCREENING', label: 'Candidate Screening' },
+  { value: 'INTERVIEW_SCHEDULING', label: 'Interview Scheduling' },
+  { value: 'REPORTING', label: 'Reporting & Analytics' },
+  { value: 'MOBILE_SOLUTIONS', label: 'Mobile-Friendly Solutions' },
+  { value: 'DOCUMENTS', label: 'Document Management' },
+  { value: 'TIME_TRACKING', label: 'Time Tracking' },
+  { value: 'TAX_COMPLIANCE', label: 'Tax Forms & Compliance' }, // e.g., WOTC, I-9
+  { value: 'ENGAGEMENT', label: 'Employee Engagement' },
+  { value: 'SECURITY_PRIVACY', label: 'Security & Privacy' },
+
+  // Secondary Categories (Based on User Input)
+  { value: 'TEXT_TO_APPLY', label: 'Text-to-Apply Features' },
+  { value: 'TWO_WAY_SMS', label: 'Two-Way SMS Communication' },
+  { value: 'BACKGROUND_CHECKS', label: 'Background Checks Integration' },
+  { value: 'SHIFT_MANAGEMENT', label: 'Shift Management Tools' },
+  { value: 'DIGITAL_SIGNATURES', label: 'Digital Signatures Collection' },
+  { value: 'CUSTOMIZABLE_TEMPLATES', label: 'Customizable Templates' }, // e.g., Offer Letters
+  { value: 'FRANCHISE_MANAGEMENT', label: 'Franchise Management Solutions' },
+  { value: 'SMALL_BUSINESS_TOOLS', label: 'Small Business Hiring Tools' },
+  { value: 'REMOTE_WORKFORCE', label: 'Remote Workforce Management' },
+  { value: 'DESKLESS_WORKFORCE', label: 'Deskless Workforce Solutions' },
+  { value: 'DIVERSITY_INCLUSION', label: 'Diversity and Inclusion Initiatives' },
+  { value: 'TEAM_COLLABORATION', label: 'Team Collaboration Tools' },
+  { value: 'CROSS_DEPT_COORDINATION', label: 'Cross-Department Coordination' },
+  { value: 'LEADERSHIP_DEV', label: 'Leadership Development Resources' },
+  { value: 'SCALABILITY', label: 'Scalability for Growing Businesses' },
+  { value: 'TRAINING_MODULES', label: 'Training Programs & Development Modules' },
+  { value: 'PERFORMANCE_TRACKING', label: 'Performance Metrics Tracking (KPIs)' },
+  { value: 'CUSTOMER_SUPPORT_INTEGRATION', label: 'Customer Support Integration' }, // e.g., Zendesk
+  { value: 'JOB_BOARD_INTEGRATIONS', label: 'Job Board Integrations' }, // e.g., Indeed, ZipRecruiter
+  { value: 'CALENDAR_INTEGRATIONS', label: 'Calendar Integrations' }, // e.g., Google Calendar
+
+  // Foundational / Other
+  { value: 'GENERAL', label: 'General / Other' } // Catch-all
+];
+
+/**
+ * Helper function to get category display label from value
+ */
+export function getCategoryLabel(value: string): string {
+  const category = STANDARD_CATEGORIES.find(cat => cat.value === value);
+  return category ? category.label : value;
+}
+
+/**
+ * Helper function to get category options for filtering
+ * Includes an "All Categories" option at the beginning
+ */
+export function getCategoryFilterOptions() {
+  return [
+    { value: 'all', label: 'All Categories' },
+    ...STANDARD_CATEGORIES
+  ];
+}
+
+/**
+ * Standard document metadata structure that all components should use
+ */
+export interface StandardDocumentMetadata {
+  primaryCategory?: string; // Keep as string here if source data might not be enum yet
+  secondaryCategories?: string[]; // Keep as string here if source data might not be enum yet
+  technicalLevel?: number;
+  keywords?: string[];
+  entities?: { name: string; type: string }[];
+  summary?: string;
+  [key: string]: any; // For extensibility
+}
+
+/**
+ * Standardized search filter structure that all components should use
+ */
+export interface StandardSearchFilter {
+  // Categories - Use the DocumentCategoryType enum now
+  primaryCategory?: DocumentCategoryType;
+  secondaryCategories?: DocumentCategoryType[];
+  
+  // Technical level
+  technicalLevelMin?: number;
+  technicalLevelMax?: number;
+  
+  // Keywords and entities
+  keywords?: string[];
+  entities?: { type: string, names: string[] }[];
+  
+  // Other filters
+  lastUpdatedAfter?: string;
+  customFilters?: Record<string, any>;
+}
+
+/**
+ * Convert standard search filter to HybridSearchFilter used by the search system
+ */
+export function toHybridSearchFilter(filter: StandardSearchFilter): HybridSearchFilter {
+  const hybridFilter: HybridSearchFilter = {};
+  
+  // Handle categories - No type error should occur now
+  if (filter.primaryCategory || (filter.secondaryCategories && filter.secondaryCategories.length > 0)) {
+    hybridFilter.primaryCategory = filter.primaryCategory;
+    hybridFilter.secondaryCategories = filter.secondaryCategories;
+  }
+  
+  // Handle technical level
+  if (filter.technicalLevelMin !== undefined) {
+    hybridFilter.technicalLevelMin = filter.technicalLevelMin;
+  }
+  if (filter.technicalLevelMax !== undefined) {
+    hybridFilter.technicalLevelMax = filter.technicalLevelMax;
+  }
+  
+  // Handle keywords
+  if (filter.keywords && filter.keywords.length > 0) {
+    hybridFilter.keywords = filter.keywords;
+  }
+  
+  // Handle entities
+  if (filter.entities && filter.entities.length > 0) {
+    // Convert entities to required entities format
+    const requiredEntities = filter.entities.flatMap(
+      entityGroup => entityGroup.names.map(name => `${entityGroup.type}:${name}`)
+    );
+    
+    if (requiredEntities.length > 0) {
+      hybridFilter.requiredEntities = requiredEntities;
+    }
+  }
+  
+  // Handle custom filters
+  if (filter.customFilters) {
+    hybridFilter.customFilters = filter.customFilters;
+  }
+  
+  return hybridFilter;
+}
+
+/**
+ * Normalize tags/keywords - handles whitespace, duplicate removal, and sorting
+ */
+export function normalizeTags(tags: string[]): string[] {
+  // Remove empty tags, trim whitespace, convert to lowercase for consistency
+  const normalizedTags = tags
+    .filter(tag => tag && tag.trim() !== '')
+    .map(tag => tag.trim().toLowerCase());
+  
+  // Remove duplicates and sort alphabetically
+  return [...new Set(normalizedTags)].sort();
+}
+
+/**
+ * Parse comma-separated tag input into an array of tags
+ */
+export function parseTagInput(input: string): string[] {
+  if (!input || input.trim() === '') {
+    return [];
+  }
+  
+  // Split by commas and normalize
+  const tags = input.split(',');
+  return normalizeTags(tags);
+}
+
+/**
+ * Extract metadata in a standardized format from a document object
+ */
+export function extractStandardMetadata(document: any): StandardDocumentMetadata {
+  // Handle both direct properties and metadata sub-object
+  const metadata = document.metadata || {};
+  
+  return {
+    primaryCategory: metadata.primaryCategory || document.primaryCategory || '',
+    secondaryCategories: metadata.secondaryCategories || document.secondaryCategories || [],
+    technicalLevel: metadata.technicalLevel || document.technicalLevel || 5,
+    keywords: metadata.keywords || document.keywords || [],
+    entities: metadata.entities || document.entities || [],
+    summary: metadata.summary || document.summary || '',
+  };
+}
 
 /**
  * Extract tags from search results

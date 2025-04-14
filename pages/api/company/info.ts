@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getCompanyInformation } from '@/utils/perplexityClient';
+import { logInfo, logWarning } from '@/utils/logger';
 
 // Feature flag check functions
 function isPerplexityEnabled(): boolean {
@@ -8,6 +9,33 @@ function isPerplexityEnabled(): boolean {
 
 function isCompanyResearchOnly(): boolean {
   return process.env.PERPLEXITY_COMPANY_RESEARCH_ONLY === 'true';
+}
+
+/**
+ * Sanitize company name to ensure it doesn't contain formatting instructions
+ * 
+ * @param companyName The company name to sanitize
+ * @returns A cleaned company name
+ */
+function sanitizeCompanyName(companyName: string): string {
+  if (!companyName) return '';
+  
+  // Check if the name contains numbering or markdown formatting
+  const formattingPattern = /^\d+\.\s*\*\*.*\*\*|^\d+\.\s+|^\*\*.*\*\*$/;
+  
+  // If it matches a formatting pattern, extract the actual name
+  if (formattingPattern.test(companyName)) {
+    // Remove numbering like "1. " and markdown formatting "**"
+    const cleanedName = companyName
+      .replace(/^\d+\.\s*/, '')  // Remove numbering
+      .replace(/\*\*/g, '')      // Remove markdown bold formatting
+      .trim();
+    
+    logWarning(`Sanitized company name from "${companyName}" to "${cleanedName}"`);
+    return cleanedName;
+  }
+  
+  return companyName.trim();
 }
 
 /**
@@ -34,6 +62,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Company name is required' });
     }
     
+    // Clean the company name before using it
+    const sanitizedCompanyName = sanitizeCompanyName(companyName);
+    
+    if (sanitizedCompanyName !== companyName) {
+      logInfo(`Company name sanitized from "${companyName}" to "${sanitizedCompanyName}"`);
+    }
+    
     // Check if we should only allow this API for company chat
     if (isCompanyResearchOnly()) {
       // Check if the request is coming from the company chat
@@ -45,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     
     // Get detailed company information
-    const companyInfo = await getCompanyInformation(companyName, options);
+    const companyInfo = await getCompanyInformation(sanitizedCompanyName, options);
     
     // Handle rate limiting
     if (companyInfo.isRateLimited) {

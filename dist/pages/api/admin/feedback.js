@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const errorHandling_1 = require("@/utils/errorHandling");
+import { logError } from '@/utils/logger';
 // In-memory storage for development (would be replaced with a database in production)
 let feedbackData = [];
 // Load initial data if available (this runs only on the server)
@@ -24,7 +21,7 @@ catch (error) {
     // Continue with empty array if loading fails
 }
 // API endpoint to handle feedback operations
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Simple authorization check (should be enhanced in production)
     const adminKey = req.headers['x-admin-key'];
     const isAuthorized = adminKey === process.env.ADMIN_API_KEY ||
@@ -42,7 +39,7 @@ async function handler(req, res) {
             }
             // Filter by session type if provided
             if (type === 'company' || type === 'general') {
-                const typeFeedback = feedbackData.filter(item => { var _a; return ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.sessionType) === type; });
+                const typeFeedback = feedbackData.filter(item => item.metadata?.sessionType === type);
                 return res.status(200).json(typeFeedback);
             }
             // Return all feedback if no filters
@@ -86,7 +83,7 @@ async function handler(req, res) {
         return res.status(405).json({ error: 'Method not allowed' });
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Feedback API error', error);
+        logError('Feedback API error', error);
         return res.status(500).json({ error: 'Internal server error' });
     }
 }

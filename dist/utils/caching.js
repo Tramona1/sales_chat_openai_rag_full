@@ -1,16 +1,9 @@
-"use strict";
 /**
  * Simple caching utility for application data
  *
  * Provides in-memory caching with expiration for API responses
  * and other frequently accessed data.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.cacheWithExpiry = cacheWithExpiry;
-exports.getFromCache = getFromCache;
-exports.invalidateCache = invalidateCache;
-exports.clearCache = clearCache;
-exports.getCacheStats = getCacheStats;
 const cache = {};
 /**
  * Store data in cache with expiration time
@@ -19,7 +12,7 @@ const cache = {};
  * @param data Data to cache
  * @param ttl Time to live in milliseconds
  */
-function cacheWithExpiry(key, data, ttl) {
+export function cacheWithExpiry(key, data, ttl) {
     const now = Date.now();
     const expiry = now + ttl;
     cache[key] = {
@@ -35,7 +28,7 @@ function cacheWithExpiry(key, data, ttl) {
  * @param key Cache key
  * @returns Cached data or null if expired/not found
  */
-function getFromCache(key) {
+export function getFromCache(key) {
     const item = cache[key];
     const now = Date.now();
     if (!item) {
@@ -56,7 +49,7 @@ function getFromCache(key) {
  *
  * @param key Cache key to invalidate
  */
-function invalidateCache(key) {
+export function invalidateCache(key) {
     if (cache[key]) {
         delete cache[key];
         console.log(`Invalidated cache for key: ${key}`);
@@ -65,7 +58,7 @@ function invalidateCache(key) {
 /**
  * Clear all items from the cache
  */
-function clearCache() {
+export function clearCache() {
     Object.keys(cache).forEach(key => {
         delete cache[key];
     });
@@ -76,7 +69,7 @@ function clearCache() {
  *
  * @returns Statistics about the cache
  */
-function getCacheStats() {
+export function getCacheStats() {
     const keys = Object.keys(cache);
     const expiryTimes = {};
     keys.forEach(key => {

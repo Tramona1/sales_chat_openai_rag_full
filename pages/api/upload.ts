@@ -8,12 +8,14 @@ import { embedText, embedBatch } from '../../utils/embeddingClient';
 import { insertDocument, insertDocumentChunks } from '../../utils/supabaseClient';
 import { VectorStoreItem } from '../../utils/vectorStore';
 import { extractText, splitIntoChunks, splitIntoChunksWithContext, prepareTextForEmbedding } from '../../utils/documentProcessing';
-import { extractDocumentContext } from '../../utils/geminiClient';
+// Replace extractDocumentContext with our new analyzeDocument function
+import { analyzeDocument } from '../../utils/documentAnalysis';
 import { getModelForTask } from '../../utils/modelConfig';
 import { DocumentContext, ContextualChunk } from '../../types/documentProcessing';
 import { ImageAnalyzer } from '../../utils/imageAnalysis/imageAnalyzer';
 import { v4 as uuidv4 } from 'uuid';
-import { logInfo, logError } from '../../utils/logger';
+import { logInfo, logError, logWarning } from '../../utils/logger';
+import { getSupabaseAdmin } from '../../utils/supabaseClient';
 
 // Add type declarations for formidable
 declare namespace formidable {
@@ -115,8 +117,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             throw new Error('Missing file path');
           }
           
-          // Use ImageAnalyzer to process the image
-          const analysisResult = await ImageAnalyzer.analyze(uploadedFile.filepath);
+          // Use ImageAnalyzer static method to process the image
+          const analysisResult = await ImageAnalyzer.analyzeImage(uploadedFile.filepath);
           
           if (analysisResult.success) {
             // Generate document context from image analysis
@@ -124,30 +126,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Create a document in Supabase
             const contentHash = generateContentHash(analysisResult.description + ' ' + analysisResult.detectedText);
-            
-            // Insert the document
-            const document = await insertDocument({
-              title: source,
-              source_url: null,
-              file_path: uploadedFile.filepath,
-              mime_type: mimetype,
-              content_hash: contentHash,
-              is_approved: true,
-              metadata: {
-                isVisualContent: true,
-                visualType: analysisResult.type,
-                documentType: imageContext.documentType,
-                documentSummary: imageContext.summary,
-                primaryTopics: imageContext.mainTopics,
-                technicalLevel: imageContext.technicalLevel,
-                audienceType: imageContext.audienceType,
-                imageMetadata: {
-                  analysisTime: analysisResult.metadata?.analysisTime,
-                  model: analysisResult.metadata?.model,
-                  analysisId: analysisResult.metadata?.analysisId
-                }
+            let document;
+            try {
+                // Insert the document
+                document = await insertDocument({
+                  title: source,
+                  source: source,
+                  file_path: uploadedFile.filepath,
+                  content_hash: contentHash,
+                  approved: false, // Set approved to false by default
+                  metadata: {
+                    isVisualContent: true,
+                    visualType: analysisResult.type,
+                    documentType: imageContext.documentType,
+                    documentSummary: imageContext.summary,
+                    primaryTopics: imageContext.mainTopics,
+                    technicalLevel: imageContext.technicalLevel,
+                    audienceType: imageContext.audienceType,
+                    imageMetadata: {
+                      analysisTime: analysisResult.metadata?.analysisTime,
+                      model: analysisResult.metadata?.model,
+                      analysisId: analysisResult.metadata?.analysisId
+                    }
+                  }
+                });
+            } catch (insertError: any) {
+              if (insertError.code === '23505' && insertError.message.includes('documents_content_hash_key')) {
+                logWarning(`Duplicate content detected for image file: ${source} (Content Hash: ${contentHash})`);
+                result = {
+                  source,
+                  status: 'duplicate',
+                  error: 'This image file has already been uploaded.',
+                  type: 'error'
+                };
+                results.push(result);
+                continue; // Move to the next file
+              } else {
+                throw insertError; // Re-throw other insertion errors
               }
-            });
+            }
             
             // Prepare text for embedding with enhanced contextual information
             const textForEmbedding = ImageAnalyzer.prepareTextForEmbedding(analysisResult);
@@ -159,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const chunk = {
               document_id: document.id,
               chunk_index: 0,
-              content: textForEmbedding,
+              text: textForEmbedding,
               embedding: embedding,
               metadata: {
                 isVisualContent: true,
@@ -177,6 +194,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               source,
               type: 'image',
               imageType: analysisResult.type,
+              status: 'pending_approval', // Add status
+              message: 'Image uploaded successfully, pending admin approval.', // Add message
               processedCount,
               summary: imageContext.summary,
               documentId: document.id
@@ -192,198 +211,140 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           const rawText = await extractText(uploadedFile.filepath, mimetype);
-          let documentContext: DocumentContext | null = null;
-          
-          // Generate content hash for deduplication
           const contentHash = generateContentHash(rawText);
           
-          // Create a document in Supabase
-          const document = await insertDocument({
-            title: source,
-            source_url: null,
-            file_path: uploadedFile.filepath,
-            mime_type: mimetype,
-            content_hash: contentHash,
-            is_approved: true,
-            metadata: {}
-          });
-          
-          logInfo(`Created document in Supabase with ID: ${document.id}`);
-          
-          // Use contextual chunking if enabled
-          if (useContextualChunking) {
-            logInfo('Using contextual chunking for document:', source);
-            
-            try {
-              // Extract document-level context using Gemini
-              documentContext = await extractDocumentContext(rawText);
-              logInfo('Document context extracted successfully');
-              
-              // Update document metadata with context
-              await insertDocument({
-                ...document,
-                metadata: {
-                  ...document.metadata,
-                  documentSummary: documentContext?.summary,
-                  documentType: documentContext?.documentType,
-                  primaryTopics: documentContext?.mainTopics,
-                  technicalLevel: documentContext?.technicalLevel,
-                  audienceType: documentContext?.audienceType
-                }
-              });
-              
-              // Create chunks with context
-              const chunks = await splitIntoChunksWithContext(
-                rawText, 
-                500, 
-                source, 
-                true, 
-                documentContext
-              );
-              
-              // Prepare chunk objects for batch insertion
-              const chunkObjects = [];
-              
-              // Prepare texts for embedding with enhanced context
-              for (let i = 0; i < chunks.length; i++) {
+          try {
+            // Check for duplicate first
+            const { data: existingDoc, error: checkError } = await getSupabaseAdmin()
+              .from('documents')
+              .select('id')
+              .eq('content_hash', contentHash)
+              .maybeSingle(); 
+
+            if (checkError && checkError.code !== 'PGRST116') { // Ignore "No rows found" error
+              throw checkError;
+            }
+
+            if (existingDoc) {
+              logWarning(`Duplicate content detected for file: ${source} (Content Hash: ${contentHash})`);
+              result = {
+                source,
+                status: 'duplicate',
+                error: 'This file has already been uploaded.',
+                type: 'error'
+              };
+              results.push(result);
+              continue; // Move to the next file
+            }
+
+            // --- Run Analysis BEFORE Inserting --- 
+            logInfo('Analyzing document before insertion:', source);
+            const documentAnalysis = await analyzeDocument(rawText, source);
+            logInfo('Document analysis completed successfully');
+
+            // Prepare the full metadata object
+            const initialMetadata = {
+                source_url: uploadedFile.originalFilename, // Example: Store original filename
+                file_path: uploadedFile.filepath,
+                mime_type: mimetype,
+                // --- Add AI Analysis Results --- 
+                documentSummary: documentAnalysis.documentContext.summary,
+                documentType: documentAnalysis.documentContext.documentType,
+                primaryTopics: documentAnalysis.documentContext.mainTopics,
+                technicalLevel: documentAnalysis.documentContext.technicalLevel,
+                audienceType: documentAnalysis.documentContext.audienceType,
+                primaryCategory: documentAnalysis.primaryCategory,
+                secondaryCategories: documentAnalysis.secondaryCategories,
+                keyTopics: documentAnalysis.keyTopics,
+                keywords: documentAnalysis.keywords,
+                confidenceScore: documentAnalysis.confidenceScore,
+                qualityFlags: documentAnalysis.qualityFlags,
+                entities: documentAnalysis.entities
+            };
+
+            // --- Create the document record with FULL metadata --- 
+            const { data: document, error: insertError } = await insertDocument({
+                title: source,
+                source: source,
+                file_path: uploadedFile.filepath,
+                content_hash: contentHash,
+                approved: false, 
+                metadata: initialMetadata // Pass the complete metadata here
+            });
+
+            if (insertError) throw insertError;
+            if (!document) throw new Error('Document insertion returned no data.');
+            logInfo(`Created document in Supabase with ID: ${document.id}`);
+
+            // --- Chunking and Embedding (using documentAnalysis context) --- 
+            let chunks;
+            let documentContext = documentAnalysis.documentContext;
+
+            if (useContextualChunking) {
+                logInfo('Using contextual chunking for document:', source);
+                chunks = await splitIntoChunksWithContext(
+                    rawText, 
+                    500, 
+                    source, 
+                    true, 
+                    documentContext 
+                );
+            } else {
+                logInfo('Using standard chunking for document:', source);
+                chunks = splitIntoChunks(rawText, 500, source);
+                documentContext = {} as DocumentContext;
+            }
+
+            // Prepare chunk objects for batch insertion
+            const chunkObjects = [];
+            processedCount = 0; // Reset count
+            for (let i = 0; i < chunks.length; i++) {
                 const chunk = chunks[i];
                 if (chunk.text.trim()) {
-                  // Prepare the text with enhanced contextual information
-                  const preparedText = prepareTextForEmbedding(chunk);
-                  
-                  // Generate embedding for the prepared text
-                  const embedding = await embedText(preparedText);
-                  
-                  // Create chunk object for Supabase
-                  chunkObjects.push({
-                    document_id: document.id,
-                    chunk_index: i,
-                    content: preparedText,
-                    embedding: embedding,
-                    metadata: {
-                      originalText: chunk.text,
-                      source: source,
-                      ...(chunk.metadata || {}),
-                      isContextualChunk: true,
-                    }
-                  });
-                  
-                  processedCount++;
+                    const preparedText = prepareTextForEmbedding(chunk);
+                    const embedding = await embedText(preparedText);
+                    chunkObjects.push({
+                        document_id: document.id,
+                        chunk_index: i,
+                        text: preparedText,
+                        embedding: embedding,
+                        metadata: {
+                            originalText: chunk.text,
+                            source: source,
+                            ...(chunk.metadata || {}),
+                            isContextualChunk: useContextualChunking,
+                        }
+                    });
+                    processedCount++;
                 }
-              }
-              
-              // Batch insert all chunks
-              if (chunkObjects.length > 0) {
+            }
+
+            // Batch insert all chunks
+            if (chunkObjects.length > 0) {
                 await insertDocumentChunks(chunkObjects);
                 logInfo(`Inserted ${chunkObjects.length} chunks for document ${document.id}`);
-              }
-              
-              result = {
+            }
+
+            result = {
                 source,
                 type: 'document',
                 documentType: documentContext?.documentType || 'unknown',
+                status: 'pending_approval', 
+                message: 'File uploaded successfully, pending admin approval.',
                 processedCount,
                 summary: documentContext?.summary,
                 documentId: document.id
-              };
-              
-            } catch (contextError) {
-              logError('Error in contextual processing, falling back to standard chunking:', contextError);
-              // Fall back to standard chunking
-              const chunks = splitIntoChunks(rawText, 500, source);
-              
-              // Prepare chunk objects for batch insertion
-              const chunkObjects = [];
-              
-              // Process chunks with standard text preparation
-              for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
-                if (chunk.text.trim()) {
-                  // Even for standard chunks, prepare the text for consistency
-                  const preparedText = prepareTextForEmbedding(chunk);
-                  
-                  // Generate embedding for the prepared text
-                  const embedding = await embedText(preparedText);
-                  
-                  // Create chunk object for Supabase
-                  chunkObjects.push({
-                    document_id: document.id,
-                    chunk_index: i,
-                    content: preparedText,
-                    embedding: embedding,
-                    metadata: {
-                      originalText: chunk.text,
-                      source: source,
-                      ...(chunk.metadata || {})
-                    }
-                  });
-                  
-                  processedCount++;
-                }
-              }
-              
-              // Batch insert all chunks
-              if (chunkObjects.length > 0) {
-                await insertDocumentChunks(chunkObjects);
-                logInfo(`Inserted ${chunkObjects.length} standard chunks for document ${document.id}`);
-              }
-              
-              result = {
-                source,
-                type: 'document',
-                processedCount,
-                standardProcessing: true,
-                documentId: document.id,
-                error: contextError.message
-              };
-            }
-          } else {
-            // Use standard chunking when contextual is not enabled
-            const chunks = splitIntoChunks(rawText, 500, source);
-            
-            // Prepare chunk objects for batch insertion
-            const chunkObjects = [];
-            
-            // Process chunks with standard text preparation
-            for (let i = 0; i < chunks.length; i++) {
-              const chunk = chunks[i];
-              if (chunk.text.trim()) {
-                // Even for standard chunks, prepare the text for consistency
-                const preparedText = prepareTextForEmbedding(chunk);
-                
-                // Generate embedding for the prepared text
-                const embedding = await embedText(preparedText);
-                
-                // Create chunk object for Supabase
-                chunkObjects.push({
-                  document_id: document.id,
-                  chunk_index: i,
-                  content: preparedText,
-                  embedding: embedding,
-                  metadata: {
-                    originalText: chunk.text,
-                    source: source,
-                    ...(chunk.metadata || {})
-                  }
-                });
-                
-                processedCount++;
-              }
-            }
-            
-            // Batch insert all chunks
-            if (chunkObjects.length > 0) {
-              await insertDocumentChunks(chunkObjects);
-              logInfo(`Inserted ${chunkObjects.length} standard chunks for document ${document.id}`);
-            }
-            
-            result = {
-              source,
-              type: 'document',
-              processedCount,
-              standardProcessing: true,
-              documentId: document.id
             };
+
+          } catch (error) {
+            // Generic error handling for the try block
+            logError(`Error processing document ${source}:`, error);
+            result = {
+                source,
+                error: error instanceof Error ? error.message : 'Unknown processing error',
+                type: 'error'
+            };
+            // We push the error result later
           }
         }
       } catch (error) {

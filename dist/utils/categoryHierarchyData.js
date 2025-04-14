@@ -1,10 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.BASE_CATEGORY_HIERARCHY = void 0;
 /**
  * Base category hierarchy used as a template for building category facets
  */
-exports.BASE_CATEGORY_HIERARCHY = [
+export const BASE_CATEGORY_HIERARCHY = [
     {
         id: 'product',
         displayName: 'Product',

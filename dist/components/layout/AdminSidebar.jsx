@@ -1,12 +1,6 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = AdminSidebar;
-const react_1 = __importDefault(require("react"));
-const link_1 = __importDefault(require("next/link"));
-const router_1 = require("next/router");
+import React from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/router';
 // Simple icon components to replace heroicons
 const HomeIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/>
@@ -28,16 +22,16 @@ const SearchIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" fill="none" vi
     <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
   </svg>);
 const SidebarItem = ({ title, href, icon, current }) => {
-    return (<link_1.default href={href} className={`flex items-center px-4 py-2 text-sm font-medium rounded-md group
+    return (<Link href={href} className={`flex items-center px-4 py-2 text-sm font-medium rounded-md group
         ${current
             ? 'bg-primary-700 text-white'
             : 'text-gray-300 hover:bg-primary-800 hover:text-white'}`}>
       <div className="mr-3">{icon}</div>
       {title}
-    </link_1.default>);
+    </Link>);
 };
-function AdminSidebar() {
-    const router = (0, router_1.useRouter)();
+export default function AdminSidebar() {
+    const router = useRouter();
     const { pathname } = router;
     const navigation = [
         {

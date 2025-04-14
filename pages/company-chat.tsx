@@ -4,7 +4,7 @@ import Head from 'next/head';
 import CompanySearch from '@/components/CompanySearch';
 import ChatInterface from '@/components/ChatInterface';
 import CompanyProfile from '@/components/CompanyProfile';
-import { CompanyInformation } from '@/utils/perplexityClient';
+import { CompanyInformation, capitalizeCompanyName, CompanySuggestion } from '@/utils/perplexityClient';
 import { ChevronLeft, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -18,9 +18,11 @@ type ChatMessage = {
 
 export default function CompanyChatPage() {
   const [companyName, setCompanyName] = useState('');
+  const [displayCompanyName, setDisplayCompanyName] = useState('');
   const [companyInfo, setCompanyInfo] = useState<CompanyInformation | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [companySuggestions, setCompanySuggestions] = useState<CompanySuggestion[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [salesNotes, setSalesNotes] = useState('');
   const [isEditingNotes, setIsEditingNotes] = useState(false);
@@ -39,16 +41,16 @@ export default function CompanyChatPage() {
       const initialMessages: ChatMessage[] = [
         {
           role: 'system',
-          content: `You are a Workstream sales assistant with information about ${companyName}. Use this context about the company to provide tailored responses about how Workstream's products can help them: ${companyInfo.companyInfo}`
+          content: `You are a Workstream sales assistant with information about ${displayCompanyName || companyName}. Use this context about the company to provide tailored responses about how Workstream's products can help them: ${companyInfo.companyInfo}`
         },
         {
           role: 'assistant',
-          content: `I've gathered information about ${companyName}. How can I help you understand how Workstream's solutions might benefit them?`
+          content: `I've gathered information about ${displayCompanyName || companyName}. How can I help you understand how Workstream's solutions might benefit them?`
         }
       ];
       setChatMessages(initialMessages);
     }
-  }, [companyInfo, companyName, chatMessages.length]);
+  }, [companyInfo, displayCompanyName, companyName, chatMessages.length]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -137,14 +139,17 @@ export default function CompanyChatPage() {
   };
 
   // Function to search for company information
-  const searchCompany = async () => {
-    if (!companyName.trim()) {
+  const searchCompany = async (nameToSearch?: string) => {
+    const searchTerm = nameToSearch || companyName;
+    
+    if (!searchTerm.trim()) {
       setSearchError('Please enter a company name');
       return;
     }
 
     setIsSearching(true);
     setSearchError('');
+    setCompanySuggestions([]);
 
     try {
       // First verify the company existence
@@ -153,15 +158,28 @@ export default function CompanyChatPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ companyName }),
+        body: JSON.stringify({ companyName: searchTerm }),
       });
 
       const verifyData = await verifyResponse.json();
 
       if (!verifyData.exists) {
-        setSearchError(`Couldn't find information about ${companyName}. Please check the spelling or try a different company.`);
+        let errorMessage = `Couldn't find information about ${nameToSearch || displayCompanyName || companyName}. Please check the spelling or try a different company.`;
+        
+        // Store suggestions if any are returned
+        if (verifyData.suggestions && verifyData.suggestions.length > 0) {
+          setCompanySuggestions(verifyData.suggestions);
+          errorMessage = `Couldn't find "${nameToSearch || displayCompanyName || companyName}".`;
+        }
+        
+        setSearchError(errorMessage);
         setIsSearching(false);
         return;
+      }
+
+      // Update display name with the properly capitalized full company name
+      if (verifyData.fullName) {
+        setDisplayCompanyName(verifyData.fullName);
       }
 
       // Then get detailed information
@@ -170,7 +188,7 @@ export default function CompanyChatPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ companyName: verifyData.fullName || companyName }),
+        body: JSON.stringify({ companyName: verifyData.fullName || searchTerm }),
       });
 
       const companyData = await infoResponse.json();
@@ -213,7 +231,7 @@ export default function CompanyChatPage() {
           options: {
             companyContext: {
               ...companyInfo,
-              companyName: companyName,
+              companyName: displayCompanyName || companyName,
               salesNotes: salesNotes.trim() ? salesNotes : undefined
             },
           }
@@ -277,7 +295,7 @@ export default function CompanyChatPage() {
           messageIndex,
           sessionId: sessionId,
           metadata: {
-            companyName: companyName,
+            companyName: displayCompanyName || companyName,
             sources: [],  // Populate with actual source data when available
             companyIndustry: companyInfo?.industry
           }
@@ -301,7 +319,7 @@ export default function CompanyChatPage() {
         const updatedMessages = [...chatMessages];
         updatedMessages[systemMessageIndex] = {
           role: 'system',
-          content: `You are a Workstream sales assistant with information about ${companyName}. 
+          content: `You are a Workstream sales assistant with information about ${displayCompanyName || companyName}. 
 Use this context about the company to provide tailored responses about how Workstream's products can help them: 
 ${companyInfo.companyInfo}
 
@@ -311,7 +329,6 @@ ${salesNotes.trim() ? salesNotes : "No additional notes provided."}`
         setChatMessages(updatedMessages);
       }
     }
-    setIsEditingNotes(false);
     
     // Save session with updated notes
     saveChatSession();
@@ -325,6 +342,7 @@ ${salesNotes.trim() ? salesNotes : "No additional notes provided."}`
     }
     
     setCompanyName('');
+    setDisplayCompanyName('');
     setCompanyInfo(null);
     setChatMessages([]);
     setSalesNotes('');
@@ -357,6 +375,20 @@ ${salesNotes.trim() ? salesNotes : "No additional notes provided."}`
     }
   };
 
+  // Handle company name input change
+  const handleCompanyNameChange = (value: string) => {
+    setCompanyName(value);
+    // Update display name with proper capitalization
+    setDisplayCompanyName(value ? capitalizeCompanyName(value) : '');
+  };
+
+  // Function to handle a suggestion click
+  const handleSuggestionClick = (suggestion: CompanySuggestion) => {
+    setCompanyName(suggestion.name);
+    setDisplayCompanyName(capitalizeCompanyName(suggestion.name));
+    searchCompany(suggestion.name);
+  };
+
   return (
     <div className="flex flex-col h-screen bg-[#343541]">
       {/* Header */}
@@ -367,7 +399,7 @@ ${salesNotes.trim() ? salesNotes : "No additional notes provided."}`
             <span>Back to Hub</span>
           </Link>
         </div>
-        <h1 className="text-xl font-semibold text-center flex-1">Company-Specific Assistant</h1>
+        <h1 className="text-xl font-semibold text-center flex-1">Workstream Knowledge Assistant</h1>
         <div className="w-24 flex justify-end">
           <button 
             onClick={() => router.push('/chat')}
@@ -389,12 +421,33 @@ ${salesNotes.trim() ? salesNotes : "No additional notes provided."}`
             
             <CompanySearch
               companyName={companyName}
-              onChange={setCompanyName}
+              onChange={handleCompanyNameChange}
               onSearch={searchCompany}
               isSearching={isSearching}
               error={searchError}
               darkMode={true}
             />
+            
+            {/* Display company suggestions if available */}
+            {companySuggestions.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-700">
+                <h3 className="text-md font-medium text-gray-300 mb-2">Did you mean:</h3>
+                <div className="space-y-2">
+                  {companySuggestions.map((suggestion, index) => (
+                    <button
+                      key={index}
+                      onClick={() => handleSuggestionClick(suggestion)}
+                      className="w-full text-left px-3 py-2 rounded-md bg-[#3e3f4b] hover:bg-[#4e4f5b] transition-colors flex justify-between items-center"
+                    >
+                      <span>{suggestion.name}</span>
+                      <span className="text-xs text-gray-400">
+                        {Math.round(suggestion.confidence * 100)}% match
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex flex-col h-full">
@@ -402,9 +455,9 @@ ${salesNotes.trim() ? salesNotes : "No additional notes provided."}`
             <div className="bg-[#2a2b32] text-white border-b border-gray-700 p-4 space-y-4">
               {/* Company Profile */}
               <div className="flex justify-between items-center">
-                <div>
-                  <h2 className="text-xl font-bold">{companyName}</h2>
-                  <div className="flex space-x-4 text-sm text-gray-300 mt-1">
+                <div className="flex-1 pr-4">
+                  <h2 className="text-xl font-bold">{displayCompanyName || companyName}</h2>
+                  <div className="flex flex-wrap text-sm text-gray-300 mt-1 gap-x-4">
                     {companyInfo.industry && <span>{companyInfo.industry}</span>}
                     {companyInfo.size && <span>• {companyInfo.size}</span>}
                     {companyInfo.location && <span>• {companyInfo.location}</span>}
@@ -412,44 +465,50 @@ ${salesNotes.trim() ? salesNotes : "No additional notes provided."}`
                 </div>
                 <button
                   onClick={resetChat}
-                  className="px-3 py-1 bg-[#3e3f4b] hover:bg-[#4e4f5b] rounded-md text-sm text-white"
+                  className="px-3 py-1 bg-[#3e3f4b] hover:bg-[#4e4f5b] rounded-md text-sm text-white flex-shrink-0"
                 >
                   New Search
                 </button>
               </div>
               
               {/* Sales Notes Section */}
-              <div className="flex items-center justify-between">
+              <div>
                 <div className="text-sm text-gray-300">
                   <span className="font-medium">Sales Notes:</span>
                   {isEditingNotes ? (
-                    <textarea
-                      ref={notesRef}
-                      value={salesNotes}
-                      onChange={(e) => setSalesNotes(e.target.value)}
-                      className="w-full h-16 mt-2 p-2 bg-[#3e3f4b] border border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="Add your notes about this company here. These notes will be used to inform responses."
-                    />
+                    <div className="mt-2 relative">
+                      <textarea
+                        ref={notesRef}
+                        value={salesNotes}
+                        onChange={(e) => setSalesNotes(e.target.value)}
+                        onBlur={() => {
+                          setIsEditingNotes(false);
+                          saveNotes();
+                        }}
+                        className="w-full h-20 p-2 bg-[#3e3f4b] border border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Add your notes about this company here. These notes will be used to inform responses."
+                        autoFocus
+                      />
+                    </div>
                   ) : (
-                    <span className="ml-2">
-                      {salesNotes ? salesNotes.substring(0, 60) + (salesNotes.length > 60 ? '...' : '') : 
-                        <span className="italic text-gray-500">No notes added</span>}
-                    </span>
+                    <div 
+                      onClick={() => {
+                        setIsEditingNotes(true);
+                        setTimeout(() => notesRef.current?.focus(), 0);
+                      }}
+                      className="ml-2 inline-block cursor-pointer hover:bg-[#3e3f4b] p-1 rounded transition-colors"
+                    >
+                      {salesNotes ? (
+                        salesNotes
+                      ) : (
+                        <span className="italic text-gray-500 flex items-center">
+                          <span>No notes added</span>
+                          <span className="ml-2 text-xs text-blue-400">(click to add)</span>
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
-                <button
-                  onClick={() => {
-                    setIsEditingNotes(!isEditingNotes);
-                    if (!isEditingNotes) {
-                      setTimeout(() => notesRef.current?.focus(), 0);
-                    } else {
-                      saveNotes();
-                    }
-                  }}
-                  className="px-3 py-1 bg-[#3e3f4b] hover:bg-[#4e4f5b] rounded-md text-sm text-white"
-                >
-                  {isEditingNotes ? 'Save Notes' : 'Edit Notes'}
-                </button>
               </div>
             </div>
             

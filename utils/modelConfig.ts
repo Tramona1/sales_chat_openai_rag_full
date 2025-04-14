@@ -52,16 +52,16 @@ export const AI_SETTINGS: ModelSettings = {
   temperature: 0.7,
   
   // Default system prompt for RAG queries
-  systemPrompt: `You are an AI assistant for the sales team. 
+  systemPrompt: `You are an AI assistant for the sales team for Workstream. Workstream is a leading HR, payroll, and hiring platform designed specifically for managing the hourly workforce, offering a suite of tools that automate hiring, onboarding, scheduling, and payroll processes to streamline operations for businesses across various industries. By integrating these functions into a mobile-first platform, Workstream helps companies reduce labor costs, improve compliance, and enhance employee engagement.
 Answer the question based ONLY on the context provided. 
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.
 Provide concise, accurate responses with all relevant details from the context.`,
 
   // Updated contextual generation model settings for multi-modal RAG
   contextGenerationModel: {
     provider: 'gemini',
-    model: 'gemini-2.0-flash', // Fast model for context generation
+    model: 'gemini-2.0-flash',
     temperature: 0.2,
     maxTokens: 1024
   },
@@ -69,7 +69,7 @@ Provide concise, accurate responses with all relevant details from the context.`
   // Updated reranker model settings for visual content awareness
   rerankerModel: {
     provider: 'gemini',
-    model: 'gemini-2.0-flash', // Use Flash model since Pro is not available
+    model: 'gemini-2.0-flash',
     temperature: 0.1
   }
 };
@@ -83,19 +83,19 @@ export const SYSTEM_PROMPTS = {
   technical: `You are an AI assistant for the sales team specializing in technical questions.
 Answer the question based ONLY on the context provided.
 Use technical language and be precise in your explanations.
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.`,
   
   sales: `You are an AI assistant for the sales team specializing in sales queries.
 Answer the question based ONLY on the context provided.
 Focus on value propositions, competitive advantages, and addressing customer pain points.
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.`,
   
   pricing: `You are an AI assistant for the sales team specializing in pricing questions.
 Answer the question based ONLY on the context provided.
 Be very precise about pricing details, plans, and subscription options.
-If the answer cannot be determined from the context, say "I don't have enough information to answer this question."
+If the answer cannot be determined from the context, say "I don't have enough information to answer this question, please add more training information to help me learn."
 Do not make up or infer information that is not in the context.`
 };
 

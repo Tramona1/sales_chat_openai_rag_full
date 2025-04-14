@@ -3,6 +3,7 @@ import Dialog from '@/components/ui/Dialog';
 import Button from '@/components/ui/Button';
 import TextField from '@/components/ui/TextField';
 import Select from '@/components/ui/Select';
+import { getCategoryFilterOptions } from '@/utils/tagUtils';
 
 export interface DocumentToEdit {
   id: string;
@@ -85,15 +86,8 @@ const EditDocumentModal: React.FC<EditDocumentModalProps> = ({
     }
   };
 
-  const categoryOptions = [
-    { value: 'product', label: 'Product' },
-    { value: 'company', label: 'Company' },
-    { value: 'technical', label: 'Technical' },
-    { value: 'pricing', label: 'Pricing' },
-    { value: 'competitors', label: 'Competitors' },
-    { value: 'support', label: 'Support' },
-    { value: 'uncategorized', label: 'Uncategorized' },
-  ];
+  // Use the standardized categories from tagUtils
+  const categoryOptions = getCategoryFilterOptions().filter(option => option.value !== 'all');
 
   const techLevelOptions = [
     { value: '0', label: 'Non-technical (0)' },

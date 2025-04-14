@@ -1,23 +1,19 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.handleQuery = handleQuery;
-exports.default = handler;
-const hybridSearch_1 = require("@/utils/hybridSearch");
-const openaiClient_1 = require("@/utils/openaiClient");
+import { hybridSearch, fallbackSearch } from '@/utils/hybridSearch';
+import { generateChatCompletion } from '@/utils/openaiClient';
 /**
  * Handle user query and generate response
  */
-async function handleQuery(query) {
+export async function handleQuery(query) {
     try {
         console.log(`Processing query: ${query}`);
         // First try standard search (excluding deprecated docs by default)
-        let searchResponse = await (0, hybridSearch_1.hybridSearch)(query);
-        let searchResults = Array.from(searchResponse); // Use iterator protocol for backward compatibility
+        let searchResponse = await hybridSearch(query);
+        let searchResults = searchResponse.results || [];
         // If no results, try fallback search
         if (searchResults.length === 0) {
             console.log('No results from primary search, trying fallback search');
-            const fallbackResponse = await (0, hybridSearch_1.fallbackSearch)(query);
-            searchResults = Array.from(fallbackResponse);
+            const fallbackResponse = await fallbackSearch(query);
+            searchResults = fallbackResponse || [];
         }
         // If still no results, return a no-results message
         if (searchResults.length === 0) {
@@ -30,18 +26,19 @@ async function handleQuery(query) {
         }
         // Prepare context from search results
         const context = searchResults
+            .slice(0, 10)
             .map(item => {
-            var _a, _b, _c;
-            const source = ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) || 'unknown';
-            const lastUpdated = ((_b = item.metadata) === null || _b === void 0 ? void 0 : _b.lastUpdated)
-                ? `(Last updated: ${new Date(item.metadata.lastUpdated).toLocaleDateString()})`
+            const metadata = item.metadata || {};
+            const source = metadata.source || 'unknown';
+            const lastUpdated = metadata.lastUpdated
+                ? `(Last updated: ${new Date(metadata.lastUpdated).toLocaleDateString()})`
                 : '';
-            const authoritative = ((_c = item.metadata) === null || _c === void 0 ? void 0 : _c.isAuthoritative) === 'true'
-                ? ' [AUTHORITATIVE SOURCE]'
-                : '';
-            return `SOURCE [${source}]${authoritative}${lastUpdated}:\n${item.text}\n`;
+            const authoritative = metadata.isAuthoritative === 'true'
+                ? ' [AUTHORITATIVE]' : '';
+            const textContent = typeof item.text === 'string' ? item.text : '';
+            return `SOURCE [${source}]${authoritative}${lastUpdated}:\n${textContent}\n`;
         })
-            .join('\n\n');
+            .join('\n---\n');
         // Create prompt for LLM
         const systemPrompt = `You are a helpful AI assistant that accurately answers user questions 
 based on the context provided. If the context doesn't contain the relevant information, 
@@ -52,10 +49,10 @@ Prioritize information from sources marked as "AUTHORITATIVE SOURCE" when there 
 Use the most recently updated information when available.`;
         const userPrompt = `CONTEXT:\n${context}\n\nQUESTION: ${query}\n\nAnswer the question based only on the provided context. Include relevant SOURCE references.`;
         // Generate answer using LLM
-        const answer = await (0, openaiClient_1.generateChatCompletion)(systemPrompt, userPrompt);
+        const answer = await generateChatCompletion(systemPrompt, userPrompt);
         // Extract sources from results
         const sources = searchResults
-            .map(item => { var _a; return ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.source) || ''; })
+            .map(item => item.metadata?.source || '')
             .filter(source => source !== '');
         // Return the answer and sources
         return {
@@ -77,7 +74,7 @@ Use the most recently updated information when available.`;
 /**
  * API handler for chat answers
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Only allow POST requests
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method not allowed' });

@@ -1,49 +1,11 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importStar(require("react"));
-const Chip_1 = __importDefault(require("../ui/Chip"));
-const Button_1 = __importDefault(require("../ui/Button"));
+import React, { useState, useEffect } from 'react';
+import Chip from '../ui/Chip';
+import Button from '../ui/Button';
 const CategoryBrowser = ({ categories, selectedPath, onSelectCategory, loading = false, }) => {
-    const [currentCategories, setCurrentCategories] = (0, react_1.useState)(categories);
-    const [breadcrumbs, setBreadcrumbs] = (0, react_1.useState)([]);
+    const [currentCategories, setCurrentCategories] = useState(categories);
+    const [breadcrumbs, setBreadcrumbs] = useState([]);
     // When selected path or categories change, update the view
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         if (!categories || categories.length === 0)
             return;
         if (!selectedPath || selectedPath.length === 0) {
@@ -108,20 +70,20 @@ const CategoryBrowser = ({ categories, selectedPath, onSelectCategory, loading =
     return (<div className="category-browser">
       {/* Breadcrumb navigation */}
       {selectedPath.length > 0 && (<div className="flex items-center mb-4 overflow-x-auto whitespace-nowrap pb-2">
-          <Button_1.default variant="outline" size="small" onClick={handleGoToRoot} className="mr-2">
+          <Button variant="outline" size="small" onClick={handleGoToRoot} className="mr-2">
             All Categories
-          </Button_1.default>
+          </Button>
           
-          {breadcrumbs.map((crumb, index) => (<react_1.default.Fragment key={crumb.id}>
+          {breadcrumbs.map((crumb, index) => (<React.Fragment key={crumb.id}>
               <span className="mx-1 text-gray-400">/</span>
-              <Button_1.default variant="outline" size="small" onClick={() => handleBreadcrumbClick(index)} className={index === breadcrumbs.length - 1 ? 'font-bold' : ''}>
+              <Button variant="outline" size="small" onClick={() => handleBreadcrumbClick(index)} className={index === breadcrumbs.length - 1 ? 'font-bold' : ''}>
                 {crumb.name}
-              </Button_1.default>
-            </react_1.default.Fragment>))}
+              </Button>
+            </React.Fragment>))}
           
-          {selectedPath.length > 0 && (<Button_1.default variant="outline" size="small" onClick={handleGoUp} className="ml-auto">
+          {selectedPath.length > 0 && (<Button variant="outline" size="small" onClick={handleGoUp} className="ml-auto">
               Go Up
-            </Button_1.default>)}
+            </Button>)}
         </div>)}
       
       {/* Categories grid */}
@@ -131,7 +93,7 @@ const CategoryBrowser = ({ categories, selectedPath, onSelectCategory, loading =
           {currentCategories.map(category => (<div key={category.id} onClick={() => handleCategoryClick(category)} className="p-4 border rounded-lg shadow-sm transition-all hover:shadow-md cursor-pointer" style={{ borderLeft: `4px solid ${category.color}` }}>
               <div className="flex justify-between items-start mb-2">
                 <h3 className="text-lg font-medium">{category.displayName}</h3>
-                <Chip_1.default label={`${category.documentCount}`} variant="outlined" size="small" color="primary"/>
+                <Chip label={`${category.documentCount}`} variant="outlined" size="small" color="primary"/>
               </div>
               <p className="text-sm text-gray-600 line-clamp-2">{category.description}</p>
               
@@ -146,4 +108,4 @@ const CategoryBrowser = ({ categories, selectedPath, onSelectCategory, loading =
         </div>)}
     </div>);
 };
-exports.default = CategoryBrowser;
+export default CategoryBrowser;

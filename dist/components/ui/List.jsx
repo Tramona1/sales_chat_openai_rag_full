@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const List = ({ children, className = '', disablePadding = false, dense = false, subheader }) => {
     return (<ul className={`
         ${!disablePadding ? 'py-2' : ''}
@@ -14,4 +9,4 @@ const List = ({ children, className = '', disablePadding = false, dense = false,
       {children}
     </ul>);
 };
-exports.default = List;
+export default List;

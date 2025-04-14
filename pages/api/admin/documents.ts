@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { standardizeApiErrorResponse } from '../../../utils/errorHandling';
 import { logInfo, logError } from '../../../utils/logger';
-import { supabaseAdmin } from '../../../utils/supabaseClient';
+import { getSupabaseAdmin } from '../../../utils/supabaseClient';
 
 // Extended metadata interface that includes common date fields
 interface ExtendedMetadata {
@@ -19,57 +19,87 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get search parameters
+    // Get search and filtering parameters
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
+    const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+    const offset = (page - 1) * limit;
     const searchTerm = req.query.search ? (req.query.search as string).toLowerCase() : '';
+    const searchContent = req.query.searchContent === 'true';
     const contentType = req.query.contentType as string | undefined;
-    const recentlyApproved = req.query.recentlyApproved === 'true';
+    const category = req.query.category as string | undefined;
+    const approved = req.query.approved;
+    const startDate = req.query.startDate as string | undefined;
+    const endDate = req.query.endDate as string | undefined;
     
-    logInfo('Fetching documents from Supabase');
+    logInfo('Fetching documents from Supabase with filters', {
+      limit, page, searchTerm, category, approved, contentType
+    });
+    
+    // Get Supabase client
+    const supabase = getSupabaseAdmin();
     
     // Build the query
-    let query = supabaseAdmin
+    let query = supabase
       .from('documents')
       .select(`
         id,
         title,
-        source_url,
-        mime_type,
+        source,
         created_at,
         updated_at,
+        approved,
         metadata,
-        document_chunks (
-          id,
-          chunk_index,
-          content,
-          metadata
-        )
-      `);
+        document_chunks!document_chunks_document_id_fkey (count)
+      `, { count: 'exact' });
     
     // Apply search term filter if provided
     if (searchTerm) {
       logInfo(`Filtering by search term: ${searchTerm}`);
-      query = query.or(`title.ilike.%${searchTerm}%,source_url.ilike.%${searchTerm}%,document_chunks.content.ilike.%${searchTerm}%`);
+      
+      if (searchContent) {
+        // Search in document chunks content as well (more resource intensive)
+        query = query.or(`title.ilike.%${searchTerm}%,source.ilike.%${searchTerm}%,document_chunks.text.ilike.%${searchTerm}%`);
+      } else {
+        // Search only in document metadata
+        query = query.or(`title.ilike.%${searchTerm}%,source.ilike.%${searchTerm}%,metadata->>'summary'.ilike.%${searchTerm}%`);
+      }
     }
     
     // Apply content type filter if provided
     if (contentType && contentType !== 'all') {
       logInfo(`Filtering by content type: ${contentType}`);
-      query = query.eq('mime_type', contentType);
+      query = query.contains('metadata', { contentType });
     }
     
-    // Apply recently approved filter if requested
-    if (recentlyApproved) {
-      logInfo('Filtering recently approved documents');
-      const oneDayAgo = new Date();
-      oneDayAgo.setDate(oneDayAgo.getDate() - 1);
-      query = query.gt('updated_at', oneDayAgo.toISOString());
+    // Apply category filter if provided
+    if (category && category !== 'all') {
+      logInfo(`Filtering by category: ${category}`);
+      query = query.eq('metadata->>primaryCategory', category);
     }
+    
+    // Apply approval status filter if provided
+    if (approved === 'true') {
+      query = query.eq('approved', true);
+    } else if (approved === 'false') {
+      query = query.eq('approved', false);
+    }
+    
+    // Apply date range filters if provided
+    if (startDate) {
+      query = query.gte('created_at', startDate);
+    }
+    
+    if (endDate) {
+      query = query.lte('created_at', endDate);
+    }
+    
+    // Apply pagination
+    query = query
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + limit - 1);
     
     // Execute the query
-    const { data: documentsData, error: documentsError, count } = await query
-      .order('updated_at', { ascending: false })
-      .limit(limit);
+    const { data: documentsData, error: documentsError, count } = await query;
     
     if (documentsError) {
       throw documentsError;
@@ -79,23 +109,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     // Format documents for the UI
     const documents = documentsData?.map(doc => {
-      // Get a sample of the document content from its chunks
-      const firstChunk = doc.document_chunks && doc.document_chunks.length > 0 
-        ? doc.document_chunks[0].content 
-        : '';
-      
       return {
         id: doc.id,
-        source: doc.title || doc.source_url || 'Unknown Source',
-        text: firstChunk,
-        metadata: {
-          ...doc.metadata,
-          source: doc.title || doc.source_url || 'Unknown Source',
-          mimeType: doc.mime_type,
-          createdAt: doc.created_at,
-          updatedAt: doc.updated_at,
-          chunkCount: doc.document_chunks?.length || 0
-        }
+        title: doc.title || 'Untitled',
+        source: doc.source || 'Unknown Source',
+        approved: doc.approved,
+        created_at: doc.created_at,
+        updated_at: doc.updated_at,
+        metadata: doc.metadata || {},
+        chunkCount: doc.document_chunks?.length > 0 ? doc.document_chunks[0].count : 0
       };
     }) || [];
     
@@ -104,7 +126,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       documents,
       total: count || documents.length,
-      limit
+      page,
+      limit,
+      totalPages: count ? Math.ceil(count / limit) : 1
     });
   } catch (error) {
     logError('Error fetching documents:', error);

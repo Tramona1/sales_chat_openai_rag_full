@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { logError } from '@/utils/errorHandling';
+import { logError } from '@/utils/logger';
 import axios from 'axios';
 
 // Interface for feedback items - same as in feedbackManager

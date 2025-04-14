@@ -1,49 +1,11 @@
-"use strict";
 /**
  * Answer generation utility for the RAG system
  * Generates accurate answers from search results using the OpenAI API
  * With fallback to Gemini for handling large contexts
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateAnswer = generateAnswer;
-exports.generateAnswerWithVisualContext = generateAnswerWithVisualContext;
-const errorHandling_1 = require("./errorHandling");
-const openaiClient_1 = require("./openaiClient");
-const geminiClient_1 = require("./geminiClient");
-const modelConfig_1 = require("./modelConfig");
+import { logError, logInfo, logWarning } from './logger';
+import { generateGeminiChatCompletion } from './geminiClient';
+import { AI_SETTINGS } from './modelConfig';
 // Token estimation constants
 const AVG_TOKENS_PER_WORD = 1.3; // A rough approximation for token estimation
 const MAX_TOKENS_OPENAI = 8000; // Conservative limit for OpenAI (leaving room for response)
@@ -78,23 +40,24 @@ function isBasicConversational(query) {
         lowerQuery === pattern + '.');
 }
 /**
- * Handle conversational input with a general LLM response
+ * Handle simple conversational queries that don't need knowledge base
  */
 async function handleConversationalQuery(query, conversationHistory) {
     const systemPrompt = `You are a helpful, friendly, and professional AI assistant for a sales team of Workstream, a company that provides HR, Payroll, and Hiring solutions for the hourly workforce.
 You represent the company and should be helpful, friendly and concise.
 You are part of the sales department and your job is to help the sales team with information.
 When asked about specific details about the company, products, customers, etc., make sure when summarizing that you include only the most relevant information.`;
-    // If we have conversation history, include it in the prompt
+    // Process conversation history to a string format if provided
+    const historyText = conversationHistory ? formatConversationHistory(conversationHistory) : '';
     let userPrompt = query;
-    if (conversationHistory && conversationHistory.trim()) {
-        userPrompt = `Previous conversation:\n${conversationHistory.trim()}\n\nCurrent message: ${query}`;
+    if (historyText) {
+        userPrompt = `Previous conversation:\n${historyText}\n\nCurrent message: ${query}`;
     }
     try {
-        return await (0, openaiClient_1.generateChatCompletion)(systemPrompt, userPrompt, 'gpt-3.5-turbo');
+        return await generateGeminiChatCompletion(systemPrompt, userPrompt);
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error generating conversational response', error);
+        logError('Error generating conversational response with Gemini', error);
         return "Hello! I'm here to help with your sales questions. What would you like to know about our company, products, or services?";
     }
 }
@@ -126,12 +89,12 @@ ${context}
 Provide a detailed summary that maintains all key information and would allow someone to fully answer the question without needing the original text. 
 For investor questions, include all investor names, funding rounds, and investment details exactly as they appear in the text.
 Remember to maintain the company's voice - when using "our," "we," or "us," speak from Workstream's perspective.`;
-        const summary = await (0, geminiClient_1.generateGeminiChatCompletion)(systemPrompt, userPrompt);
+        const summary = await generateGeminiChatCompletion(systemPrompt, userPrompt);
         console.log(`Successfully summarized context with Gemini. Reduced from ${estimateTokenCount(context)} to approximately ${estimateTokenCount(summary)} tokens`);
         return summary;
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error summarizing context with Gemini', error);
+        logError('Error summarizing context with Gemini', error);
         // If summarization fails, we'll need to truncate instead
         console.log('Falling back to simple truncation for context');
         // Take first part of each context item to fit within limits
@@ -145,28 +108,18 @@ Remember to maintain the company's voice - when using "our," "we," or "us," spea
     }
 }
 /**
- * Generate answer with Gemini
- * Used when context is too large for OpenAI or as a fallback
+ * Generate an answer using Gemini model
  */
 async function generateGeminiAnswer(query, contextText, options) {
+    // Format conversation history if provided
+    const historyText = options.conversationHistory ?
+        formatConversationHistory(options.conversationHistory) : '';
     const systemPrompt = `You are a knowledgeable AI assistant for Workstream, an HR, Payroll, and Hiring platform for the hourly workforce.
 You have access to our company's knowledge base and should use that information to answer questions.
 
 IMPORTANT: You represent our company. When answering questions about "our company," "our products," "our services," or referring to "we" or "us," you should speak from the perspective of a company representative.
 
-Answer the user's question using ONLY the provided context. The context contains information from our company's knowledge base.
-
-GUIDELINES FOR SPECIFIC TOPICS:
-1. For investor-related questions:
-   - Cite ONLY investors mentioned in the context
-   - Include funding details EXACTLY as they appear in the context
-   - Do not make up or infer investor information not explicitly stated
-   - If asked about "our investors," only mention those in the context
-
-2. For company information:
-   - Stick to facts from the context
-   - Maintain the company voice using "we" and "our"
-   - If information is not in the context, acknowledge this limitation
+Answer the user's question using the provided context. The context contains information from our company's knowledge base.
 
 If the context doesn't contain enough information to fully answer the question, acknowledge that you don't have complete information on that specific topic in your knowledge base, but try to be helpful with what you do know.
 
@@ -174,19 +127,13 @@ Be conversational and professional in your response, as if you're having a discu
 ${options.includeSourceCitations ? 'If appropriate, you may include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}`;
     // Include conversation history if available
     let userPrompt;
-    if (options.conversationHistory && options.conversationHistory.trim()) {
-        userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
+    if (historyText) {
+        userPrompt = `Previous conversation:\n${historyText}\n\nCurrent question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
     }
     else {
         userPrompt = `Question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
     }
-    try {
-        return await (0, geminiClient_1.generateGeminiChatCompletion)(systemPrompt, userPrompt);
-    }
-    catch (error) {
-        (0, errorHandling_1.logError)('Error generating answer with Gemini', error);
-        return "I apologize, but I'm having trouble processing this request at the moment. Please try asking again, perhaps with a more specific question about our products or services.";
-    }
+    return await generateGeminiChatCompletion(systemPrompt, userPrompt);
 }
 /**
  * Generate an answer based on retrieved context and the user's query
@@ -196,17 +143,33 @@ ${options.includeSourceCitations ? 'If appropriate, you may include source citat
  * @param options Optional settings for answer generation
  * @returns A string with the generated answer
  */
-async function generateAnswer(query, searchResults, options = {}) {
-    var _a, _b;
+export async function generateAnswer(query, searchResults, options = {}) {
     try {
         // Only handle basic greetings conversationally
         // Most questions should try to search the knowledge base
         if (isBasicConversational(query)) {
-            return await handleConversationalQuery(query, options.conversationHistory);
+            // Use Gemini for conversational query as well for consistency
+            try {
+                logInfo('Handling basic conversational query with Gemini...');
+                const systemPrompt = options.systemPrompt || `You are a helpful, friendly, and professional AI assistant for a sales team of Workstream, a company that provides HR, Payroll, and Hiring solutions for the hourly workforce.
+You represent the company and should be helpful, friendly and concise.
+You are part of the sales department and your job is to help the sales team with information.
+When asked about specific details about the company, products, customers, etc., make sure when summarizing that you include only the most relevant information.`;
+                const historyText = options.conversationHistory ? formatConversationHistory(options.conversationHistory) : '';
+                let userPrompt = query;
+                if (historyText) {
+                    userPrompt = `Previous conversation:\n${historyText}\n\nCurrent message: ${query}`;
+                }
+                return await generateGeminiChatCompletion(systemPrompt, userPrompt);
+            }
+            catch (convError) {
+                logError('Error generating conversational response with Gemini', convError);
+                return "Hello! I'm here to help with your sales questions. What would you like to know about our company, products, or services?";
+            }
         }
         // Use options or defaults
-        const model = options.model || modelConfig_1.AI_SETTINGS.defaultModel;
-        const includeSourceCitations = (_a = options.includeSourceCitations) !== null && _a !== void 0 ? _a : true;
+        const model = options.model || AI_SETTINGS.defaultModel;
+        const includeSourceCitations = options.includeSourceCitations ?? true;
         const maxSourcesInAnswer = options.maxSourcesInAnswer || 10;
         // For company-specific questions with no results, we need to acknowledge the limitation
         if (!searchResults || searchResults.length === 0) {
@@ -258,110 +221,73 @@ For product-related questions:
         
 Please incorporate this general product information while clearly stating that you don't have the specific details requested.`;
                 }
-                // Include conversation history if available
+                // For fallback message with topic context
                 let userPrompt = query;
-                if (options.conversationHistory && options.conversationHistory.trim()) {
-                    userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}`;
+                if (options.conversationHistory) {
+                    const formattedHistory = formatConversationHistory(options.conversationHistory);
+                    if (formattedHistory) {
+                        userPrompt = `Previous conversation:\n${formattedHistory}\n\nCurrent question: ${query}`;
+                    }
                 }
-                return await (0, openaiClient_1.generateChatCompletion)(fallbackPrompt, userPrompt, model);
+                try {
+                    logWarning('No search results found, generating fallback message with Gemini...');
+                    return await generateGeminiChatCompletion("You are a helpful AI assistant.", fallbackPrompt);
+                }
+                catch (fallbackError) {
+                    logError('Error generating fallback message with Gemini', fallbackError);
+                    return "I couldn't find specific information on that topic in our knowledge base. Is there something else I can help you find?";
+                }
             }
-            // For truly general questions, use a more helpful response
-            const fallbackSystemPrompt = `You are a helpful AI assistant for the sales team of our company.
-You should be friendly, concise, and helpful.
-If the question seems to be asking for specific company information, products, pricing, or sales data, explain that you don't have that specific information in your knowledge base yet, but you'd be happy to help with any other information about our products or services.
-Always maintain the perspective that you are part of the company's sales team.`;
-            // Include conversation history if available
-            let userPrompt = query;
-            if (options.conversationHistory && options.conversationHistory.trim()) {
-                userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}`;
+            else {
+                // Standard fallback for non-company specific queries with no results
+                return "I couldn't find information related to your query in the knowledge base.";
             }
-            return await (0, openaiClient_1.generateChatCompletion)(fallbackSystemPrompt, userPrompt, model);
         }
-        // Format the context for the LLM when we have relevant documents
-        let contextText = searchResults
-            .slice(0, maxSourcesInAnswer)
-            .map((item, index) => {
-            let source = '';
-            if (item.source) {
-                source = `Source: ${item.source}`;
+        // Prepare context from search results
+        let contextText = "";
+        const sources = [];
+        searchResults.slice(0, maxSourcesInAnswer).forEach((result, index) => {
+            contextText += `Source [${index + 1}]: ${result.source || 'Unknown'}\nContent: ${result.text}\n\n`;
+            if (result.source) {
+                sources.push(result.source);
             }
-            return `[${index + 1}] ${item.text.trim()}\n${source}`;
-        })
-            .join('\n\n');
-        // Estimate token count of context and conversation history
-        const historyText = ((_b = options.conversationHistory) === null || _b === void 0 ? void 0 : _b.trim()) || '';
-        const promptOverhead = estimateTokenCount(`Question: ${query}\n\nContext:\n\n\nAnswer:`);
-        const historyTokens = estimateTokenCount(historyText);
-        const contextTokens = estimateTokenCount(contextText);
-        const totalEstimatedTokens = promptOverhead + historyTokens + contextTokens;
-        console.log(`Estimated tokens: ${totalEstimatedTokens} (Context: ${contextTokens}, History: ${historyTokens}, Overhead: ${promptOverhead})`);
-        // Determine if we should use Gemini directly due to large context
-        const useGeminiDirectly = totalEstimatedTokens > MAX_TOKENS_OPENAI;
-        // If total is too large, we need to summarize the context
-        if (totalEstimatedTokens > MAX_CONTEXT_LENGTH) {
-            console.log(`Context too large (${totalEstimatedTokens} tokens), applying summarization`);
+        });
+        // Estimate token count for the combined query + context
+        const promptEstimate = estimateTokenCount(query + contextText);
+        logInfo(`Estimated prompt tokens (query + context): ${promptEstimate}`);
+        // Check if context needs summarization (Use a Gemini-friendly limit, e.g., ~30k tokens for Flash 1.5 context window, be conservative)
+        // Let's use a conservative limit like 28000 tokens to leave space for query, prompt, and response
+        const MAX_GEMINI_CONTEXT_TOKENS = 28000;
+        if (promptEstimate > MAX_GEMINI_CONTEXT_TOKENS) {
+            logWarning(`Context estimate (${promptEstimate} tokens) exceeds limit (${MAX_GEMINI_CONTEXT_TOKENS}). Summarizing...`);
             contextText = await summarizeContext(query, contextText);
+            logInfo(`Summarized context token estimate: ${estimateTokenCount(contextText)}`);
         }
-        if (useGeminiDirectly) {
-            console.log(`Using Gemini for answer generation due to large context (${totalEstimatedTokens} tokens)`);
-            return await generateGeminiAnswer(query, contextText, {
-                includeSourceCitations,
-                conversationHistory: options.conversationHistory
-            });
-        }
-        // Proceed with OpenAI if context is manageable
-        console.log(`Using OpenAI (${model}) for answer generation with ${totalEstimatedTokens} estimated tokens`);
-        // Create system prompt for knowledge-based questions
-        const systemPrompt = `You are a knowledgeable AI assistant for our company's sales team.
-You have access to our company's knowledge base and should use that information to answer questions.
-
-IMPORTANT: You represent our company. When answering questions about "our company," "our products," "our services," or referring to "we" or "us," you should speak from the perspective of a company representative.
-
-Answer the user's question using the provided context. The context contains information from our company's knowledge base.
-
-If the context doesn't contain enough information to fully answer the question, acknowledge that you don't have complete information on that specific topic in your knowledge base, but try to be helpful with what you do know.
-
-Be conversational and professional in your response, as if you're having a discussion with a colleague.
-${includeSourceCitations ? 'If appropriate, you may include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}`;
-        // Include conversation history if available
+        // Prepare prompts for the final answer generation using Gemini
+        const systemPrompt = options.systemPrompt || AI_SETTINGS.systemPrompt;
+        const historyText = options.conversationHistory ? formatConversationHistory(options.conversationHistory) : '';
         let userPrompt;
-        if (options.conversationHistory && options.conversationHistory.trim()) {
-            userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
+        if (historyText) {
+            userPrompt = `Previous conversation:\n${historyText}\n\nCurrent question: ${query}\n\nUse the following context to answer the question:
+${contextText}\nAnswer:`;
         }
         else {
-            userPrompt = `Question: ${query}\n\nContext:\n${contextText}\n\nAnswer:`;
+            userPrompt = `Question: ${query}\n\nUse the following context to answer the question:
+${contextText}\nAnswer:`;
         }
-        // Set a timeout
-        const timeoutPromise = new Promise((resolve) => {
-            setTimeout(() => {
-                resolve("I apologize, but it's taking me longer than expected to process your request. Please try again or rephrase your question.");
-            }, options.timeout || 15000);
-        });
+        // Use Gemini for the final answer generation
+        logInfo(`Generating final answer with Gemini model: ${model}...`);
         try {
-            // Generate the answer using the LLM
-            const answerPromise = (0, openaiClient_1.generateChatCompletion)(systemPrompt, userPrompt, model);
-            return await Promise.race([answerPromise, timeoutPromise]);
+            return await generateGeminiChatCompletion(systemPrompt, userPrompt);
         }
-        catch (error) {
-            // Check if error is token limit related
-            const errorStr = String(error);
-            if (errorStr.includes('context_length_exceeded') ||
-                errorStr.includes('maximum context length') ||
-                errorStr.includes('Request too large') ||
-                errorStr.includes('rate_limit_exceeded')) {
-                console.log('Attempting with fallback model Gemini due to token limits...');
-                return await generateGeminiAnswer(query, contextText, {
-                    includeSourceCitations,
-                    conversationHistory: options.conversationHistory
-                });
-            }
-            // Re-throw other errors
-            throw error;
+        catch (generationError) {
+            logError('Error generating final answer with Gemini', generationError);
+            return "I apologize, but I encountered an issue generating a final answer. Please try rephrasing your question or try again later.";
         }
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error generating answer', error);
-        return 'Sorry, I encountered an error while processing your request. Please try again.';
+        logError('Error in generateAnswer function', error);
+        return "An unexpected error occurred while processing your request.";
     }
 }
 /**
@@ -373,20 +299,19 @@ ${includeSourceCitations ? 'If appropriate, you may include source citations usi
  * @param options Optional settings for answer generation
  * @returns A string with the generated answer
  */
-async function generateAnswerWithVisualContext(query, searchResults, options = {}) {
-    var _a, _b, _c;
+export async function generateAnswerWithVisualContext(query, searchResults, options = {}) {
     try {
         // Only handle basic greetings conversationally 
         if (isBasicConversational(query)) {
             return await handleConversationalQuery(query, options.conversationHistory);
         }
         // Use options or defaults
-        const model = options.model || modelConfig_1.AI_SETTINGS.defaultModel;
-        const includeSourceCitations = (_a = options.includeSourceCitations) !== null && _a !== void 0 ? _a : true;
+        const model = options.model || AI_SETTINGS.defaultModel;
+        const includeSourceCitations = options.includeSourceCitations ?? true;
         const maxSourcesInAnswer = options.maxSourcesInAnswer || 10;
         const visualFocus = options.visualFocus || false;
         const visualTypes = options.visualTypes || [];
-        const includeImageUrls = (_b = options.includeImageUrls) !== null && _b !== void 0 ? _b : true; // Default to true for including image URLs
+        const includeImageUrls = options.includeImageUrls ?? true; // Default to true for including image URLs
         // For company-specific questions with no results, fall back to standard handling
         if (!searchResults || searchResults.length === 0) {
             // Reuse the no-results logic from the standard generateAnswer function
@@ -458,24 +383,30 @@ For product-related questions:
         
 Please incorporate this general product information while clearly stating that you don't have the specific details requested.`;
                 }
-                // Include conversation history if available
+                // For fallback message with topic context
                 let userPrompt = query;
-                if (options.conversationHistory && options.conversationHistory.trim()) {
-                    userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}`;
+                if (options.conversationHistory) {
+                    const formattedHistory = formatConversationHistory(options.conversationHistory);
+                    if (formattedHistory) {
+                        userPrompt = `Previous conversation:\n${formattedHistory}\n\nCurrent question: ${query}`;
+                    }
                 }
-                return await (0, openaiClient_1.generateChatCompletion)(fallbackPrompt, userPrompt, model);
+                return await generateGeminiChatCompletion(fallbackPrompt, userPrompt);
             }
             // For truly general questions, use a more helpful response
             const fallbackSystemPrompt = `You are a helpful AI assistant for the sales team of our company.
 You should be friendly, concise, and helpful.
 If the question seems to be asking for specific company information, products, pricing, or sales data, explain that you don't have that specific information in your knowledge base yet, but you'd be happy to help with any other information about our products or services.
 Always maintain the perspective that you are part of the company's sales team.`;
-            // Include conversation history if available
+            // For general fallback system prompt 
             let userPrompt = query;
-            if (options.conversationHistory && options.conversationHistory.trim()) {
-                userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}`;
+            if (options.conversationHistory) {
+                const formattedHistory = formatConversationHistory(options.conversationHistory);
+                if (formattedHistory) {
+                    userPrompt = `Previous conversation:\n${formattedHistory}\n\nCurrent question: ${query}`;
+                }
             }
-            return await (0, openaiClient_1.generateChatCompletion)(fallbackSystemPrompt, userPrompt, model);
+            return await generateGeminiChatCompletion(fallbackSystemPrompt, userPrompt);
         }
         // Detect specific visual types requested in the query
         const queryLower = query.toLowerCase();
@@ -504,12 +435,11 @@ Always maintain the perspective that you are part of the company's sales team.`;
         const formattedContextItems = searchResults
             .slice(0, maxSourcesInAnswer)
             .map((item, index) => {
-            var _a;
             // Build the source information
             let sourceInfo = '';
             if (item.source) {
                 sourceInfo = `Source: ${item.source}`;
-                if ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.page) {
+                if (item.metadata?.page) {
                     sourceInfo += `, Page: ${item.metadata.page}`;
                 }
             }
@@ -612,7 +542,11 @@ Always maintain the perspective that you are part of the company's sales team.`;
         // Complete context text with image URLs
         const fullContextText = contextText + imageUrlsText;
         // Estimate token count for context and history
-        const historyText = ((_c = options.conversationHistory) === null || _c === void 0 ? void 0 : _c.trim()) || '';
+        // Handle conversation history that might be a string or array of message objects
+        let historyText = '';
+        if (options.conversationHistory) {
+            historyText = formatConversationHistory(options.conversationHistory);
+        }
         const promptOverhead = estimateTokenCount(`Question: ${query}\n\nContext:\n\n\nAnswer:`);
         const historyTokens = estimateTokenCount(historyText);
         const contextTokens = estimateTokenCount(fullContextText);
@@ -637,8 +571,6 @@ Always maintain the perspective that you are part of the company's sales team.`;
         }
         if (useGemini) {
             console.log(`[Multi-Modal] Using Gemini for answer generation with visual context (${totalEstimatedTokens} tokens)`);
-            // Import the Gemini client
-            const { generateGeminiChatCompletion } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
             // Create an enhanced system prompt for visual content with improved instructions
             const systemPrompt = `You are a knowledgeable AI assistant for our company's sales team.
 You have access to our company's knowledge base, which includes both text and visual content descriptions.
@@ -663,10 +595,16 @@ NEVER use phrases like "as shown in the image" or "as you can see" since the use
 ${includeSourceCitations ? 'If appropriate, include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}
 
 If the context doesn't contain enough information to fully answer the question, acknowledge this limitation while being helpful with the information you do have.`;
-            // Include conversation history if available
+            // For knowledge-based questions
             let userPrompt;
-            if (options.conversationHistory && options.conversationHistory.trim()) {
-                userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+            if (options.conversationHistory) {
+                const formattedHistory = formatConversationHistory(options.conversationHistory);
+                if (formattedHistory) {
+                    userPrompt = `Previous conversation:\n${formattedHistory}\n\nCurrent question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+                }
+                else {
+                    userPrompt = `Question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+                }
             }
             else {
                 userPrompt = `Question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
@@ -675,7 +613,7 @@ If the context doesn't contain enough information to fully answer the question, 
                 return await generateGeminiChatCompletion(systemPrompt, userPrompt);
             }
             catch (error) {
-                (0, errorHandling_1.logError)('[Multi-Modal] Error generating answer with Gemini', error);
+                logError('[Multi-Modal] Error generating answer with Gemini', error);
                 return 'I apologize, but I encountered an issue processing your visual content query. Please try again with a more specific question.';
             }
         }
@@ -704,10 +642,16 @@ NEVER use phrases like "as shown in the image" or "as you can see" since the use
 ${includeSourceCitations ? 'If appropriate, include source citations using [1], [2], etc. format to reference the provided context.' : 'Do not include explicit source citations in your answer.'}
 
 If the context doesn't contain enough information to fully answer the question, acknowledge this limitation while being helpful with the information you do have.`;
-        // Include conversation history if available
+        // For knowledge-based questions
         let userPrompt;
-        if (options.conversationHistory && options.conversationHistory.trim()) {
-            userPrompt = `Previous conversation:\n${options.conversationHistory.trim()}\n\nCurrent question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+        if (options.conversationHistory) {
+            const formattedHistory = formatConversationHistory(options.conversationHistory);
+            if (formattedHistory) {
+                userPrompt = `Previous conversation:\n${formattedHistory}\n\nCurrent question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+            }
+            else {
+                userPrompt = `Question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
+            }
         }
         else {
             userPrompt = `Question: ${query}\n\nContext:\n${finalContextText}\n\nAnswer:`;
@@ -720,7 +664,7 @@ If the context doesn't contain enough information to fully answer the question, 
         });
         try {
             // Generate the answer using the LLM
-            const answerPromise = (0, openaiClient_1.generateChatCompletion)(systemPrompt, userPrompt, model);
+            const answerPromise = generateGeminiChatCompletion(systemPrompt, userPrompt);
             return await Promise.race([answerPromise, timeoutPromise]);
         }
         catch (error) {
@@ -732,7 +676,7 @@ If the context doesn't contain enough information to fully answer the question, 
                 errorStr.includes('rate_limit_exceeded')) {
                 console.log('[Multi-Modal] Attempting with fallback model Gemini due to token limits...');
                 // Import the Gemini client
-                const { generateGeminiChatCompletion } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
+                const { generateGeminiChatCompletion } = await import('./geminiClient');
                 return await generateGeminiChatCompletion(systemPrompt, userPrompt);
             }
             // Re-throw other errors
@@ -740,7 +684,7 @@ If the context doesn't contain enough information to fully answer the question, 
         }
     }
     catch (error) {
-        (0, errorHandling_1.logError)('[Multi-Modal] Error generating answer with visual context', error);
+        logError('[Multi-Modal] Error generating answer with visual context', error);
         return 'Sorry, I encountered an error while processing your request about visual content. Please try again.';
     }
 }
@@ -818,4 +762,21 @@ function formatStructuredData(data) {
         // Fall back to simple string representation if an error occurs
         return 'Complex data structure';
     }
+}
+// Helper function to convert conversation history to string format
+function formatConversationHistory(history) {
+    if (!history)
+        return '';
+    if (typeof history === 'string') {
+        return history.trim();
+    }
+    else if (Array.isArray(history)) {
+        return history
+            .map(msg => {
+            const role = msg.role === 'user' ? 'User' : 'Assistant';
+            return `${role}: ${msg.content}`;
+        })
+            .join('\n');
+    }
+    return '';
 }

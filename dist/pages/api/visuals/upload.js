@@ -1,50 +1,10 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.config = void 0;
-exports.default = handler;
-const fs_1 = __importDefault(require("fs"));
-const visualStorageManager_1 = require("../../../utils/visualStorageManager");
-const performanceMonitoring_1 = require("../../../utils/performanceMonitoring");
-const imageAnalyzer_1 = require("../../../utils/imageAnalysis/imageAnalyzer");
-const formidable_1 = require("formidable");
+import fs from 'fs';
+import { storeVisual } from '@/utils/visualStorageManager';
+import { recordMetric } from '@/utils/performanceMonitoring';
+import { ImageAnalyzer } from '@/utils/imageAnalysis/imageAnalyzer';
+import { IncomingForm } from 'formidable';
 // Disable body parser to handle file uploads
-exports.config = {
+export const config = {
     api: {
         bodyParser: false,
     },
@@ -53,7 +13,7 @@ exports.config = {
  * API endpoint for uploading visual content
  * Supports batch uploads and automatic analysis
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Only allow POST requests
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
@@ -83,7 +43,7 @@ async function handler(req, res) {
         for (const file of fileArray) {
             try {
                 // Store visual metadata without analysis first
-                const visual = await (0, visualStorageManager_1.storeVisual)(file.filepath, {
+                const visual = await storeVisual(file.filepath, {
                     originalFilename: file.originalFilename || 'unknown',
                     mimeType: file.mimetype || 'application/octet-stream',
                     associatedDocumentId: documentId,
@@ -91,8 +51,8 @@ async function handler(req, res) {
                 });
                 // If analysis is requested, analyze the visual
                 if (analyzeVisuals) {
-                    // Analyze the image
-                    const analysisResult = await imageAnalyzer_1.ImageAnalyzer.analyze(file.filepath);
+                    // Analyze the image using the correct static method name
+                    const analysisResult = await ImageAnalyzer.analyzeImage(file.filepath);
                     // Update the visual metadata with analysis results
                     if (analysisResult.success) {
                         await updateVisualWithAnalysis(visual.id, analysisResult);
@@ -124,14 +84,14 @@ async function handler(req, res) {
             }
             finally {
                 // Remove the temporary file
-                if (fs_1.default.existsSync(file.filepath)) {
-                    fs_1.default.unlinkSync(file.filepath);
+                if (fs.existsSync(file.filepath)) {
+                    fs.unlinkSync(file.filepath);
                 }
             }
         }
         // Record performance metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('visualApi', 'uploadVisuals', duration, errors === 0, // success if no errors
+        recordMetric('visualApi', 'uploadVisuals', duration, errors === 0, // success if no errors
         {
             uploadCount: fileArray.length,
             errorCount: errors,
@@ -150,7 +110,7 @@ async function handler(req, res) {
         console.error('Error uploading visuals:', error);
         // Record error metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('visualApi', 'uploadVisuals', duration, false, {
+        recordMetric('visualApi', 'uploadVisuals', duration, false, {
             error: error instanceof Error ? error.message : 'Unknown error'
         });
         return res.status(500).json({ error: 'Internal server error' });
@@ -161,7 +121,7 @@ async function handler(req, res) {
  */
 async function parseFormData(req) {
     return new Promise((resolve, reject) => {
-        const form = new formidable_1.IncomingForm({
+        const form = new IncomingForm({
             multiples: true,
             keepExtensions: true,
             maxFileSize: 10 * 1024 * 1024, // 10MB max file size
@@ -179,7 +139,7 @@ async function parseFormData(req) {
  * Update visual metadata with analysis results
  */
 async function updateVisualWithAnalysis(visualId, analysisResult) {
-    const { storeVisual, getVisual, updateVisualMetadata } = await Promise.resolve().then(() => __importStar(require('../../../utils/visualStorageManager')));
+    const { storeVisual, getVisual, updateVisualMetadata } = await import('../../../utils/visualStorageManager');
     // Get the current visual metadata
     const visual = await getVisual(visualId);
     if (!visual) {

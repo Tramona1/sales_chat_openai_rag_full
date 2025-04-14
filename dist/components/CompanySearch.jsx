@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const CompanySearch = ({ companyName, onChange, onSearch, isSearching, error, darkMode = false }) => {
     // Handle form submission
     const handleSubmit = (e) => {
@@ -56,4 +51,4 @@ const CompanySearch = ({ companyName, onChange, onSearch, isSearching, error, da
       </div>
     </div>);
 };
-exports.default = CompanySearch;
+export default CompanySearch;

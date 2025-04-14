@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const Typography = ({ children, variant = 'body1', component, align = 'left', color = 'initial', gutterBottom = false, noWrap = false, paragraph = false, className = '', fontWeight }) => {
     // Determine which component to render
     const Component = component || getDefaultComponent(variant, paragraph);
@@ -103,4 +98,4 @@ function getFontWeightClass(weight) {
             return '';
     }
 }
-exports.default = Typography;
+export default Typography;

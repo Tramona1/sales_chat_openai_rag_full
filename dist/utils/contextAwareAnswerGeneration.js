@@ -1,18 +1,13 @@
-"use strict";
 /**
  * Context-Aware Answer Generation Utilities
  *
  * This module provides functions for generating answers that take advantage
  * of contextual and multi-modal information for more accurate responses.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateContextAwareAnswer = generateContextAwareAnswer;
-exports.generateAnswerWithVisualContext = generateAnswerWithVisualContext;
-exports.generateAnswer = generateAnswer;
-const generative_ai_1 = require("@google/generative-ai");
-const modelConfig_1 = require("./modelConfig");
-const featureFlags_1 = require("./featureFlags");
-const performanceMonitoring_1 = require("./performanceMonitoring");
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { getModelForTask } from './modelConfig';
+import { isFeatureEnabled } from './featureFlags';
+import { recordMetric } from './performanceMonitoring';
 /**
  * Default answer generation options
  */
@@ -29,14 +24,14 @@ const DEFAULT_OPTIONS = {
  */
 function getAnswerGenerationModel() {
     // Get the appropriate model for answer generation
-    const modelConfig = (0, modelConfig_1.getModelForTask)(undefined, 'chat');
+    const modelConfig = getModelForTask(undefined, 'chat');
     if (modelConfig.provider === 'gemini') {
         // Initialize Gemini model
         const apiKey = process.env.GEMINI_API_KEY || '';
         if (!apiKey) {
             throw new Error('GEMINI_API_KEY is not set in environment variables');
         }
-        const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
+        const genAI = new GoogleGenerativeAI(apiKey);
         return genAI.getGenerativeModel({
             model: modelConfig.model,
             generationConfig: {
@@ -46,20 +41,20 @@ function getAnswerGenerationModel() {
             },
             safetySettings: [
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
                 {
-                    category: generative_ai_1.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                    threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
                 },
             ],
         });
@@ -77,7 +72,7 @@ function getAnswerGenerationModel() {
  * @param options Options for answer generation
  * @returns The generated answer
  */
-async function generateContextAwareAnswer(query, searchResults, options = {}) {
+export async function generateContextAwareAnswer(query, searchResults, options = {}) {
     const startTime = Date.now();
     const mergedOptions = { ...DEFAULT_OPTIONS, ...options };
     try {
@@ -112,9 +107,9 @@ If the context doesn't contain the information needed, acknowledge that you don'
         const result = await model.generateContent(prompt);
         const answer = result.response.text();
         // Record metrics
-        (0, performanceMonitoring_1.recordMetric)('answerGeneration', 'contextAwareGemini', Date.now() - startTime, true, {
+        recordMetric('answerGeneration', 'contextAwareGemini', Date.now() - startTime, true, {
             contextSize: searchResults.length,
-            hasMultiModal: searchResults.some(result => { var _a; return ((_a = result.visualContent) === null || _a === void 0 ? void 0 : _a.length) > 0; }),
+            hasMultiModal: searchResults.some(result => result.visualContent && result.visualContent.length > 0),
             useContextual: mergedOptions.useContextualInformation,
             useMultiModal: mergedOptions.useMultiModalContent,
             outputLength: answer.length
@@ -124,7 +119,7 @@ If the context doesn't contain the information needed, acknowledge that you don'
     catch (error) {
         console.error('Error generating context-aware answer:', error);
         // Record the error
-        (0, performanceMonitoring_1.recordMetric)('answerGeneration', 'contextAwareGemini', Date.now() - startTime, false, {
+        recordMetric('answerGeneration', 'contextAwareGemini', Date.now() - startTime, false, {
             error: error.message
         });
         // Fallback response
@@ -139,7 +134,7 @@ If the context doesn't contain the information needed, acknowledge that you don'
  * @param options Options for answer generation
  * @returns The generated answer
  */
-async function generateAnswerWithVisualContext(query, searchResults, options = {}) {
+export async function generateAnswerWithVisualContext(query, searchResults, options = {}) {
     const startTime = Date.now();
     const mergedOptions = {
         ...DEFAULT_OPTIONS,
@@ -195,7 +190,7 @@ Aim for a comprehensive response that seamlessly integrates insights from both t
     catch (error) {
         console.error('Error generating answer with visual context:', error);
         // Record the error
-        (0, performanceMonitoring_1.recordMetric)('answerGeneration', 'visualContextGemini', Date.now() - startTime, false, {
+        recordMetric('answerGeneration', 'visualContextGemini', Date.now() - startTime, false, {
             error: error.message
         });
         // Fallback to regular context-aware answer
@@ -303,7 +298,7 @@ Do not include information not present in the context. If you don't have enough 
  * Entry point for answer generation that selects the appropriate method
  * based on query type and available context
  */
-async function generateAnswer(query, searchResults, options = {}) {
+export async function generateAnswer(query, searchResults, options = {}) {
     // Detect if query is likely about visual content
     const visualKeywords = [
         'image', 'picture', 'photo', 'chart', 'graph', 'diagram', 'figure',
@@ -313,7 +308,7 @@ async function generateAnswer(query, searchResults, options = {}) {
     // Check if results contain visual content
     const hasVisualResults = searchResults.some(result => result.visualContent && result.visualContent.length > 0);
     // Check if multi-modal features are enabled
-    const multiModalEnabled = (0, featureFlags_1.isFeatureEnabled)('multiModalSearch') &&
+    const multiModalEnabled = isFeatureEnabled('multiModalSearch') &&
         options.useMultiModalContent !== false;
     // Decide which generation method to use
     if (multiModalEnabled && (hasVisualKeyword || hasVisualResults)) {

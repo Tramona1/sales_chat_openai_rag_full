@@ -7,7 +7,13 @@ import {
 import { logError, logInfo } from './logger';
 import { ContextualChunk } from '../types/documentProcessing';
 import { serializeEntities } from './metadataUtils';
-import { addToVectorStore, VectorStoreItem } from './vectorStore';
+import { addToVectorStore } from './vectorStoreFactory';
+import { VectorStoreItem } from './vectorStore';
+import { analyzeDocument } from './documentAnalysis';
+import { splitIntoChunksWithContext } from './documentProcessing';
+import { embedBatch } from './embeddingClient';
+import { getSupabaseAdmin, insertDocument } from './supabaseClient';
+import { generateContentHash } from './hashUtils';
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL as string;

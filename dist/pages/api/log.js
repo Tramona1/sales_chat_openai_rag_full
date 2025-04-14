@@ -1,12 +1,6 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-async function handler(req, res) {
+import fs from 'fs';
+import path from 'path';
+export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method Not Allowed' });
     }
@@ -21,12 +15,12 @@ async function handler(req, res) {
             response: response,
             timestamp: Date.now()
         };
-        const filePath = path_1.default.join(process.cwd(), 'feedback.json');
+        const filePath = path.join(process.cwd(), 'feedback.json');
         // Read existing logs or initialize empty array
         let logs = [];
-        if (fs_1.default.existsSync(filePath)) {
+        if (fs.existsSync(filePath)) {
             try {
-                const fileData = fs_1.default.readFileSync(filePath, 'utf-8');
+                const fileData = fs.readFileSync(filePath, 'utf-8');
                 logs = JSON.parse(fileData);
                 if (!Array.isArray(logs))
                     logs = [];
@@ -39,7 +33,7 @@ async function handler(req, res) {
         // Add new log
         logs.push(logData);
         // Write updated logs
-        fs_1.default.writeFileSync(filePath, JSON.stringify(logs, null, 2));
+        fs.writeFileSync(filePath, JSON.stringify(logs, null, 2));
         return res.status(200).json({ status: 'logged' });
     }
     catch (error) {

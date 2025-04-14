@@ -271,7 +271,7 @@ export default function ChatPage() {
         }
       };
       
-      // Call the actual query API with the proper POST request
+      // Call the actual query API
       const response = await fetch('/api/query', {
         method: 'POST',
         headers: {
@@ -279,13 +279,32 @@ export default function ChatPage() {
         },
         body: JSON.stringify(requestBody),
       });
-      
+
+      // --- FIX: Handle 404 specifically --- 
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      
+        if (response.status === 404) {
+          // Handle "Not Found" specifically
+          console.log('API returned 404 - No results found');
+          setMessages([
+            ...currentMessages,
+            {
+              id: Date.now().toString(),
+              role: 'bot',
+              content: "I couldn't find specific information related to your query in my knowledge base.", // User-friendly 404 message
+              timestamp: new Date()
+            }
+          ]);
+        } else {
+          // Throw a generic error for other non-2xx responses (e.g., 500)
+          throw new Error(`API error: ${response.status}`);
+        }
+        // Need to return here to stop processing after handling the error
+        return; 
+      } // --- End FIX ---
+
+      // Only proceed to parse JSON if response.ok is true
       const result = await response.json();
-      
+
       // Create a unique ID for the bot message
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
@@ -324,9 +343,10 @@ export default function ChatPage() {
         // Non-blocking, continue despite log failure
       }
     } catch (error) {
+      // This catch block now only handles network errors or explicitly thrown errors (like 500)
       console.error("Error processing message:", error);
       
-      // Add error message to chat
+      // Add generic error message to chat
       setMessages([
         ...currentMessages,
         {

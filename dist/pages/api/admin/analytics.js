@@ -1,11 +1,5 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const errorHandling_1 = require("@/utils/errorHandling");
-const axios_1 = __importDefault(require("axios"));
+import { logError } from '@/utils/logger';
+import axios from 'axios';
 /**
  * Generate analytics data from feedback items
  */
@@ -20,7 +14,7 @@ async function generateAnalytics() {
         const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
         const host = process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL || 'localhost:3000';
         const baseUrl = `${protocol}://${host}`;
-        const response = await axios_1.default.get(`${baseUrl}/api/admin/feedback`, {
+        const response = await axios.get(`${baseUrl}/api/admin/feedback`, {
             headers: {
                 'x-admin-key': adminKey
             }
@@ -39,7 +33,6 @@ async function generateAnalytics() {
         const companiesEngaged = new Set();
         // Process each feedback item
         feedbackItems.forEach(item => {
-            var _a, _b, _c;
             // Track query stats
             const queryKey = item.query.toLowerCase().trim();
             const existingQuery = queryMap.get(queryKey) || {
@@ -58,7 +51,7 @@ async function generateAnalytics() {
             existingQuery.lastAsked = Math.max(existingQuery.lastAsked, item.timestamp);
             queryMap.set(queryKey, existingQuery);
             // Track content references
-            if ((_a = item.metadata) === null || _a === void 0 ? void 0 : _a.references) {
+            if (item.metadata?.references) {
                 for (const ref of item.metadata.references) {
                     const contentKey = ref.source || 'unknown';
                     const existingContent = contentMap.get(contentKey) || {
@@ -78,9 +71,9 @@ async function generateAnalytics() {
             }
             // Track session types
             if (item.sessionId) {
-                if (((_b = item.metadata) === null || _b === void 0 ? void 0 : _b.sessionType) === 'company') {
+                if (item.metadata?.sessionType === 'company') {
                     companySessionIds.add(item.sessionId);
-                    if ((_c = item.metadata) === null || _c === void 0 ? void 0 : _c.companyName) {
+                    if (item.metadata?.companyName) {
                         companiesEngaged.add(item.metadata.companyName);
                     }
                 }
@@ -127,7 +120,7 @@ async function generateAnalytics() {
         };
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Failed to generate analytics', error);
+        logError('Failed to generate analytics', error);
         // Return empty analytics on error
         return {
             commonQueries: [],
@@ -146,7 +139,7 @@ async function generateAnalytics() {
  * API endpoint to retrieve feedback analytics
  * Used by the admin dashboard to show insights about user questions and content usage
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Only allow GET requests
     if (req.method !== 'GET') {
         return res.status(405).json({ error: 'Method Not Allowed', message: 'Only GET requests are allowed' });
@@ -165,7 +158,7 @@ async function handler(req, res) {
         return res.status(200).json(analytics);
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error retrieving analytics', error);
+        logError('Error retrieving analytics', error);
         return res.status(500).json({ error: 'Failed to retrieve analytics data' });
     }
 }

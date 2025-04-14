@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import fs from 'fs';
 import path from 'path';
-import { embedText } from '@/utils/openaiClient';
+import { embedText } from '@/utils/embeddingClient';
 import { VectorStoreItem } from '@/utils/vectorStore';
 import { splitIntoChunks } from '@/utils/documentProcessing';
 import { addToPendingDocuments } from '@/utils/adminWorkflow';

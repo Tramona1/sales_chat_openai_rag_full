@@ -4,9 +4,10 @@
  * This module provides functions for storing and retrieving chat sessions using Supabase.
  */
 
-import { supabaseAdmin, getSupabaseAdmin } from './supabaseClient';
+import { Session, SupabaseClient } from '@supabase/supabase-js';
 import { logError, logInfo } from './logger';
 import { CompanyInformation } from './perplexityClient';
+import { getSupabaseAdmin } from './supabaseClient';
 
 // Type definitions
 export interface StoredChatMessage {
@@ -40,9 +41,12 @@ export async function saveChatSession(session: Omit<StoredChatSession, 'id' | 'c
     // Generate timestamps
     const now = new Date().toISOString();
     
+    // Ensure sessionType is always set to a valid value
+    const sessionType = session.sessionType || 'general'; // Default to 'general' if not provided
+    
     // Prepare the session data with snake_case keys for Supabase
     const sessionData = {
-      session_type: session.sessionType,
+      session_type: sessionType,
       company_name: session.companyName,
       company_info: session.companyInfo ? JSON.stringify(session.companyInfo) : null,
       title: session.title,

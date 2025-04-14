@@ -1,58 +1,14 @@
-"use strict";
 /**
  * Multi-Modal Processing Utilities
  *
  * This module provides functions for processing visual elements in documents
  * using Gemini's vision capabilities.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.analyzeImage = analyzeImage;
-exports.extractImagesFromPDF = extractImagesFromPDF;
-exports.createMultiModalChunks = createMultiModalChunks;
-exports.generateMultiModalEmbeddings = generateMultiModalEmbeddings;
-exports.analyzeDocumentVisuals = analyzeDocumentVisuals;
-exports.performMultiModalSearch = performMultiModalSearch;
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const generative_ai_1 = require("@google/generative-ai");
-const performanceMonitoring_1 = require("./performanceMonitoring");
-const multiModal_1 = require("../types/multiModal");
+import fs from 'fs';
+import path from 'path';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { recordMetric } from './performanceMonitoring';
+import { VisualContentType } from '../types/multiModal';
 // Utility function to get the Gemini API key
 function getGeminiApiKey() {
     const apiKey = process.env.GEMINI_API_KEY || '';
@@ -64,30 +20,30 @@ function getGeminiApiKey() {
 // Function to get a vision-capable model
 function getVisionModel() {
     const apiKey = getGeminiApiKey();
-    const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
+    const genAI = new GoogleGenerativeAI(apiKey);
     // Configure the model for vision tasks
     return genAI.getGenerativeModel({
-        model: "gemini-2.0-pro",
+        model: "gemini-2.0-flash",
         generationConfig: {
             temperature: 0.2,
             maxOutputTokens: 2048,
         },
         safetySettings: [
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
             {
-                category: generative_ai_1.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold: generative_ai_1.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+                category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             },
         ],
     });
@@ -98,11 +54,11 @@ function getVisionModel() {
  * @param imagePath Path to the image file
  * @returns Analysis result with description, extracted text, and type
  */
-async function analyzeImage(imagePath) {
+export async function analyzeImage(imagePath) {
     try {
         const startTime = Date.now();
         // Read image file as base64
-        const imageData = fs_1.default.readFileSync(imagePath);
+        const imageData = fs.readFileSync(imagePath);
         const mimeType = getMimeType(imagePath);
         const imageBase64 = imageData.toString('base64');
         // Get the vision model
@@ -173,9 +129,9 @@ async function analyzeImage(imagePath) {
         const textContentMatch = responseText.match(/TEXT_CONTENT:(.*?)(?=TYPE:|$)/s);
         const typeMatch = responseText.match(/TYPE:(.*?)(?=STRUCTURED_DATA:|$)/s);
         const structuredDataMatch = responseText.match(/STRUCTURED_DATA:(.*?)$/s);
-        const description = ((descriptionMatch === null || descriptionMatch === void 0 ? void 0 : descriptionMatch[1]) || '').trim();
-        const extractedText = ((textContentMatch === null || textContentMatch === void 0 ? void 0 : textContentMatch[1]) || '').trim();
-        let typeStr = (((typeMatch === null || typeMatch === void 0 ? void 0 : typeMatch[1]) || '').trim().toLowerCase());
+        const description = (descriptionMatch?.[1] || '').trim();
+        const extractedText = (textContentMatch?.[1] || '').trim();
+        let typeStr = ((typeMatch?.[1] || '').trim().toLowerCase());
         // Map the type string to a valid VisualContentType
         let type;
         switch (typeStr) {
@@ -183,40 +139,40 @@ async function analyzeImage(imagePath) {
             case 'bar chart':
             case 'pie chart':
             case 'line chart':
-                type = multiModal_1.VisualContentType.CHART;
+                type = VisualContentType.CHART;
                 break;
             case 'table':
-                type = multiModal_1.VisualContentType.TABLE;
+                type = VisualContentType.TABLE;
                 break;
             case 'diagram':
             case 'flowchart':
             case 'architecture diagram':
             case 'sequence diagram':
-                type = multiModal_1.VisualContentType.DIAGRAM;
+                type = VisualContentType.DIAGRAM;
                 break;
             case 'graph':
             case 'network graph':
             case 'tree graph':
-                type = multiModal_1.VisualContentType.GRAPH;
+                type = VisualContentType.GRAPH;
                 break;
             case 'image':
             case 'photo':
             case 'picture':
-                type = multiModal_1.VisualContentType.IMAGE;
+                type = VisualContentType.IMAGE;
                 break;
             case 'figure':
-                type = multiModal_1.VisualContentType.FIGURE;
+                type = VisualContentType.FIGURE;
                 break;
             case 'screenshot':
             case 'ui screenshot':
             case 'application screenshot':
-                type = multiModal_1.VisualContentType.SCREENSHOT;
+                type = VisualContentType.SCREENSHOT;
                 break;
             case 'infographic':
-                type = multiModal_1.VisualContentType.INFOGRAPHIC;
+                type = VisualContentType.INFOGRAPHIC;
                 break;
             default:
-                type = multiModal_1.VisualContentType.UNKNOWN;
+                type = VisualContentType.UNKNOWN;
         }
         // Try to parse structured data if present
         let structuredData = undefined;
@@ -234,7 +190,7 @@ async function analyzeImage(imagePath) {
         }
         // Record the performance metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('multiModal', 'imageAnalysis', duration, true);
+        recordMetric('multiModal', 'imageAnalysis', duration, true);
         return {
             description,
             extractedText,
@@ -244,13 +200,13 @@ async function analyzeImage(imagePath) {
     }
     catch (error) {
         // Record the error in performance metrics
-        (0, performanceMonitoring_1.recordMetric)('multiModal', 'imageAnalysis', 0, false, { error: String(error) });
+        recordMetric('multiModal', 'imageAnalysis', 0, false, { error: String(error) });
         console.error('Error analyzing image:', error);
         // Return a fallback result
         return {
             description: 'Failed to analyze image.',
             extractedText: '',
-            type: multiModal_1.VisualContentType.UNKNOWN
+            type: VisualContentType.UNKNOWN
         };
     }
 }
@@ -262,7 +218,7 @@ async function analyzeImage(imagePath) {
  * @param pdfPath Path to the PDF file
  * @returns Array of extracted image paths
  */
-async function extractImagesFromPDF(pdfPath) {
+export async function extractImagesFromPDF(pdfPath) {
     // This is a placeholder for the actual implementation
     console.log(`Would extract images from PDF: ${pdfPath}`);
     return [];
@@ -275,11 +231,11 @@ async function extractImagesFromPDF(pdfPath) {
  * @param source Source identifier for the document
  * @returns Array of multi-modal chunks
  */
-async function createMultiModalChunks(documentText, images, source) {
+export async function createMultiModalChunks(documentText, images, source) {
     try {
         // Import the text processing utilities
-        const { splitIntoChunksWithContext } = await Promise.resolve().then(() => __importStar(require('./documentProcessing')));
-        const { extractDocumentContext } = await Promise.resolve().then(() => __importStar(require('./geminiClient')));
+        const { splitIntoChunksWithContext } = await import('./documentProcessing');
+        const { extractDocumentContext } = await import('./geminiClient');
         // Extract document context
         const documentContext = await extractDocumentContext(documentText);
         // Split the text into contextual chunks
@@ -342,10 +298,10 @@ async function createMultiModalChunks(documentText, images, source) {
  * @param chunks Array of multi-modal chunks
  * @returns The chunks with embeddings added
  */
-async function generateMultiModalEmbeddings(chunks) {
+export async function generateMultiModalEmbeddings(chunks) {
     try {
         // Import the embedding client
-        const { getEmbeddingClient } = await Promise.resolve().then(() => __importStar(require('./embeddingClient')));
+        const { getEmbeddingClient } = await import('./embeddingClient');
         const embeddingClient = getEmbeddingClient();
         // For each chunk, prepare text for embedding that includes visual content
         const textsToEmbed = chunks.map(chunk => {
@@ -376,7 +332,7 @@ async function generateMultiModalEmbeddings(chunks) {
  * Helper function to get the MIME type from a file path
  */
 function getMimeType(filePath) {
-    const extension = path_1.default.extname(filePath).toLowerCase();
+    const extension = path.extname(filePath).toLowerCase();
     switch (extension) {
         case '.jpg':
         case '.jpeg':
@@ -404,11 +360,11 @@ function getMimeType(filePath) {
  * @param filePath Path to the document file
  * @returns Analysis of images in the document
  */
-async function analyzeDocumentVisuals(filePath) {
+export async function analyzeDocumentVisuals(filePath) {
     try {
         const startTime = Date.now();
         // Detect the file type
-        const extension = path_1.default.extname(filePath).toLowerCase();
+        const extension = path.extname(filePath).toLowerCase();
         // For PDFs, extract images first
         let imagePaths = [];
         if (extension === '.pdf') {
@@ -441,7 +397,7 @@ async function analyzeDocumentVisuals(filePath) {
         const hasDiagrams = analyzedImages.some(img => img.analysis.type === 'diagram');
         // Record performance metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('multiModal', 'documentVisualAnalysis', duration, true, {
+        recordMetric('multiModal', 'documentVisualAnalysis', duration, true, {
             fileType: extension,
             imageCount: imagePaths.length
         });
@@ -454,7 +410,7 @@ async function analyzeDocumentVisuals(filePath) {
     }
     catch (error) {
         console.error('Error analyzing document visuals:', error);
-        (0, performanceMonitoring_1.recordMetric)('multiModal', 'documentVisualAnalysis', 0, false, {
+        recordMetric('multiModal', 'documentVisualAnalysis', 0, false, {
             error: String(error)
         });
         // Return empty results on error
@@ -473,12 +429,12 @@ async function analyzeDocumentVisuals(filePath) {
  * @param options Search options
  * @returns Search results with matched visual content
  */
-async function performMultiModalSearch(query, options = {}) {
+export async function performMultiModalSearch(query, options = {}) {
     const startTime = Date.now();
     try {
         // Import necessary modules
-        const { hybridSearch } = await Promise.resolve().then(() => __importStar(require('./hybridSearch')));
-        const { analyzeQueryForContext, isQueryAboutVisuals } = await Promise.resolve().then(() => __importStar(require('./queryAnalysis')));
+        const { hybridSearch } = await import('./hybridSearch');
+        const { analyzeQueryForContext, isQueryAboutVisuals } = await import('./queryAnalysis');
         // Set default options
         const limit = options.limit || 10;
         const includeVisualContent = options.includeVisualContent !== false;
@@ -501,15 +457,15 @@ async function performMultiModalSearch(query, options = {}) {
                         visualTypes = queryAnalysis.visualTypes.map(type => {
                             // Map string to enum value
                             switch (type.toLowerCase()) {
-                                case 'chart': return multiModal_1.VisualContentType.CHART;
-                                case 'table': return multiModal_1.VisualContentType.TABLE;
-                                case 'diagram': return multiModal_1.VisualContentType.DIAGRAM;
-                                case 'graph': return multiModal_1.VisualContentType.GRAPH;
-                                case 'image': return multiModal_1.VisualContentType.IMAGE;
-                                case 'figure': return multiModal_1.VisualContentType.FIGURE;
-                                case 'screenshot': return multiModal_1.VisualContentType.SCREENSHOT;
-                                case 'infographic': return multiModal_1.VisualContentType.INFOGRAPHIC;
-                                default: return multiModal_1.VisualContentType.UNKNOWN;
+                                case 'chart': return VisualContentType.CHART;
+                                case 'table': return VisualContentType.TABLE;
+                                case 'diagram': return VisualContentType.DIAGRAM;
+                                case 'graph': return VisualContentType.GRAPH;
+                                case 'image': return VisualContentType.IMAGE;
+                                case 'figure': return VisualContentType.FIGURE;
+                                case 'screenshot': return VisualContentType.SCREENSHOT;
+                                case 'infographic': return VisualContentType.INFOGRAPHIC;
+                                default: return VisualContentType.UNKNOWN;
                             }
                         });
                     }
@@ -544,9 +500,8 @@ async function performMultiModalSearch(query, options = {}) {
         if (visualFocus || includeVisualContent) {
             // Filter for results with visual content
             const visualResults = filteredResults.filter(result => {
-                var _a;
                 // Safely access properties
-                const metadata = ((_a = result === null || result === void 0 ? void 0 : result.item) === null || _a === void 0 ? void 0 : _a.metadata) || {};
+                const metadata = result?.item?.metadata || {};
                 return metadata.hasVisualContent === true ||
                     metadata.isVisualElement === true ||
                     metadata.hasVisualElements === true;
@@ -558,21 +513,20 @@ async function performMultiModalSearch(query, options = {}) {
             // Further filter by specific visual types if provided
             if (visualTypes && visualTypes.length > 0) {
                 const typedResults = filteredResults.filter(result => {
-                    var _a;
-                    const metadata = ((_a = result === null || result === void 0 ? void 0 : result.item) === null || _a === void 0 ? void 0 : _a.metadata) || {};
+                    const metadata = result?.item?.metadata || {};
                     const visualContent = result.item.visualContent;
                     // Check if this is directly a visual element of the specified type
                     if (metadata.isVisualElement && metadata.visualElementType &&
-                        (visualTypes === null || visualTypes === void 0 ? void 0 : visualTypes.some(vt => vt.toString() === metadata.visualElementType))) {
+                        visualTypes?.some(vt => vt.toString() === metadata.visualElementType)) {
                         return true;
                     }
                     // Check if this contains visual elements of the specified types
                     if (Array.isArray(visualContent)) {
-                        return visualContent.some(vc => visualTypes === null || visualTypes === void 0 ? void 0 : visualTypes.some(vt => vt.toString() === vc.type));
+                        return visualContent.some(vc => visualTypes?.some(vt => vt.toString() === vc.type));
                     }
                     // Check if metadata has visual element types that match
                     if (metadata.visualElementTypes && Array.isArray(metadata.visualElementTypes)) {
-                        return metadata.visualElementTypes.some((type) => visualTypes === null || visualTypes === void 0 ? void 0 : visualTypes.some(vt => vt.toString() === type));
+                        return metadata.visualElementTypes.some((type) => visualTypes?.some(vt => vt.toString() === type));
                     }
                     return false;
                 });
@@ -584,9 +538,8 @@ async function performMultiModalSearch(query, options = {}) {
             // Boost scores for visual content in a visual-focused query
             if (visualFocus) {
                 filteredResults = filteredResults.map(result => {
-                    var _a;
                     // Get metadata and determine visual relevance
-                    const metadata = ((_a = result === null || result === void 0 ? void 0 : result.item) === null || _a === void 0 ? void 0 : _a.metadata) || {};
+                    const metadata = result?.item?.metadata || {};
                     const visualContent = result.item.visualContent;
                     // Calculate boost factor
                     let boostFactor = 1.0;
@@ -605,7 +558,7 @@ async function performMultiModalSearch(query, options = {}) {
                         boostFactor = 1.3;
                         // Check for type matches in the visual content
                         if (visualTypes && Array.isArray(visualContent)) {
-                            const hasMatchingType = visualContent.some(vc => visualTypes === null || visualTypes === void 0 ? void 0 : visualTypes.includes(vc.type));
+                            const hasMatchingType = visualContent.some(vc => visualTypes?.includes(vc.type));
                             if (hasMatchingType) {
                                 boostFactor = 1.5;
                             }
@@ -624,9 +577,8 @@ async function performMultiModalSearch(query, options = {}) {
             // Filter by document type if specified
             if (options.filters.documentTypes && options.filters.documentTypes.length > 0) {
                 filteredResults = filteredResults.filter(result => {
-                    var _a, _b, _c;
-                    const metadata = ((_a = result === null || result === void 0 ? void 0 : result.item) === null || _a === void 0 ? void 0 : _a.metadata) || {};
-                    return (_c = (_b = options.filters) === null || _b === void 0 ? void 0 : _b.documentTypes) === null || _c === void 0 ? void 0 : _c.includes(metadata.documentType);
+                    const metadata = result?.item?.metadata || {};
+                    return options.filters?.documentTypes?.includes(metadata.documentType);
                 });
             }
         }
@@ -645,7 +597,7 @@ async function performMultiModalSearch(query, options = {}) {
             if (Array.isArray(visualContent) && visualContent.length > 0) {
                 // If we have visual types to filter by, prioritize those
                 if (visualTypes && visualTypes.length > 0) {
-                    const typeMatches = visualContent.filter(vc => visualTypes === null || visualTypes === void 0 ? void 0 : visualTypes.includes(vc.type));
+                    const typeMatches = visualContent.filter(vc => visualTypes?.includes(vc.type));
                     if (typeMatches.length > 0) {
                         bestVisual = typeMatches[0];
                         matchType = item.text.toLowerCase().includes(query.toLowerCase()) ? 'both' : 'visual';
@@ -675,7 +627,7 @@ async function performMultiModalSearch(query, options = {}) {
             };
         });
         // Record performance metrics
-        (0, performanceMonitoring_1.recordMetric)('multiModalSearch', 'search', Date.now() - startTime, true, {
+        recordMetric('multiModalSearch', 'search', Date.now() - startTime, true, {
             queryLength: query.length,
             visualFocus: visualFocus || false,
             resultCount: multiModalResults.length,
@@ -685,7 +637,7 @@ async function performMultiModalSearch(query, options = {}) {
     }
     catch (error) {
         // Record the failure
-        (0, performanceMonitoring_1.recordMetric)('multiModalSearch', 'search', Date.now() - startTime, false, {
+        recordMetric('multiModalSearch', 'search', Date.now() - startTime, false, {
             error: error.message
         });
         console.error('Error in multi-modal search:', error);

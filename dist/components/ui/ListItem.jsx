@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const ListItem = ({ children, className = '', disablePadding = false, button = false, selected = false, onClick, }) => {
     const Component = button ? 'button' : 'li';
     return (<Component className={`
@@ -16,4 +11,4 @@ const ListItem = ({ children, className = '', disablePadding = false, button = f
       {children}
     </Component>);
 };
-exports.default = ListItem;
+export default ListItem;

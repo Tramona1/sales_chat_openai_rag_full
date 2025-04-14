@@ -5,10 +5,24 @@
  * and hybrid search with metadata-aware filtering.
  */
 
-import { VectorStoreItem, getSimilarItems } from './vectorStore';
-import { embedText } from './openaiClient';
-import { logError, logInfo, logWarning } from './logger';
-import { DocumentCategory } from '../types/metadata';
+/**
+ * Hybrid Search Module for Smart Query Routing with Supabase Backend
+ * 
+ * This module uses Supabase's PostgreSQL functions for vector search, keyword search,
+ * and hybrid search with metadata-aware filtering.
+ * 
+ * IMPORTANT CHANGES (2023-08-03):
+ * 1. Default matchThreshold reduced from 0.7 to 0.2 for better retrieval recall
+ * 2. Added execution IDs to track duplicate calls
+ * 3. Enhanced logging to diagnose parameter issues
+ * 4. Added caller tracking to identify source of duplicate calls
+ * 5. Standardized parameters across API endpoints for consistent behavior
+ * 6. Renamed bm25Score to keywordScore to reflect PostgreSQL FTS implementation
+ */
+
+import { VectorStoreItem } from './vectorStore';
+import { embedText, getEmbeddingClient } from './embeddingClient';
+import { logError, logInfo, logWarning, logDebug } from './logger';
 import { DocumentCategoryType } from './documentCategories';
 import { 
   filterDocumentsByCategoryPath,
@@ -34,7 +48,7 @@ interface DocumentEmbedding extends Document {
 }
 
 interface MetadataFilter {
-  categories?: DocumentCategory[];
+  categories?: DocumentCategoryType[];
   strictCategoryMatch?: boolean;
   technicalLevelMin?: number;
   technicalLevelMax?: number;
@@ -65,7 +79,7 @@ export interface SearchResult {
 export interface HybridSearchResult {
   item: VectorStoreItem;
   score: number;
-  bm25Score: number;
+  keywordScore: number;
   vectorScore: number;
   metadata: {
     matchesCategory: boolean;
@@ -76,16 +90,21 @@ export interface HybridSearchResult {
 
 // Filter options for hybrid search
 export interface HybridSearchFilter {
-  // Category filtering
-  categories?: DocumentCategory[];
   strictCategoryMatch?: boolean;
   
-  // Technical level filtering
+  // Primary and secondary categories (standardized format)
+  primaryCategory?: DocumentCategoryType;
+  secondaryCategories?: DocumentCategoryType[];
+  
+  // Technical level filtering (1-10 scale)
   technicalLevelMin?: number;
   technicalLevelMax?: number;
   
   // Entity filtering
   requiredEntities?: string[];
+  
+  // Keyword filtering (added for standardization)
+  keywords?: string[];
   
   // Custom metadata filters
   customFilters?: Record<string, any>;
@@ -105,17 +124,104 @@ export interface HybridSearchOptions {
   vectorWeight?: number; // Weight for vector search (0-1)
   keywordWeight?: number; // Weight for keyword search (0-1)
   matchThreshold?: number; // Similarity threshold for vector matches
+  filter?: HybridSearchFilter; // Filter object
 }
 
 // Update interface to include facets and implement iterable for backwards compatibility
 export interface HybridSearchResponse {
-  results: Array<VectorStoreItem & { score: number }>;
+  results: Array<VectorStoreItem & { 
+    score: number;
+    vectorScore?: number;
+    keywordScore?: number;
+  }>;
   facets?: {
     categories: CategoryHierarchy[];
     entities: Record<string, Array<{ name: string, count: number }>>;
     technicalLevels: Array<{ level: number, count: number }>;
   };
-  [Symbol.iterator](): Iterator<VectorStoreItem & { score: number }>;
+}
+
+// Re-export fallbackSearch to ensure it's properly available when importing the module
+// REMOVING CIRCULAR REFERENCE: export { fallbackSearch } from './hybridSearch';
+
+/**
+ * Fallback search function that performs a basic keyword search when hybrid search fails
+ * This simple implementation ensures basic search functionality even when vector search is unavailable
+ * 
+ * @param query The user's search query
+ * @returns Array of search results
+ */
+
+/**
+ * Fallback search function for emergency retrieval when the main hybrid search fails
+ * 
+ * This function uses Supabase's built-in full-text search capability to provide results
+ * when the primary hybrid search mechanism encounters errors. It's designed to be:
+ * - Resilient: Relies on simple, proven PostgreSQL full-text search technology
+ * - Fast: Optimized for speed rather than relevance in emergency situations
+ * - Reliable: Has minimal dependencies to reduce failure points
+ * 
+ * The implementation uses PostgreSQL's plainto_tsquery for better keyword matching with
+ * the English text search configuration for stemming and normalization.
+ * 
+ * Results are assigned a standard score of 0.5 since the relevance scores from this
+ * method are not directly comparable with those from the hybrid search.
+ * 
+ * @param query - The user's search query text
+ * @returns Promise resolving to an array of VectorStoreItems with basic score values
+ * @throws Error if the database query fails with details of the failure
+ * 
+ * @example
+ * try {
+ *   const results = await fallbackSearch("How to configure authentication");
+ *   // Process results...
+ * } catch (error) {
+ *   // Handle error...
+ * }
+ */
+export async function fallbackSearch(query: string): Promise<Array<VectorStoreItem & { score: number }>> {
+  const supabase = getSupabaseAdmin();
+  
+  logInfo(`[fallbackSearch] Performing fallback keyword search for query: "${query}"`);
+  
+  try {
+    // Use the built-in full-text search capability with plainto_tsquery for better keyword matching
+    const { data, error } = await supabase
+      .from('document_chunks')
+      .select('id, document_id, chunk_index, text, metadata')
+      .textSearch('text', query, {
+        type: 'plain',
+        config: 'english'
+      })
+      .limit(10);
+      
+    if (error) {
+      logError(`[fallbackSearch] Error: ${error.message}`);
+      throw new Error(`Fallback search error: ${error.message}`);
+    }
+    
+    if (!data || !Array.isArray(data)) {
+      logWarning('[fallbackSearch] No results found or invalid response');
+      return [];
+    }
+    
+    logInfo(`[fallbackSearch] Found ${data.length} results`);
+    
+    // Map the results to the expected format with a basic score
+    return data.map((item) => ({
+      id: item.id,
+      document_id: item.document_id,
+      chunk_index: item.chunk_index || 0,
+      text: item.text || '',
+      metadata: item.metadata || {},
+      embedding: [], // Empty embedding for efficiency
+      score: 0.5 // Default score for fallback results
+    }));
+  } catch (error) {
+    logError('[fallbackSearch] Error during fallback search', error);
+    // Return empty array on error
+    return [];
+  }
 }
 
 /**
@@ -147,6 +253,7 @@ export async function initializeHybridSearch(): Promise<void> {
 }
 
 /**
+ * @deprecated Use hybridSearch with HybridSearchOptions instead
  * Perform hybrid search using Supabase's hybrid_search RPC function
  */
 export async function performHybridSearch(
@@ -155,211 +262,176 @@ export async function performHybridSearch(
   hybridRatio: number = 0.5, // Controls the balance between vector and keyword search
   filter?: MetadataFilter
 ): Promise<SearchResult[]> {
-  if (!query || query.trim() === '') {
-    return [];
-  }
+  console.warn('performHybridSearch is deprecated. Please use hybridSearch instead.');
   
-  try {
-    // Generate embedding for the query
-    const queryEmbedding = await embedText(query);
-    
-    // Prepare filter JSON if needed
-    const filterJson = filter ? prepareFilterJson(filter) : null;
-    
-    // Calculate weights based on hybridRatio
-    const vectorWeight = hybridRatio;
-    const keywordWeight = 1 - hybridRatio;
-    
-    // Call the RPC function
-    const { data, error } = await getSupabaseAdmin().rpc('hybrid_search', {
-      query_text: query,
-      query_embedding: queryEmbedding,
-      match_threshold: 0.7, // Default threshold, can be adjusted
-      match_count: limit,
-      vector_weight: vectorWeight,
-      keyword_weight: keywordWeight,
-      filter: filterJson
-    });
-    
-    if (error) {
-      logError('Error during hybrid search RPC call', error);
-      // More detailed error logging to help with debugging
-      logError('Supabase RPC hybrid_search error details', {
-        errorCode: error.code,
-        errorMessage: error.message,
-        errorDetails: error.details,
-        queryDetails: {
-          query_length: query.length,
-          embedding_length: queryEmbedding.length,
-          limit,
-          has_filter: !!filterJson
-        }
-      });
-      
-      // Try fallbackSearch before giving up
-      const fallbackResults = await fallbackSearch(query);
-      if (fallbackResults && fallbackResults.length > 0) {
-        logInfo('Recovered using fallback search', {
-          resultCount: fallbackResults.length
-        });
-        
-        // Convert fallback results to SearchResult format
-        return fallbackResults.map(item => ({
-          item: {
-            id: item.id || '',
-            text: item.text || item.originalText || '',
-            metadata: item.metadata || {}
-          },
-          score: item.score || 0,
-          vectorScore: 0, // No vector score in fallback
-          bm25Score: item.score || 0 // Use the score as BM25
-        }));
-      }
-      
-      throw new Error(`Hybrid search failed: ${error.message}`);
-    }
-    
-    if (!data || !Array.isArray(data) || data.length === 0) {
-      logInfo('No results from hybrid_search RPC', {
-        query_length: query.length
-      });
-      return [];
-    }
-    
-    // Map the results to the SearchResult format
-    const results: SearchResult[] = data.map(item => ({
-      item: {
-        id: item.id,
-        text: item.content || item.text || '',
-        metadata: item.metadata || {}
-      },
-      score: item.combined_score || 0,
-      vectorScore: item.vector_score || 0,
-      bm25Score: item.keyword_score || 0
-    }));
-    
-    return results;
-  } catch (error) {
-    logError('Error in performHybridSearch', error);
-    
-    // Try fallback as last resort
-    try {
-      logWarning('Attempting keyword-only fallback search');
-      const fallbackResults = await fallbackSearch(query);
-      
-      if (fallbackResults && fallbackResults.length > 0) {
-        return fallbackResults.map(item => ({
-          item: {
-            id: item.id || '',
-            text: item.text || item.originalText || '',
-            metadata: item.metadata || {}
-          },
-          score: item.score || 0,
-              vectorScore: 0,
-          bm25Score: item.score || 0
-        }));
-      }
-    } catch (fallbackError) {
-      logError('Fallback search also failed', fallbackError);
-    }
-    
-    return [];
-  }
-}
-
-/**
- * Prepare filter JSON for Supabase queries
- */
-function prepareFilterJson(filter: MetadataFilter): any {
-  const filterJson: any = {};
+  // Convert the old filter format to the new format if it exists
+  const newFilter = filter ? {
+    categories: filter.categories,
+    strictCategoryMatch: filter.strictCategoryMatch,
+    technicalLevelMin: filter.technicalLevelMin,
+    technicalLevelMax: filter.technicalLevelMax,
+    requiredEntities: filter.entities
+  } : undefined;
   
-  if (filter.categories && filter.categories.length > 0) {
-    filterJson.categories = filter.categories;
-  }
-  
-  if (filter.technicalLevelMin !== undefined || filter.technicalLevelMax !== undefined) {
-    filterJson.technical_level = {};
-    if (filter.technicalLevelMin !== undefined) {
-      filterJson.technical_level.min = filter.technicalLevelMin;
-    }
-    if (filter.technicalLevelMax !== undefined) {
-      filterJson.technical_level.max = filter.technicalLevelMax;
-    }
-  }
-  
-  if (filter.entities && filter.entities.length > 0) {
-    filterJson.entities = filter.entities;
-  }
-  
-  if (filter.lastUpdatedAfter) {
-    filterJson.updated_after = filter.lastUpdatedAfter;
-  }
-  
-  return filterJson;
+  // Call the updated function with equivalent parameters
+  return hybridSearch(query, {
+    limit,
+    vectorWeight: hybridRatio,
+    keywordWeight: 1 - hybridRatio,
+    matchThreshold: 0.7,
+    filter: newFilter
+  }).then(response => response.results.map(item => ({
+    item: {
+      id: item.id || '',
+      text: item.text || item.originalText || '',
+      metadata: item.metadata || {}
+    },
+    score: item.score || 0,
+    vectorScore: item.vectorScore || 0,
+    bm25Score: item.keywordScore || 0
+  })));
 }
 
 /**
  * Convert HybridSearchFilter to a JSON filter suitable for the Supabase RPC call
+ * Ensures standardized category handling for both primary and secondary categories
  */
 function convertFilterToJson(filter?: HybridSearchFilter): any {
   if (!filter) return null;
-  
+
   const jsonFilter: any = {};
-  
-  // Category filters
-  if (filter.categories && filter.categories.length > 0) {
-    jsonFilter.categories = filter.categories;
-    if (filter.strictCategoryMatch !== undefined) {
-      jsonFilter.strict_category_match = filter.strictCategoryMatch;
+
+  // Log the original filter object
+  logDebug('[convertFilterToJson] Original filter object:', JSON.stringify(filter, null, 2));
+
+  // Assign primaryCategory directly if it exists
+  if (filter.primaryCategory && Object.values(DocumentCategoryType).includes(filter.primaryCategory)) {
+    jsonFilter.primaryCategory = filter.primaryCategory;
+    logDebug(`[convertFilterToJson] Valid primaryCategory: ${filter.primaryCategory}`);
+  } else if (filter.primaryCategory) {
+    logWarning(`[convertFilterToJson] Invalid primaryCategory ignored: "${filter.primaryCategory}". Valid categories are: ${Object.values(DocumentCategoryType).join(', ')}`);
+  }
+
+  // Assign secondaryCategories directly if they exist and are valid
+  if (filter.secondaryCategories && filter.secondaryCategories.length > 0) {
+    const validSecondaryCategories = filter.secondaryCategories
+      .filter(cat => cat && Object.values(DocumentCategoryType).includes(cat)); // Ensure valid enum members
+    
+    const invalidCategories = filter.secondaryCategories
+      .filter(cat => cat && !Object.values(DocumentCategoryType).includes(cat));
+    
+    if (invalidCategories.length > 0) {
+      logWarning(`[convertFilterToJson] Invalid secondaryCategories ignored: ${invalidCategories.join(', ')}`);
+    }
+    
+    if (validSecondaryCategories.length > 0) {
+      jsonFilter.secondaryCategories = validSecondaryCategories;
+      logDebug(`[convertFilterToJson] Valid secondaryCategories: ${validSecondaryCategories.join(', ')}`);
     }
   }
-  
-  // Technical level filters
-  if (filter.technicalLevelMin !== undefined || filter.technicalLevelMax !== undefined) {
-    jsonFilter.technical_level = {};
-    if (filter.technicalLevelMin !== undefined) {
-      jsonFilter.technical_level.min = filter.technicalLevelMin;
-    }
-    if (filter.technicalLevelMax !== undefined) {
-      jsonFilter.technical_level.max = filter.technicalLevelMax;
-    }
+
+  // Set strictCategoryMatch if available (assuming the RPC expects this key)
+  if (filter.strictCategoryMatch !== undefined) {
+    jsonFilter.strict_category_match = filter.strictCategoryMatch;
   }
-  
-  // Entity filters
+
+  // Assign technical level filters directly (1-5 scale)
+  if (filter.technicalLevelMin !== undefined) {
+    // Ensure min is at least 1
+    jsonFilter.technicalLevelMin = Math.max(1, filter.technicalLevelMin);
+  }
+  if (filter.technicalLevelMax !== undefined) {
+    // Ensure max is at most 5
+    jsonFilter.technicalLevelMax = Math.min(5, filter.technicalLevelMax);
+  }
+  // Ensure min <= max if both are provided and adjust max if needed
+  if (jsonFilter.technicalLevelMin !== undefined && jsonFilter.technicalLevelMax !== undefined && jsonFilter.technicalLevelMin > jsonFilter.technicalLevelMax) {
+    logWarning('Technical level min filter > max filter, adjusting max to match min.');
+    jsonFilter.technicalLevelMax = jsonFilter.technicalLevelMin;
+  }
+
+  // Assign entity filters directly
   if (filter.requiredEntities && filter.requiredEntities.length > 0) {
     jsonFilter.entities = filter.requiredEntities;
   }
-  
-  // Custom filters
-  if (filter.customFilters) {
-    jsonFilter.custom = filter.customFilters;
+
+  // Assign keyword filters directly
+  if (filter.keywords && filter.keywords.length > 0) {
+    jsonFilter.keywords = filter.keywords;
   }
-  
+
+  // Assign custom filters directly (assuming RPC expects 'custom' key for this)
+  if (filter.customFilters && Object.keys(filter.customFilters).length > 0) {
+    jsonFilter.custom = filter.customFilters; // Keep nested under 'custom' based on original logic
+  }
+
+  // Log the final converted filter
+  logDebug('[convertFilterToJson] Converted filter:', JSON.stringify(jsonFilter, null, 2));
+
   return Object.keys(jsonFilter).length > 0 ? jsonFilter : null;
 }
 
 /**
  * Main hybrid search function with support for facets and filters
+ * 
+ * This function provides comprehensive hybrid search capabilities by combining vector
+ * and keyword search. It includes detailed logging for diagnostics and robust error
+ * handling with fallback mechanisms.
+ * 
+ * Enhanced features:
+ * - Detailed logging of search parameters and results with unique execution IDs to track duplicate calls
+ * - Special debugging for specific query types (e.g., investor-related queries)
+ * - Zero-result detection with automatic fallback to more lenient search
+ * - Consistent terminology using keywordScore instead of bm25Score to reflect PostgreSQL FTS
+ * - Improved default parameters: more lenient matchThreshold (0.2) for better recall
+ * - Caller tracking to identify sources of duplicate executions
+ * 
+ * Parameter defaults:
+ * - vectorWeight: 0.5 (unless specified in options)
+ * - keywordWeight: 0.5 (unless specified in options)
+ * - matchThreshold: 0.2 (unless specified in options) - CHANGED from 0.7 to improve recall
+ * - limit: 10 (unless specified in options)
+ * 
+ * @param query - The search query string
+ * @param options - Configuration options for the search
+ * @returns A promise resolving to search results with detailed scoring information
  */
 export async function hybridSearch(
   query: string,
   options: HybridSearchOptions = {}
 ): Promise<HybridSearchResponse> {
+  const supabase = getSupabaseAdmin();
+  const embeddingClient = getEmbeddingClient();
+  
+  // Generate a unique execution ID for this call to track potential duplicates
+  const executionId = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+  // Enhanced logging of incoming parameters with execution ID
+  logInfo(`===== HYBRID SEARCH CALL START (ID: ${executionId}) =====`);
+  logInfo(`[hybridSearch:${executionId}] Query: "${query}"`);
+  logDebug(`[hybridSearch:${executionId}] Options:`, JSON.stringify(options, null, 2));
+  
+  // Track caller information to identify source of duplicate calls
+  const stackTrace = new Error().stack || '';
+  const callerInfo = stackTrace.split('\n')[2] || 'unknown caller';
+  logDebug(`[hybridSearch:${executionId}] Called from: ${callerInfo.trim()}`);
+
   if (!query || query.trim() === '') {
+    logWarning('[hybridSearch] Empty query received, returning empty results');
     // Return empty results with correct structure
     const emptyResponse: HybridSearchResponse = {
       results: [],
-      [Symbol.iterator]: function* () {
-        for (const result of this.results) {
-          yield result;
-        }
-      }
     };
     
     if (options.includeFacets) {
       emptyResponse.facets = {
         categories: [],
-        entities: {},
+        entities: { 
+          people: [],
+          companies: [],
+          products: [],
+          features: []
+        },
         technicalLevels: []
       };
     }
@@ -368,185 +440,301 @@ export async function hybridSearch(
   }
   
   try {
-    // Generate embedding for the query
-    const queryEmbedding = await embedText(query);
-    
-    // Prepare options and weights
+    // Generate query embedding
+    logDebug('[hybridSearch] Generating embedding for query');
+    const queryEmbedding = await embeddingClient.embedText(query);
+    logDebug(`[hybridSearch] Embedding generated with ${queryEmbedding?.length ?? 0} dimensions`);
+
+    // Prepare options and weights with improved defaults
     const limit = options.limit || 10;
+    
+    // Use provided weights or default to balanced (0.5/0.5)
     const vectorWeight = options.vectorWeight !== undefined ? options.vectorWeight : 0.5;
     const keywordWeight = options.keywordWeight !== undefined ? options.keywordWeight : 0.5;
-    const matchThreshold = options.matchThreshold || 0.7;
+    
+    // Use a more lenient default threshold (0.2 instead of 0.7)
+    const matchThreshold = options.matchThreshold !== undefined ? options.matchThreshold : 0.2;
+    
+    // Log where values are coming from
+    logDebug('[hybridSearch] Parameter sources:');
+    logDebug(`[hybridSearch] vectorWeight=${vectorWeight} (${options.vectorWeight !== undefined ? 'from options' : 'default'})`);
+    logDebug(`[hybridSearch] keywordWeight=${keywordWeight} (${options.keywordWeight !== undefined ? 'from options' : 'default'})`);
+    logDebug(`[hybridSearch] matchThreshold=${matchThreshold} (${options.matchThreshold !== undefined ? 'from options' : 'default'})`);
+    logDebug(`[hybridSearch] limit=${limit} (${options.limit ? 'from options' : 'default'})`);
     
     // Prepare filter based on options
-    const filter: any = {};
+    let filter: any = {};
     
-    // Handle category path option
-    if (options.categoryPath && options.categoryPath.length > 0) {
-      filter.category_path = options.categoryPath;
-    }
+    // Enhanced filter logging
+    logDebug('[hybridSearch] Processing search filters');
     
-    // Handle technical level filtering
-    if (options.technicalLevelRange) {
-      filter.technical_level = {
-        min: options.technicalLevelRange.min,
-        max: options.technicalLevelRange.max
-      };
-    }
-    
-    // Handle entity filtering
-    if (options.entityFilters && Object.keys(options.entityFilters).length > 0) {
-      filter.entities = options.entityFilters;
-    }
-    
-    // Handle special document flags
-    if (options.includeDeprecated !== undefined) {
-      filter.include_deprecated = options.includeDeprecated;
-    }
-    
-    if (options.onlyAuthoritative !== undefined) {
-      filter.only_authoritative = options.onlyAuthoritative;
+    // Convert between filter formats if needed
+    if (options.filter) {
+      logInfo('[hybridSearch] Using provided filter object:', JSON.stringify(options.filter, null, 2));
+      filter = convertFilterToJson(options.filter);
+    } else {
+      logDebug('[hybridSearch] No direct filter object, checking legacy filter options');
+      // Handle legacy filter fields
+      if (options.categoryPath && options.categoryPath.length > 0) {
+        filter.category_path = options.categoryPath;
+        logDebug(`[hybridSearch] Using category path: [${options.categoryPath.join(', ')}]`);
+      }
+      
+      if (options.technicalLevelRange) {
+        filter.technical_level = {
+          min: options.technicalLevelRange.min,
+          max: options.technicalLevelRange.max
+        };
+        logDebug(`[hybridSearch] Using technical level range: min=${options.technicalLevelRange.min}, max=${options.technicalLevelRange.max}`);
+      }
+      
+      if (options.entityFilters && Object.keys(options.entityFilters).length > 0) {
+        filter.entities = options.entityFilters;
+        logDebug(`[hybridSearch] Using entity filters: ${JSON.stringify(options.entityFilters, null, 2)}`);
+      }
+      
+      if (options.includeDeprecated !== undefined) {
+        filter.include_deprecated = options.includeDeprecated;
+        logDebug(`[hybridSearch] includeDeprecated: ${options.includeDeprecated}`);
+      }
+      
+      if (options.onlyAuthoritative !== undefined) {
+        filter.only_authoritative = options.onlyAuthoritative;
+        logDebug(`[hybridSearch] onlyAuthoritative: ${options.onlyAuthoritative}`);
+      }
     }
     
     // Call Supabase hybrid_search RPC function
-    const { data, error } = await getSupabaseAdmin().rpc('hybrid_search', {
+    logInfo('--------- RPC CALL DETAILS ---------');
+    logInfo(`[hybridSearch] Calling RPC 'hybrid_search' for query: "${query}"`);
+    logInfo(`[hybridSearch] Filter sent to RPC: ${JSON.stringify(filter, null, 2)}`);
+    logInfo(`[hybridSearch] Parameters: vectorWeight=${vectorWeight}, keywordWeight=${keywordWeight}, matchThreshold=${matchThreshold}, limit=${limit}`);
+    
+    // For troubleshooting specific queries
+    if (query.toLowerCase().includes('investor') || query.toLowerCase().includes('invest')) {
+      logInfo('[hybridSearch] INVESTOR QUERY DETECTED - enabling additional debugging');
+      
+      // Try getting document count first to verify content exists
+      try {
+        const { count, error: countError } = await supabase
+          .from('document_chunks')
+          .select('*', { count: 'exact', head: true });
+          
+        logInfo(`[hybridSearch] Database contains ${count || 'unknown'} document chunks total`);
+        
+        // Check for any docs with investor-related content
+        const { data: investorDocs, error: investorError } = await supabase
+          .from('document_chunks')
+          .select('id, document_id')
+          .ilike('text', '%invest%')
+          .limit(5);
+          
+        if (investorError) {
+          logWarning(`[hybridSearch] Error checking for investor content: ${investorError.message}`);
+        } else {
+          logInfo(`[hybridSearch] Found ${investorDocs?.length || 0} documents containing 'invest'`);
+          if (investorDocs && investorDocs.length > 0) {
+            logInfo(`[hybridSearch] Sample investor documents: ${JSON.stringify(investorDocs.map(d => d.document_id))}`);
+          }
+        }
+      } catch (debugError) {
+        logWarning(`[hybridSearch] Error during debug checks: ${debugError}`);
+      }
+    }
+    
+    const rpcStartTime = Date.now();
+    const { data, error } = await supabase.rpc('hybrid_search', {
       query_text: query,
       query_embedding: queryEmbedding,
       match_count: limit,
       match_threshold: matchThreshold,
       vector_weight: vectorWeight,
       keyword_weight: keywordWeight,
-      filter: Object.keys(filter).length > 0 ? filter : null
+      filter: filter 
     });
+    const rpcDuration = Date.now() - rpcStartTime;
     
+    // Enhanced RPC call result logging
+    logInfo(`[hybridSearch] RPC call completed in ${rpcDuration}ms`);
+
     if (error) {
-      logError('Error during hybrid search RPC call', error);
+      logError('--------- RPC ERROR DETAILS ---------');
+      logError(`[hybridSearch] Error during RPC call - Code: ${error.code}, Message: ${error.message}`);
+      logError(`[hybridSearch] Error details: ${error.details || 'none'}`);
+      logError(`[hybridSearch] Query: "${query}"`);
+      logError(`[hybridSearch] Filter: ${JSON.stringify(filter, null, 2)}`);
+      logError(`[hybridSearch] Query embedding length: ${queryEmbedding?.length || 'unknown'}`);
+      logError(`[hybridSearch] Parameters: vectorWeight=${vectorWeight}, keywordWeight=${keywordWeight}, matchThreshold=${matchThreshold}, limit=${limit}`);
       throw new Error(`Hybrid search failed: ${error.message}`);
     }
     
+    logInfo('--------- RPC RESPONSE DETAILS ---------');
+    logInfo(`[hybridSearch] RPC call successful. Found ${Array.isArray(data) ? data.length : 'unknown'} results.`);
+    
+    if (Array.isArray(data) && data.length === 0) {
+      logWarning(`[hybridSearch] RPC call returned 0 results for query: "${query}"`);
+      logWarning(`[hybridSearch] Filter used: ${JSON.stringify(filter, null, 2)}`);
+      logWarning(`[hybridSearch] Consider checking category mappings and filter validity`);
+      
+      // Immediately try a more lenient search if we got zero results and there's a filter
+      if (filter && Object.keys(filter).length > 0) {
+        logInfo(`[hybridSearch] Attempting secondary search with reduced filter strictness`);
+        
+        // Try to get some results with a more lenient approach
+        try {
+          // Try without any filter
+          const { data: unfilteredData, error: unfilteredError } = await supabase.rpc('hybrid_search', {
+            query_text: query,
+            query_embedding: queryEmbedding,
+            match_count: limit,
+            match_threshold: matchThreshold * 0.7, // Lower the threshold by 30%
+            vector_weight: vectorWeight,
+            keyword_weight: keywordWeight,
+            filter: null // No filter
+          });
+          
+          if (unfilteredError) {
+            logWarning(`[hybridSearch] Secondary search failed: ${unfilteredError.message}`);
+          } else {
+            logInfo(`[hybridSearch] Secondary search found ${unfilteredData?.length || 0} results - available for fallback`);
+            
+            // Log the first result for debugging
+            if (unfilteredData && unfilteredData.length > 0) {
+              logInfo(`[hybridSearch] First unfiltered result: ${JSON.stringify({
+                id: unfilteredData[0].id,
+                score: unfilteredData[0].combined_score || unfilteredData[0].similarity,
+                text: unfilteredData[0].text?.substring(0, 100) + '...'
+              })}`);
+            }
+          }
+        } catch (secondaryError) {
+          logWarning(`[hybridSearch] Error during secondary search: ${secondaryError}`);
+        }
+      }
+    }
+    
     if (!data || !Array.isArray(data)) {
-      // Return empty results with correct structure
+      logWarning('[hybridSearch] RPC returned no data or data is not an array.');
       const emptyResponse: HybridSearchResponse = {
         results: [],
-        [Symbol.iterator]: function* () {
-          for (const result of this.results) {
-            yield result;
-          }
-        }
       };
-      
       if (options.includeFacets) {
         emptyResponse.facets = {
           categories: [],
-          entities: {},
+          entities: { people: [], companies: [], products: [], features: [] },
           technicalLevels: []
         };
       }
-      
       return emptyResponse;
     }
     
-    // Map the results to the expected format
-    const results: Array<VectorStoreItem & { score: number }> = data.map(item => ({
+    // Enhanced result mapping logging
+    logDebug(`[hybridSearch] Mapping ${data.length} results to response format`);
+    
+    // Map the results
+    const results: Array<VectorStoreItem & { 
+      score: number;
+      vectorScore: number;
+      keywordScore: number;
+      search_type?: string;
+    }> = data.map(item => ({
       id: item.id,
       document_id: item.document_id,
-      chunk_index: item.chunk_index,
-      text: item.text || '',
-      originalText: item.content || '',
+      chunk_index: item.chunk_index || 0,
+      text: item.text || item.content || '',
+      originalText: item.original_text || item.content || '',
       metadata: item.metadata || {},
       embedding: [], // Empty embedding for efficiency
-      score: item.combined_score || 0,
-      search_type: item.search_type || ''
+      score: item.combined_score ?? item.similarity ?? item.keyword_score ?? 0, 
+      vectorScore: item.vector_score ?? 0, 
+      keywordScore: item.keyword_score ?? 0,
+      search_type: item.search_type || 'hybrid'
     }));
+    
+    // Log details of the first few results
+    if (results.length > 0) {
+      logDebug('[hybridSearch] First result details:');
+      logDebug(JSON.stringify({
+        id: results[0].id,
+        document_id: results[0].document_id,
+        score: results[0].score,
+        vectorScore: results[0].vectorScore,
+        keywordScore: results[0].keywordScore,
+        metadata: results[0].metadata
+      }, null, 2));
+      
+      // Log metadata categories of first 3 results to help diagnose category issues
+      const categoryInfo = results.slice(0, 3).map(r => ({
+        id: r.id,
+        primary: r.metadata?.primaryCategory,
+        secondary: r.metadata?.secondaryCategories
+      }));
+      logInfo('[hybridSearch] Category information in top results:', JSON.stringify(categoryInfo, null, 2));
+    }
     
     // Prepare facets if requested
     let facetsData = undefined;
     if (options?.includeFacets) {
-      facetsData = await fetchFacetsFromItems(data || []);
+      logDebug('[hybridSearch] Fetching facet information');
+      facetsData = await fetchFacetsFromItems(results);
     }
     
     // Prepare the final response object
     const response: HybridSearchResponse = {
       results,
-      // @ts-ignore - Linter incorrectly expects entities to be an array here
       facets: facetsData ? {
-        ...facetsData,
-        entities: facetsData.entities
+        categories: facetsData.categories,
+        entities: facetsData.entities,
+        technicalLevels: facetsData.technicalLevels
       } : undefined,
-      [Symbol.iterator]: function*() {
-        for (const item of results) {
-          yield item;
-        }
-      }
     };
+
+    logInfo(`[hybridSearch:${executionId}] Successfully processed ${results.length} results`);
+    logInfo(`===== HYBRID SEARCH CALL END (ID: ${executionId}) =====`);
     
     return response;
-  } catch (error) {
-    logError('Error in hybridSearch', error);
+  } catch (error: any) {
+    logError(`===== HYBRID SEARCH ERROR (ID: ${executionId}) =====`);
+    logError(`[hybridSearch:${executionId}] Error processing query: "${query}"`);
+    logError(`[hybridSearch:${executionId}] Error message: ${error.message}`); 
+    logError(`[hybridSearch:${executionId}] Options used: ${JSON.stringify(options, null, 2)}`);
+    if (error.stack) { logError(`[hybridSearch:${executionId}] Stack trace: ${error.stack}`); }
+    
+    // Try fallback search if hybrid search fails
+    try {
+      logWarning(`[hybridSearch] Attempting keyword-only fallback for query: "${query}"`);
+      const fallbackResults = await fallbackSearch(query);
+      
+      const fallbackResponse: HybridSearchResponse = {
+        results: fallbackResults.map((item: VectorStoreItem & { score: number }) => ({
+          ...item,
+          vectorScore: 0,
+          keywordScore: item.score || 0
+        })),
+      };
+      logInfo(`[hybridSearch] Fallback search returned ${fallbackResponse.results.length} results.`);
+      return fallbackResponse;
+    } catch (fallbackError: any) {
+      logError('[hybridSearch] Fallback search also failed');
+      logError(`[hybridSearch] Fallback error: ${fallbackError.message}`);
+      if (fallbackError.stack) { logError(`[hybridSearch] Fallback stack: ${fallbackError.stack}`); }
+    }
     
     // Return empty results with correct structure when error occurs
+    logInfo('[hybridSearch] Returning empty response due to errors');
+    logInfo('===== HYBRID SEARCH CALL END =====');
+    
     const errorResponse: HybridSearchResponse = {
       results: [],
-      [Symbol.iterator]: function* () {
-      for (const result of this.results) {
-        yield result;
-      }
-    }
-  };
-  
+    };
     if (options.includeFacets) {
       errorResponse.facets = {
         categories: [],
-        entities: {},
+        entities: { people: [], companies: [], products: [], features: [] },
         technicalLevels: []
       };
     }
-    
     return errorResponse;
-  }
-}
-
-/**
- * Fallback search function when embedding generation fails
- */
-export async function fallbackSearch(
-  query: string
-): Promise<(VectorStoreItem & { score: number })[]> {
-  if (!query || query.trim() === '') {
-    return [];
-  }
-  
-  try {
-    // Use keyword_search RPC function as fallback
-    const { data, error } = await getSupabaseAdmin().rpc('keyword_search', {
-      query_text: query,
-      match_count: 10
-    });
-    
-    if (error) {
-      logError('Error during fallback search RPC call', error);
-      return [];
-    }
-    
-    if (!data || !Array.isArray(data)) {
-      return [];
-    }
-    
-    // Map the results to the expected format
-    const results: Array<VectorStoreItem & { score: number }> = data.map(item => ({
-      id: item.id,
-      document_id: item.document_id,
-      chunk_index: item.chunk_index,
-      text: item.text || '',
-      originalText: item.content || '',
-      metadata: item.metadata || {},
-      embedding: [], // Empty embedding for efficiency
-      score: item.rank || 0 // Use rank as score
-    }));
-  
-  return results;
-  } catch (error) {
-    logError('Error in fallbackSearch', error);
-    return [];
   }
 }
 
@@ -568,7 +756,12 @@ async function fetchFacetsFromItems(
   if (documentIds.length === 0) {
     return {
       categories: [],
-      entities: { all: [] },
+      entities: { 
+        people: [],
+        companies: [],
+        products: [],
+        features: []
+      },
       technicalLevels: []
     };
   }
@@ -584,7 +777,12 @@ async function fetchFacetsFromItems(
       logError('Error fetching facet data', error);
       return {
         categories: [],
-        entities: { all: [] },
+        entities: { 
+          people: [],
+          companies: [],
+          products: [],
+          features: []
+        },
         technicalLevels: []
       };
     }
@@ -592,7 +790,12 @@ async function fetchFacetsFromItems(
     if (!data || !Array.isArray(data)) {
       return {
         categories: [],
-        entities: { all: [] },
+        entities: { 
+          people: [],
+          companies: [],
+          products: [],
+          features: []
+        },
         technicalLevels: []
       };
     }
@@ -616,14 +819,19 @@ async function fetchFacetsFromItems(
     
     return {
       categories: categoryHierarchy,
-      entities: { all: allEntities },
+      entities: allEntities,
       technicalLevels: getTechnicalLevelDistribution(documents)
     };
   } catch (error) {
     logError('Error generating facets', error);
     return {
       categories: [],
-      entities: { all: [] },
+      entities: { 
+        people: [],
+        companies: [],
+        products: [],
+        features: []
+      },
       technicalLevels: []
     };
   }

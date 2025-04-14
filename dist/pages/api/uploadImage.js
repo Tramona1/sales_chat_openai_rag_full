@@ -1,38 +1,33 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.config = void 0;
-exports.default = handler;
-const formidable_1 = __importDefault(require("formidable"));
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const tesseract_js_1 = require("tesseract.js");
-const openaiClient_1 = require("@/utils/openaiClient");
-const vectorStore_1 = require("@/utils/vectorStore");
-const documentProcessing_1 = require("@/utils/documentProcessing");
-exports.config = {
+import formidable from 'formidable';
+import fs from 'fs';
+import path from 'path';
+import { createWorker } from 'tesseract.js';
+import { embedText } from '@/utils/embeddingClient';
+import { splitIntoChunks } from '@/utils/documentProcessing';
+import crypto from 'crypto';
+import { getSupabaseAdmin } from '@/utils/supabaseClient';
+import { logError, logInfo, logWarning } from '@/utils/logger';
+export const config = {
     api: {
         bodyParser: false,
     },
 };
-async function handler(req, res) {
+export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method not allowed' });
     }
     // Ensure uploads directory exists
-    const uploadsDir = path_1.default.join(process.cwd(), 'public', 'uploads');
-    if (!fs_1.default.existsSync(uploadsDir)) {
-        fs_1.default.mkdirSync(uploadsDir, { recursive: true });
+    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
     }
     // Ensure data directory exists for vector store persistence
-    const dataDir = path_1.default.join(process.cwd(), 'data');
-    if (!fs_1.default.existsSync(dataDir)) {
-        fs_1.default.mkdirSync(dataDir, { recursive: true });
+    const dataDir = path.join(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
     }
     try {
-        const form = new formidable_1.default.IncomingForm({
+        const form = formidable({
             uploadDir: uploadsDir,
             keepExtensions: true,
             maxFileSize: 10 * 1024 * 1024, // 10MB limit
@@ -53,7 +48,7 @@ async function handler(req, res) {
         }
         const uploadedFile = fileArray[0];
         // Process the image with Tesseract OCR
-        const worker = await (0, tesseract_js_1.createWorker)();
+        const worker = await createWorker();
         const { data } = await worker.recognize(uploadedFile.filepath);
         await worker.terminate();
         if (!data.text || data.text.trim() === '') {
@@ -64,27 +59,91 @@ async function handler(req, res) {
             ? `${uploadedFile.originalFilename} (Image)`
             : 'Image Upload';
         // Process the extracted text with source information
-        const chunks = (0, documentProcessing_1.splitIntoChunks)(data.text, 500, source);
-        // Process chunks
+        const chunks = splitIntoChunks(data.text, 500, source);
+        // Generate a unique document ID for this image using crypto
+        const documentId = crypto.randomUUID();
+        // ---- Start: Add document record to the 'documents' table ----
+        try {
+            const client = getSupabaseAdmin(); // Use the admin client
+            const { data: docData, error: docError } = await client
+                .from('documents')
+                .insert({
+                id: documentId,
+                source: source, // Use the filename as the source
+                metadata: {
+                    uploaded_by: 'system', // Placeholder - replace with user info if available
+                    original_filename: uploadedFile.originalFilename,
+                    file_type: uploadedFile.mimetype,
+                    file_size: uploadedFile.size
+                }
+                // status: 'processing' // Removed - Column does not exist
+            })
+                .select() // Select the inserted row to confirm
+                .single(); // Expect a single row
+            if (docError) {
+                console.error('Error adding document record to Supabase:', docError);
+                throw new Error(`Failed to create document record: ${docError.message}`);
+            }
+            console.log('Successfully created document record:', docData);
+        }
+        catch (error) {
+            console.error('Supabase operation failed while adding document record:', error);
+            // Return an error response if document creation fails
+            return res.status(500).json({
+                message: `Error creating document record: ${error instanceof Error ? error.message : 'Unknown error'}`
+            });
+        }
+        // ---- End: Add document record ----
+        // Process chunks: Insert into Supabase instead of using addToVectorStore
         let processedCount = 0;
-        for (const chunk of chunks) {
+        const chunksToInsert = []; // Prepare chunks for batch insert
+        for (const [index, chunk] of chunks.entries()) {
             if (chunk.text.trim()) {
-                const embedding = await (0, openaiClient_1.embedText)(chunk.text);
-                const item = {
-                    embedding,
-                    text: chunk.text,
-                    metadata: {
-                        source,
-                        // Include the additional metadata from the chunking process
-                        ...(chunk.metadata || {})
-                    }
-                };
-                (0, vectorStore_1.addToVectorStore)(item);
-                processedCount++;
+                try {
+                    const embedding = await embedText(chunk.text);
+                    chunksToInsert.push({
+                        document_id: documentId, // From the document created earlier
+                        chunk_index: index,
+                        content: chunk.text, // Assuming target column is 'content'
+                        embedding: embedding,
+                        metadata: {
+                            source, // From original filename
+                            ...(chunk.metadata || {}) // Any metadata from chunking process
+                        }
+                    });
+                    processedCount++;
+                }
+                catch (embeddingError) {
+                    logError('Failed to generate embedding for chunk', { documentId, chunkIndex: index, error: embeddingError });
+                    // Decide if we should skip this chunk or fail the request
+                    // For now, we skip it
+                }
             }
         }
+        // Batch insert chunks into Supabase
+        if (chunksToInsert.length > 0) {
+            logInfo(`Inserting ${chunksToInsert.length} chunks into document_chunks for document ${documentId}`);
+            const { error: insertChunksError } = await getSupabaseAdmin() // Use client from earlier
+                .from('document_chunks')
+                .insert(chunksToInsert);
+            if (insertChunksError) {
+                logError('Error inserting document chunks into Supabase', { documentId, error: insertChunksError });
+                // Even if chunk insertion fails, the document record exists. 
+                // Consider how to handle partial failures. Return error? 
+                return res.status(500).json({
+                    message: `Error inserting chunks into database: ${insertChunksError.message}`
+                });
+            }
+            else {
+                logInfo(`Successfully inserted ${chunksToInsert.length} chunks for document ${documentId}`);
+            }
+        }
+        else {
+            logWarning('No valid chunks generated from image text', { documentId, source });
+            // Consider if the document record should be deleted if no chunks are added.
+        }
         return res.status(200).json({
-            message: `Successfully processed image and extracted ${processedCount} text chunks. You can now ask questions about this document!`
+            message: `Successfully processed image and added ${processedCount} text chunks to the database for document ${documentId}. You can now ask questions about this document!`
         });
     }
     catch (error) {

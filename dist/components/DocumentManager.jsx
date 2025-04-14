@@ -1,67 +1,28 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = DocumentManager;
-const react_1 = __importStar(require("react"));
-const lucide_react_1 = require("lucide-react");
-const EditDocumentModal_1 = __importDefault(require("./EditDocumentModal"));
-function DocumentManager({ limit = 50 }) {
-    const [documents, setDocuments] = (0, react_1.useState)([]);
-    const [loading, setLoading] = (0, react_1.useState)(true);
-    const [error, setError] = (0, react_1.useState)(null);
-    const [searchTerm, setSearchTerm] = (0, react_1.useState)('');
-    const [debouncedSearchTerm, setDebouncedSearchTerm] = (0, react_1.useState)('');
-    const [selectedFilter, setSelectedFilter] = (0, react_1.useState)('all');
-    const [contentTypes, setContentTypes] = (0, react_1.useState)([]);
-    const [refreshTrigger, setRefreshTrigger] = (0, react_1.useState)(0);
-    const [totalDocuments, setTotalDocuments] = (0, react_1.useState)(0);
-    const [responseDebug, setResponseDebug] = (0, react_1.useState)(null);
-    const [showRecentlyApproved, setShowRecentlyApproved] = (0, react_1.useState)(false);
+import React, { useState, useEffect } from 'react';
+import { Search, Trash2, FileText, RefreshCw, Filter, Clock, Edit2 } from 'lucide-react';
+import EditDocumentModal from './EditDocumentModal';
+export default function DocumentManager({ limit = 50 }) {
+    const [documents, setDocuments] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+    const [selectedFilter, setSelectedFilter] = useState('all');
+    const [contentTypes, setContentTypes] = useState([]);
+    const [refreshTrigger, setRefreshTrigger] = useState(0);
+    const [totalDocuments, setTotalDocuments] = useState(0);
+    const [responseDebug, setResponseDebug] = useState(null);
+    const [showRecentlyApproved, setShowRecentlyApproved] = useState(false);
     // State for document editing
-    const [editingDocument, setEditingDocument] = (0, react_1.useState)({ document: null, isOpen: false });
-    const [editedText, setEditedText] = (0, react_1.useState)('');
-    const [editedMetadata, setEditedMetadata] = (0, react_1.useState)({});
-    const [savingEdit, setSavingEdit] = (0, react_1.useState)(false);
+    const [editingDocument, setEditingDocument] = useState({ document: null, isOpen: false });
+    const [editedText, setEditedText] = useState('');
+    const [editedMetadata, setEditedMetadata] = useState({});
+    const [savingEdit, setSavingEdit] = useState(false);
     // State for batch operations
-    const [selectedDocumentIds, setSelectedDocumentIds] = (0, react_1.useState)([]);
-    const [isBatchDeleting, setIsBatchDeleting] = (0, react_1.useState)(false);
+    const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
+    const [isBatchDeleting, setIsBatchDeleting] = useState(false);
     // Debounce search term to avoid too many API calls
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         const timer = setTimeout(() => {
             setDebouncedSearchTerm(searchTerm);
         }, 300);
@@ -69,12 +30,11 @@ function DocumentManager({ limit = 50 }) {
     }, [searchTerm]);
     // Define what "recently approved" means (last 24 hours)
     const isRecentlyApproved = (doc) => {
-        var _a, _b, _c, _d;
-        if (!((_a = doc.metadata) === null || _a === void 0 ? void 0 : _a.approvedAt) && !((_b = doc.metadata) === null || _b === void 0 ? void 0 : _b.lastUpdated))
+        if (!doc.metadata?.approvedAt && !doc.metadata?.lastUpdated)
             return false;
-        const approvalDate = ((_c = doc.metadata) === null || _c === void 0 ? void 0 : _c.approvedAt)
+        const approvalDate = doc.metadata?.approvedAt
             ? new Date(doc.metadata.approvedAt)
-            : ((_d = doc.metadata) === null || _d === void 0 ? void 0 : _d.lastUpdated)
+            : doc.metadata?.lastUpdated
                 ? new Date(doc.metadata.lastUpdated)
                 : null;
         if (!approvalDate)
@@ -84,7 +44,7 @@ function DocumentManager({ limit = 50 }) {
         return approvalDate > oneDayAgo;
     };
     // Fetch documents from the API
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         const fetchDocuments = async () => {
             try {
                 setLoading(true);
@@ -118,7 +78,7 @@ function DocumentManager({ limit = 50 }) {
                     setDocuments(data.documents);
                     setTotalDocuments(data.total || data.documents.length);
                     // Extract unique content types with proper type assertion
-                    const types = [...new Set(data.documents.map((doc) => { var _a; return ((_a = doc.metadata) === null || _a === void 0 ? void 0 : _a.contentType) || 'Unknown'; }))];
+                    const types = [...new Set(data.documents.map((doc) => doc.metadata?.contentType || 'Unknown'))];
                     setContentTypes(types);
                     console.log(`Loaded ${data.documents.length} documents with ${types.length} content types`);
                 }
@@ -206,7 +166,6 @@ function DocumentManager({ limit = 50 }) {
     };
     // Save edited document
     const handleSaveEdit = async (updatedDoc) => {
-        var _a;
         if (!editingDocument.document)
             return;
         setSavingEdit(true);
@@ -228,7 +187,7 @@ function DocumentManager({ limit = 50 }) {
             const responseData = await response.json();
             if (!response.ok) {
                 console.error('Error response from server:', responseData);
-                throw new Error(((_a = responseData.error) === null || _a === void 0 ? void 0 : _a.message) || 'Failed to update document');
+                throw new Error(responseData.error?.message || 'Failed to update document');
             }
             console.log('Document saved successfully:', responseData);
             // Refresh the documents list to show the updated document after a small delay
@@ -359,25 +318,25 @@ function DocumentManager({ limit = 50 }) {
     return (<div className="bg-white rounded-lg shadow overflow-hidden">
       <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="font-medium text-gray-800 flex items-center">
-          <lucide_react_1.FileText className="h-5 w-5 mr-2 text-primary-600"/>
+          <FileText className="h-5 w-5 mr-2 text-primary-600"/>
           Document Management {totalDocuments > 0 && `(${totalDocuments} total)`}
           {recentlyApprovedCount > 0 && (<span className="ml-2 px-2 py-0.5 bg-green-100 text-green-800 text-xs rounded-full flex items-center">
-              <lucide_react_1.Clock className="h-3 w-3 mr-1"/>
+              <Clock className="h-3 w-3 mr-1"/>
               {recentlyApprovedCount} new
             </span>)}
         </h2>
         
         <div className="flex gap-3 w-full sm:w-auto">
           <form onSubmit={handleSearch} className="relative flex-grow sm:flex-grow-0">
-            <lucide_react_1.Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400"/>
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400"/>
             <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search documents..." className="pl-10 pr-4 py-2 border border-gray-300 rounded-md text-sm w-full focus:ring-2 focus:ring-primary-500 focus:border-primary-500"/>
             <button type="submit" className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
-              <lucide_react_1.RefreshCw className="h-4 w-4"/>
+              <RefreshCw className="h-4 w-4"/>
             </button>
           </form>
           
           <div className="relative">
-            <lucide_react_1.Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400"/>
+            <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400"/>
             <select value={selectedFilter} onChange={(e) => setSelectedFilter(e.target.value)} className="pl-10 pr-4 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 appearance-none">
               <option value="all">All Types</option>
               <option value="recent">Recently Added</option>
@@ -386,7 +345,7 @@ function DocumentManager({ limit = 50 }) {
           </div>
           
           <button onClick={handleRefresh} className="p-2 rounded-md bg-gray-100 hover:bg-gray-200 transition" title="Refresh documents">
-            <lucide_react_1.RefreshCw className="h-5 w-5 text-gray-600"/>
+            <RefreshCw className="h-5 w-5 text-gray-600"/>
           </button>
         </div>
       </div>
@@ -463,7 +422,6 @@ function DocumentManager({ limit = 50 }) {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {documents.map((doc) => {
-                var _a, _b, _c;
                 const isNew = isRecentlyApproved(doc);
                 const isSelected = selectedDocumentIds.includes(doc.id);
                 return (<tr key={doc.id} className={`hover:bg-gray-50 ${isNew ? 'bg-green-50' : ''} ${isSelected ? 'bg-blue-50' : ''}`}>
@@ -475,7 +433,7 @@ function DocumentManager({ limit = 50 }) {
                         {isNew && (<span className="mr-2 flex-shrink-0 h-2 w-2 rounded-full bg-green-500" title="Recently added"></span>)}
                         <span>
                           {doc.source}
-                          {((_a = doc.metadata) === null || _a === void 0 ? void 0 : _a.page) && <span className="text-gray-500 ml-1">p.{doc.metadata.page}</span>}
+                          {doc.metadata?.page && <span className="text-gray-500 ml-1">p.{doc.metadata.page}</span>}
                         </span>
                       </div>
                     </td>
@@ -484,19 +442,19 @@ function DocumentManager({ limit = 50 }) {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                        {((_b = doc.metadata) === null || _b === void 0 ? void 0 : _b.contentType) || 'Unknown'}
+                        {doc.metadata?.contentType || 'Unknown'}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatDate((_c = doc.metadata) === null || _c === void 0 ? void 0 : _c.lastUpdated)}
+                      {formatDate(doc.metadata?.lastUpdated)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <div className="flex items-center justify-end space-x-2">
                         <button onClick={() => handleEditDocument(doc)} className="text-blue-600 hover:text-blue-900" title="Edit document">
-                          <lucide_react_1.Edit2 className="h-5 w-5"/>
+                          <Edit2 className="h-5 w-5"/>
                         </button>
                         <button onClick={() => handleDeleteDocument(doc.id)} className="text-red-600 hover:text-red-900" title="Delete document">
-                          <lucide_react_1.Trash2 className="h-5 w-5"/>
+                          <Trash2 className="h-5 w-5"/>
                         </button>
                       </div>
                     </td>
@@ -511,7 +469,7 @@ function DocumentManager({ limit = 50 }) {
       </div>
       
       {/* Document Edit Modal */}
-      <EditDocumentModal_1.default isOpen={editingDocument.isOpen} onClose={handleCancelEdit} document={editingDocument.document
+      <EditDocumentModal isOpen={editingDocument.isOpen} onClose={handleCancelEdit} document={editingDocument.document
             ? {
                 id: editingDocument.document.id,
                 text: editingDocument.document.text,

@@ -1,47 +1,12 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importStar(require("react"));
-const recharts_1 = require("recharts");
+import React, { useState, useEffect } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D'];
 const AnalyticsDashboard = ({ refreshInterval = 60000 // Default refresh every minute
  }) => {
-    const [analyticsData, setAnalyticsData] = (0, react_1.useState)(null);
-    const [loading, setLoading] = (0, react_1.useState)(true);
-    const [error, setError] = (0, react_1.useState)(null);
-    const [selectedTab, setSelectedTab] = (0, react_1.useState)('queries');
+    const [analyticsData, setAnalyticsData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [selectedTab, setSelectedTab] = useState('queries');
     // Fetch analytics data
     const fetchAnalytics = async () => {
         try {
@@ -63,7 +28,7 @@ const AnalyticsDashboard = ({ refreshInterval = 60000 // Default refresh every m
         }
     };
     // Fetch on load and set up refresh interval
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         fetchAnalytics();
         const interval = setInterval(fetchAnalytics, refreshInterval);
         return () => clearInterval(interval);
@@ -193,15 +158,15 @@ const AnalyticsDashboard = ({ refreshInterval = 60000 // Default refresh every m
           <div className="mb-8">
             <h3 className="text-lg font-medium mb-4">Feedback Distribution</h3>
             <div className="h-64">
-              <recharts_1.ResponsiveContainer width="100%" height="100%">
-                <recharts_1.PieChart>
-                  <recharts_1.Pie data={getPieChartData()} cx="50%" cy="50%" labelLine={false} outerRadius={80} fill="#8884d8" dataKey="value" label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}>
-                    {getPieChartData().map((entry, index) => (<recharts_1.Cell key={`cell-${index}`} fill={index === 0 ? '#4CAF50' : '#F44336'}/>))}
-                  </recharts_1.Pie>
-                  <recharts_1.Tooltip />
-                  <recharts_1.Legend />
-                </recharts_1.PieChart>
-              </recharts_1.ResponsiveContainer>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={getPieChartData()} cx="50%" cy="50%" labelLine={false} outerRadius={80} fill="#8884d8" dataKey="value" label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}>
+                    {getPieChartData().map((entry, index) => (<Cell key={`cell-${index}`} fill={index === 0 ? '#4CAF50' : '#F44336'}/>))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
@@ -230,18 +195,18 @@ const AnalyticsDashboard = ({ refreshInterval = 60000 // Default refresh every m
           {selectedTab === 'queries' && (<div>
               <h3 className="text-lg font-medium mb-4">Most Common Questions</h3>
               {analyticsData.commonQueries.length === 0 ? (<p className="text-gray-500 italic">No question data available yet.</p>) : (<div className="h-96">
-                  <recharts_1.ResponsiveContainer width="100%" height="100%">
-                    <recharts_1.BarChart data={getQueryBarData()} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 5 }}>
-                      <recharts_1.CartesianGrid strokeDasharray="3 3"/>
-                      <recharts_1.XAxis type="number"/>
-                      <recharts_1.YAxis type="category" dataKey="name" width={150}/>
-                      <recharts_1.Tooltip />
-                      <recharts_1.Legend />
-                      <recharts_1.Bar dataKey="total" name="Total Mentions" fill="#8884d8"/>
-                      <recharts_1.Bar dataKey="positive" name="Positive Feedback" fill="#4CAF50"/>
-                      <recharts_1.Bar dataKey="negative" name="Negative Feedback" fill="#F44336"/>
-                    </recharts_1.BarChart>
-                  </recharts_1.ResponsiveContainer>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={getQueryBarData()} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3"/>
+                      <XAxis type="number"/>
+                      <YAxis type="category" dataKey="name" width={150}/>
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="total" name="Total Mentions" fill="#8884d8"/>
+                      <Bar dataKey="positive" name="Positive Feedback" fill="#4CAF50"/>
+                      <Bar dataKey="negative" name="Negative Feedback" fill="#F44336"/>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>)}
             </div>)}
 
@@ -249,18 +214,18 @@ const AnalyticsDashboard = ({ refreshInterval = 60000 // Default refresh every m
           {selectedTab === 'content' && (<div>
               <h3 className="text-lg font-medium mb-4">Most Referenced Content</h3>
               {analyticsData.topReferencedContent.length === 0 ? (<p className="text-gray-500 italic">No content reference data available yet.</p>) : (<div className="h-96">
-                  <recharts_1.ResponsiveContainer width="100%" height="100%">
-                    <recharts_1.BarChart data={getContentBarData()} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 5 }}>
-                      <recharts_1.CartesianGrid strokeDasharray="3 3"/>
-                      <recharts_1.XAxis type="number"/>
-                      <recharts_1.YAxis type="category" dataKey="name" width={150}/>
-                      <recharts_1.Tooltip />
-                      <recharts_1.Legend />
-                      <recharts_1.Bar dataKey="total" name="Total References" fill="#82ca9d"/>
-                      <recharts_1.Bar dataKey="positive" name="Positive Feedback" fill="#4CAF50"/>
-                      <recharts_1.Bar dataKey="negative" name="Negative Feedback" fill="#F44336"/>
-                    </recharts_1.BarChart>
-                  </recharts_1.ResponsiveContainer>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={getContentBarData()} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3"/>
+                      <XAxis type="number"/>
+                      <YAxis type="category" dataKey="name" width={150}/>
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="total" name="Total References" fill="#82ca9d"/>
+                      <Bar dataKey="positive" name="Positive Feedback" fill="#4CAF50"/>
+                      <Bar dataKey="negative" name="Negative Feedback" fill="#F44336"/>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>)}
             </div>)}
 
@@ -271,15 +236,15 @@ const AnalyticsDashboard = ({ refreshInterval = 60000 // Default refresh every m
                   <div className="mb-8">
                     <h4 className="text-md font-medium mb-2">Session Types</h4>
                     <div className="h-64">
-                      <recharts_1.ResponsiveContainer width="100%" height="100%">
-                        <recharts_1.PieChart>
-                          <recharts_1.Pie data={getSessionPieChartData()} cx="50%" cy="50%" labelLine={false} outerRadius={80} fill="#8884d8" dataKey="value" label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}>
-                            {getSessionPieChartData().map((entry, index) => (<recharts_1.Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]}/>))}
-                          </recharts_1.Pie>
-                          <recharts_1.Tooltip />
-                          <recharts_1.Legend />
-                        </recharts_1.PieChart>
-                      </recharts_1.ResponsiveContainer>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={getSessionPieChartData()} cx="50%" cy="50%" labelLine={false} outerRadius={80} fill="#8884d8" dataKey="value" label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}>
+                            {getSessionPieChartData().map((entry, index) => (<Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]}/>))}
+                          </Pie>
+                          <Tooltip />
+                          <Legend />
+                        </PieChart>
+                      </ResponsiveContainer>
                     </div>
                   </div>
 
@@ -298,4 +263,4 @@ const AnalyticsDashboard = ({ refreshInterval = 60000 // Default refresh every m
         </>)}
     </div>);
 };
-exports.default = AnalyticsDashboard;
+export default AnalyticsDashboard;

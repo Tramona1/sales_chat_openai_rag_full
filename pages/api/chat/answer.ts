@@ -17,13 +17,13 @@ export async function handleQuery(query: string): Promise<{
     
     // First try standard search (excluding deprecated docs by default)
     let searchResponse = await hybridSearch(query);
-    let searchResults = Array.from(searchResponse); // Use iterator protocol for backward compatibility
+    let searchResults = searchResponse.results || [];
     
     // If no results, try fallback search
     if (searchResults.length === 0) {
       console.log('No results from primary search, trying fallback search');
       const fallbackResponse = await fallbackSearch(query);
-      searchResults = Array.from(fallbackResponse);
+      searchResults = fallbackResponse || [];
     }
     
     // If still no results, return a no-results message
@@ -38,18 +38,19 @@ export async function handleQuery(query: string): Promise<{
     
     // Prepare context from search results
     const context = searchResults
+      .slice(0, 10)
       .map(item => {
-        const source = item.metadata?.source || 'unknown';
-        const lastUpdated = item.metadata?.lastUpdated 
-          ? `(Last updated: ${new Date(item.metadata.lastUpdated).toLocaleDateString()})` 
+        const metadata = item.metadata || {};
+        const source = metadata.source || 'unknown';
+        const lastUpdated = metadata.lastUpdated
+          ? `(Last updated: ${new Date(metadata.lastUpdated).toLocaleDateString()})`
           : '';
-        const authoritative = item.metadata?.isAuthoritative === 'true' 
-          ? ' [AUTHORITATIVE SOURCE]' 
-          : '';
-        
-        return `SOURCE [${source}]${authoritative}${lastUpdated}:\n${item.text}\n`;
+        const authoritative = metadata.isAuthoritative === 'true'
+          ? ' [AUTHORITATIVE]' : '';
+        const textContent = typeof item.text === 'string' ? item.text : '';
+        return `SOURCE [${source}]${authoritative}${lastUpdated}:\n${textContent}\n`;
       })
-      .join('\n\n');
+      .join('\n---\n');
     
     // Create prompt for LLM
     const systemPrompt = `You are a helpful AI assistant that accurately answers user questions 

@@ -1,12 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { standardizeApiErrorResponse } from '../../../../utils/errorHandling';
-import { getAllVectorStoreItems, VectorStoreItem } from '../../../../utils/vectorStore';
-import path from 'path';
-import fs from 'fs';
+import { logError, logInfo } from '../../../../utils/logger'; // Use correct logger path
+import { getSupabaseAdmin } from '../../../../utils/supabaseClient'; // Import Supabase client
 
-// Constants for batch processing
-const VECTOR_STORE_DIR = path.join(process.cwd(), 'data', 'vector_batches');
-const BATCH_INDEX_FILE = path.join(process.cwd(), 'data', 'batch_index.json');
+// Remove obsolete file system imports and constants
+// import path from 'path';
+// import fs from 'fs';
+// const VECTOR_STORE_DIR = path.join(process.cwd(), 'data', 'vector_batches');
+// const BATCH_INDEX_FILE = path.join(process.cwd(), 'data', 'batch_index.json');
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Only allow POST requests
@@ -31,125 +32,114 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
   
-  console.log(`Batch deleting ${documentIds.length} documents`);
+  logInfo(`Received request to batch delete ${documentIds.length} documents`, { documentIds });
 
   try {
-    // Get all vector store items
-    const allDocuments = await getAllVectorStoreItems();
-    
-    // Track which IDs were found and deleted
-    const deletedIds: string[] = [];
-    const notFoundIds: string[] = [];
-    
-    // Create a map to track which batches need to be updated
-    const batchUpdates: Record<string, {
-      batchId: string,
-      documentsToKeep: any[]
-    }> = {};
-    
-    // Filter out the documents to delete
-    const documentsToKeep = allDocuments.filter((item: VectorStoreItem) => {
-      const documentId = item.metadata?.source;
-      
-      // If this is one of the documents to delete
-      if (documentId && documentIds.includes(documentId)) {
-        deletedIds.push(documentId);
-        
-        // Track batches that need updating
-        const batchId = item.metadata?.batch;
-        if (batchId) {
-          if (!batchUpdates[batchId]) {
-            batchUpdates[batchId] = {
-              batchId,
-              documentsToKeep: []
-            };
-          }
-        }
-        
-        return false; // Remove this document
-      }
-      
-      // If it has a batch ID, store it for batch updates
-      const batchId = item.metadata?.batch;
-      if (batchId) {
-        if (!batchUpdates[batchId]) {
-          batchUpdates[batchId] = {
-            batchId,
-            documentsToKeep: []
-          };
-        }
-        batchUpdates[batchId].documentsToKeep.push(item);
-      }
-      
-      return true; // Keep this document
-    });
-    
-    // Find which IDs weren't found
-    notFoundIds.push(...documentIds.filter(id => !deletedIds.includes(id)));
-    
-    // Check if we found and deleted any documents
-    if (deletedIds.length === 0) {
-      return res.status(404).json({ 
-        error: { 
-          message: 'None of the specified documents were found', 
-          code: 'documents_not_found',
-          details: { requestedIds: documentIds }
-        } 
+    const supabase = getSupabaseAdmin();
+
+    // 1. Find chunks associated with the document IDs to confirm existence
+    const { data: chunksData, error: fetchError } = await supabase
+      .from('document_chunks')
+      .select('id, document_id') // Select only necessary fields
+      .in('document_id', documentIds);
+
+    if (fetchError) {
+      logError('Error fetching document chunks for deletion', fetchError);
+      throw new Error(`Failed to fetch document chunks: ${fetchError.message}`);
+    }
+
+    const chunksToDelete = chunksData || [];
+    const chunkIdsToDelete = chunksToDelete.map(chunk => chunk.id);
+    const foundDocumentIds = [...new Set(chunksToDelete.map(chunk => chunk.document_id))];
+    const notFoundIds = documentIds.filter(id => !foundDocumentIds.includes(id));
+
+    logInfo(`Found ${chunksToDelete.length} chunks for ${foundDocumentIds.length} documents. IDs not found: ${notFoundIds.length}`, { foundDocumentIds, notFoundIds });
+
+    if (foundDocumentIds.length === 0) {
+      logInfo('No matching documents found for deletion.');
+      return res.status(404).json({
+        success: false,
+        message: 'None of the specified documents were found.',
+        deletedCount: 0,
+        deletedIds: [],
+        notFoundIds: documentIds,
+        failedIds: []
       });
     }
-    
-    // Update the batch files if applicable
-    if (fs.existsSync(BATCH_INDEX_FILE)) {
-      try {
-        // Read the batch index
-        const indexData = JSON.parse(fs.readFileSync(BATCH_INDEX_FILE, 'utf-8'));
-        const activeBatches = indexData.activeBatches || [];
-        
-        // Update each affected batch
-        for (const batchId of Object.keys(batchUpdates)) {
-          if (activeBatches.includes(batchId)) {
-            const batchFile = path.join(VECTOR_STORE_DIR, `batch_${batchId}.json`);
-            
-            if (fs.existsSync(batchFile)) {
-              // Write the updated batch with only the kept documents
-              fs.writeFileSync(batchFile, JSON.stringify(batchUpdates[batchId].documentsToKeep, null, 2));
-              console.log(`Updated batch ${batchId} after removing documents`);
-            }
-          }
-        }
-      } catch (batchError) {
-        console.error('Error updating batch files during batch deletion:', batchError);
-        // Continue with main deletion even if batch updates fail
+
+    // Track deletion results
+    let deletedChunkCount = 0;
+    let deletedDocCount = 0;
+    const failedChunkDeletions: string[] = []; // Store chunk IDs that failed
+    const failedDocDeletions: string[] = [];   // Store document IDs that failed
+
+    // 2. Delete the chunks from document_chunks table
+    if (chunkIdsToDelete.length > 0) {
+      logInfo(`Attempting to delete ${chunkIdsToDelete.length} chunks...`);
+      const { count: chunkDeleteCount, error: deleteChunkError } = await supabase
+        .from('document_chunks')
+        .delete({ count: 'exact' }) // Get count of deleted rows
+        .in('id', chunkIdsToDelete);
+
+      deletedChunkCount = chunkDeleteCount ?? 0;
+
+      if (deleteChunkError) {
+        // Log error but proceed to attempt document deletion
+        logError('Error deleting document chunks', { error: deleteChunkError, chunkIds: chunkIdsToDelete });
+        // Consider all related documents potentially failed if chunks couldn't be deleted reliably
+        failedDocDeletions.push(...foundDocumentIds); 
+      } else {
+        logInfo(`Successfully deleted ${deletedChunkCount} chunks.`);
       }
     }
-    
-    // Manually save the updated documents to the single vectorStore.json file
-    const singleStoreFile = path.join(process.cwd(), 'data', 'vectorStore.json');
-    fs.writeFileSync(singleStoreFile, JSON.stringify({ 
-      items: documentsToKeep,
-      lastUpdated: Date.now()
-    }, null, 2));
-    
-    // Update the in-memory vector store to reflect the changes
-    // (vectorStore as any).length = 0; // Clear the array
-    // documentsToKeep.forEach((item: VectorStoreItem) => (vectorStore as any).push(item));
-    // console.log(`Vector store updated with ${documentsToKeep.length} remaining documents`);
-    
-    console.log(`Deleted ${deletedIds.length} documents, keeping ${documentsToKeep.length} documents`);
-    
+
+    // 3. Delete the documents from the 'documents' table
+    // Filter out documents that already failed due to chunk deletion errors
+    const documentsToDelete = foundDocumentIds.filter(id => !failedDocDeletions.includes(id));
+    if (documentsToDelete.length > 0) {
+      logInfo(`Attempting to delete ${documentsToDelete.length} documents from documents table...`);
+      const { count: docDeleteCount, error: deleteDocError } = await supabase
+        .from('documents') // Assuming 'documents' table name
+        .delete({ count: 'exact' })
+        .in('id', documentsToDelete);
+
+      deletedDocCount = docDeleteCount ?? 0;
+
+      if (deleteDocError) {
+        logError('Error deleting documents from documents table', { error: deleteDocError, documentIds: documentsToDelete });
+        // Add these documents to the failed list
+        failedDocDeletions.push(...documentsToDelete);
+      } else {
+        logInfo(`Successfully deleted ${deletedDocCount} documents from the documents table.`);
+      }
+    }
+
+    // Determine final success/failure lists
+    const successfullyDeletedIds = foundDocumentIds.filter(id => !failedDocDeletions.includes(id));
+    // Combine IDs not found initially and IDs that failed during deletion attempts
+    const failedOrNotFoundIds = [...new Set([...notFoundIds, ...failedDocDeletions])]; 
+
+    logInfo(`Batch deletion completed. Success: ${successfullyDeletedIds.length}, Failed/Not Found: ${failedOrNotFoundIds.length}`);
+
     // Return the results
     return res.status(200).json({
-      success: true,
-      message: `Successfully deleted ${deletedIds.length} document(s)`,
-      deletedCount: deletedIds.length,
-      deletedIds,
-      notFoundIds,
-      totalDocuments: documentsToKeep.length
+      success: true, // Indicates the API call itself succeeded
+      message: `Processed ${documentIds.length} documents. Deleted: ${successfullyDeletedIds.length}, Failed/Not Found: ${failedOrNotFoundIds.length}`,
+      deletedCount: successfullyDeletedIds.length,
+      deletedIds: successfullyDeletedIds,
+      // Keep separate lists for clarity
+      notFoundIds: notFoundIds, 
+      failedIds: failedDocDeletions 
     });
     
   } catch (error) {
-    console.error('Error during batch delete:', error);
+    logError('Critical error during batch delete process', error);
     const errorResponse = standardizeApiErrorResponse(error);
-    return res.status(500).json(errorResponse);
+    return res.status(500).json({
+      ...errorResponse,
+      success: false,
+      message: error instanceof Error ? error.message : 'An unexpected error occurred during batch deletion.',
+      code: 'batch_delete_failed'
+    });
   }
 } 

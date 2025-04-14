@@ -1,30 +1,25 @@
-"use strict";
 /**
  * Enhanced Metadata Types
  *
  * This module defines the enhanced metadata structure for documents
  * to support smart ingestion and query routing.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createDefaultMetadata = createDefaultMetadata;
-exports.needsManualReview = needsManualReview;
-exports.mergeMetadata = mergeMetadata;
-const documentCategories_1 = require("../utils/documentCategories");
+import { DocumentCategoryType, QualityControlFlag as ImportedQualityFlag, ConfidenceLevel as ImportedConfidenceLevel } from '../utils/documentCategories';
 /**
  * Create default enhanced metadata
  */
-function createDefaultMetadata(source) {
+export function createDefaultMetadata(source) {
     return {
         source,
-        primaryCategory: documentCategories_1.DocumentCategoryType.GENERAL,
+        primaryCategory: DocumentCategoryType.GENERAL,
         secondaryCategories: [],
         confidenceScore: 0,
         summary: '',
         keyTopics: [],
-        technicalLevel: 1,
+        technicalLevel: 5, // Default technical level (mid-range on 1-10 scale)
         keywords: [],
         entities: [],
-        qualityFlags: [documentCategories_1.QualityControlFlag.PENDING_REVIEW],
+        qualityFlags: [ImportedQualityFlag.PENDING_REVIEW],
         approved: false,
         routingPriority: 5
     };
@@ -32,24 +27,37 @@ function createDefaultMetadata(source) {
 /**
  * Check if metadata needs manual review
  */
-function needsManualReview(metadata) {
+export function needsManualReview(metadata) {
     // Check for quality flags that require review
-    const hasReviewFlag = metadata.qualityFlags.some(flag => flag === documentCategories_1.QualityControlFlag.PENDING_REVIEW ||
-        flag === documentCategories_1.QualityControlFlag.NEEDS_CLARIFICATION ||
-        flag === documentCategories_1.QualityControlFlag.CONTAINS_CONTRADICTIONS);
+    const hasReviewFlag = metadata.qualityFlags.some(flag => flag === ImportedQualityFlag.PENDING_REVIEW ||
+        flag === ImportedQualityFlag.NEEDS_CLARIFICATION ||
+        flag === ImportedQualityFlag.CONTAINS_CONTRADICTIONS ||
+        flag === ImportedQualityFlag.UNRELIABLE_SOURCE ||
+        flag === ImportedQualityFlag.OUTDATED ||
+        flag === ImportedQualityFlag.OUTDATED_CONTENT ||
+        flag === ImportedQualityFlag.INCOMPLETE_CONTENT);
     // Check for low confidence score
     const hasLowConfidence = metadata.confidenceScore < 0.7;
-    // Check for sensitive categories
-    const hasSensitiveCategory = metadata.primaryCategory === documentCategories_1.DocumentCategoryType.CUSTOMER ||
-        metadata.primaryCategory === documentCategories_1.DocumentCategoryType.PRICING ||
-        metadata.primaryCategory === documentCategories_1.DocumentCategoryType.COMPETITORS ||
-        metadata.primaryCategory === documentCategories_1.DocumentCategoryType.INTERNAL_POLICY;
+    // Check for sensitive categories based on the updated list from CATEGORY_ATTRIBUTES
+    const sensitiveCategories = [
+        DocumentCategoryType.PAYROLL,
+        DocumentCategoryType.COMPLIANCE,
+        DocumentCategoryType.TAX_COMPLIANCE,
+        DocumentCategoryType.SECURITY_PRIVACY,
+        DocumentCategoryType.HR_MANAGEMENT, // Often contains sensitive employee data
+        DocumentCategoryType.DOCUMENTS, // Can contain sensitive contracts/info
+        DocumentCategoryType.BACKGROUND_CHECKS,
+        DocumentCategoryType.DIGITAL_SIGNATURES,
+        DocumentCategoryType.PERFORMANCE_TRACKING // Performance data is sensitive
+        // Add others if CATEGORY_ATTRIBUTES defines them as potentiallySensitive
+    ];
+    const hasSensitiveCategory = sensitiveCategories.includes(metadata.primaryCategory);
     return hasReviewFlag || (hasLowConfidence && hasSensitiveCategory);
 }
 /**
  * Merge metadata from multiple chunks of the same document
  */
-function mergeMetadata(metadataList) {
+export function mergeMetadata(metadataList) {
     if (metadataList.length === 0) {
         throw new Error('Cannot merge empty metadata list');
     }
@@ -137,13 +145,13 @@ function mergeMetadata(metadataList) {
  */
 function confidenceLevelValue(level) {
     switch (level) {
-        case documentCategories_1.ConfidenceLevel.HIGH:
+        case ImportedConfidenceLevel.HIGH:
             return 3;
-        case documentCategories_1.ConfidenceLevel.MEDIUM:
+        case ImportedConfidenceLevel.MEDIUM:
             return 2;
-        case documentCategories_1.ConfidenceLevel.LOW:
+        case ImportedConfidenceLevel.LOW:
             return 1;
-        case documentCategories_1.ConfidenceLevel.UNCERTAIN:
+        case ImportedConfidenceLevel.UNCERTAIN:
         default:
             return 0;
     }

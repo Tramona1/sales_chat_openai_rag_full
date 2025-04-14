@@ -1,23 +1,17 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const openaiClient_1 = require("@/utils/openaiClient");
-const documentProcessing_1 = require("@/utils/documentProcessing");
-const adminWorkflow_1 = require("@/utils/adminWorkflow");
-const documentCategories_1 = require("@/utils/documentCategories");
-async function handler(req, res) {
+import fs from 'fs';
+import path from 'path';
+import { embedText } from '@/utils/embeddingClient';
+import { splitIntoChunks } from '@/utils/documentProcessing';
+import { addToPendingDocuments } from '@/utils/adminWorkflow';
+import { DocumentCategoryType } from '@/utils/documentCategories';
+export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method not allowed' });
     }
     // Ensure data directory exists for vector store persistence
-    const dataDir = path_1.default.join(process.cwd(), 'data');
-    if (!fs_1.default.existsSync(dataDir)) {
-        fs_1.default.mkdirSync(dataDir, { recursive: true });
+    const dataDir = path.join(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
     }
     try {
         const { text, title } = req.body;
@@ -27,17 +21,17 @@ async function handler(req, res) {
         // Set the source for context-aware chunking
         const source = title || 'Direct Text Input';
         // Process the text with source information
-        const chunks = (0, documentProcessing_1.splitIntoChunks)(text, 500, source);
+        const chunks = splitIntoChunks(text, 500, source);
         // Add to pending documents instead of directly to vector store
         if (chunks.length > 0) {
             // Create embedding for the first chunk to help with similarity search later
-            const embedding = await (0, openaiClient_1.embedText)(chunks[0].text);
+            const embedding = await embedText(chunks[0].text);
             // Add to pending documents - with correct parameter format
-            await (0, adminWorkflow_1.addToPendingDocuments)(text, {
+            await addToPendingDocuments(text, {
                 source: source,
                 title: source,
                 contentType: 'text/plain',
-                primaryCategory: documentCategories_1.DocumentCategoryType.GENERAL,
+                primaryCategory: DocumentCategoryType.GENERAL,
                 secondaryCategories: [],
                 confidenceScore: 0.8,
                 summary: text.substring(0, 200) + (text.length > 200 ? '...' : ''),

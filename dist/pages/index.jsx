@@ -1,44 +1,38 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = Home;
-const react_1 = __importDefault(require("react"));
-const router_1 = require("next/router");
-const react_2 = require("react");
-const Layout_1 = __importDefault(require("@/components/Layout"));
-const lucide_react_1 = require("lucide-react");
-const FileUpload_1 = __importDefault(require("@/components/FileUpload"));
-const DirectTextInput_1 = __importDefault(require("@/components/DirectTextInput"));
+import React from 'react';
+import { useRouter } from 'next/router';
+import { useState } from 'react';
+import Layout from '@/components/Layout';
+import { MessageSquare, Shield, DollarSign, BarChart, Zap, Upload, X, BookOpen, Trophy, Briefcase, CheckCircle, Clock, FileSearch, Star, PieChart, Search, Send } from 'lucide-react';
+import FileUpload from '@/components/FileUpload';
+import DirectTextInput from '@/components/DirectTextInput';
 // Product Suite information
 const productSuite = [
     {
         name: "Applicant Tracking",
         description: "Streamline your hiring process with automated tracking and screening",
-        icon: <lucide_react_1.FileSearch className="h-6 w-6 text-primary-600"/>
+        icon: <FileSearch className="h-6 w-6 text-primary-600"/>
     },
     {
         name: "Onboarding",
         description: "Digital onboarding with automated workflows and document management",
-        icon: <lucide_react_1.CheckCircle className="h-6 w-6 text-primary-600"/>
+        icon: <CheckCircle className="h-6 w-6 text-primary-600"/>
     },
     {
         name: "Scheduling",
         description: "AI-powered scheduling system to optimize workforce management",
-        icon: <lucide_react_1.Clock className="h-6 w-6 text-primary-600"/>
+        icon: <Clock className="h-6 w-6 text-primary-600"/>
     },
     {
         name: "Analytics",
         description: "Real-time reporting and insights to measure performance metrics",
-        icon: <lucide_react_1.PieChart className="h-6 w-6 text-primary-600"/>
+        icon: <PieChart className="h-6 w-6 text-primary-600"/>
     }
 ];
 // Template categories with pre-defined questions
 const templates = [
     {
         category: 'Pricing & Packages',
-        icon: <lucide_react_1.DollarSign className="h-6 w-6 text-primary-600"/>,
+        icon: <DollarSign className="h-6 w-6 text-primary-600"/>,
         color: 'bg-neutral-50 border-neutral-200',
         iconColor: 'bg-white',
         questions: [
@@ -50,7 +44,7 @@ const templates = [
     },
     {
         category: 'Product Features',
-        icon: <lucide_react_1.Zap className="h-6 w-6 text-primary-600"/>,
+        icon: <Zap className="h-6 w-6 text-primary-600"/>,
         color: 'bg-neutral-50 border-neutral-200',
         iconColor: 'bg-white',
         questions: [
@@ -62,7 +56,7 @@ const templates = [
     },
     {
         category: 'Objection Handling',
-        icon: <lucide_react_1.Shield className="h-6 w-6 text-primary-600"/>,
+        icon: <Shield className="h-6 w-6 text-primary-600"/>,
         color: 'bg-neutral-50 border-neutral-200',
         iconColor: 'bg-white',
         questions: [
@@ -74,7 +68,7 @@ const templates = [
     },
     {
         category: 'Success Stories',
-        icon: <lucide_react_1.Trophy className="h-6 w-6 text-primary-600"/>,
+        icon: <Trophy className="h-6 w-6 text-primary-600"/>,
         color: 'bg-neutral-50 border-neutral-200',
         iconColor: 'bg-white',
         questions: [
@@ -86,7 +80,7 @@ const templates = [
     },
     {
         category: 'Market & Competitors',
-        icon: <lucide_react_1.BarChart className="h-6 w-6 text-primary-600"/>,
+        icon: <BarChart className="h-6 w-6 text-primary-600"/>,
         color: 'bg-neutral-50 border-neutral-200',
         iconColor: 'bg-white',
         questions: [
@@ -98,7 +92,7 @@ const templates = [
     },
     {
         category: 'Technical Details',
-        icon: <lucide_react_1.BookOpen className="h-6 w-6 text-primary-600"/>,
+        icon: <BookOpen className="h-6 w-6 text-primary-600"/>,
         color: 'bg-neutral-50 border-neutral-200',
         iconColor: 'bg-white',
         questions: [
@@ -120,14 +114,14 @@ const salesFaqs = [
     'What certifications and compliance standards do we meet?',
     'What is our current growth trajectory?'
 ];
-function Home() {
-    const router = (0, router_1.useRouter)();
-    const [showTrainPanel, setShowTrainPanel] = (0, react_2.useState)(false);
-    const [showFileUpload, setShowFileUpload] = (0, react_2.useState)(true);
-    const [showTextInput, setShowTextInput] = (0, react_2.useState)(false);
-    const [message, setMessage] = (0, react_2.useState)(null);
-    const [showProductInfo, setShowProductInfo] = (0, react_2.useState)(false);
-    const [chatInput, setChatInput] = (0, react_2.useState)('');
+export default function Home() {
+    const router = useRouter();
+    const [showTrainPanel, setShowTrainPanel] = useState(false);
+    const [showFileUpload, setShowFileUpload] = useState(true);
+    const [showTextInput, setShowTextInput] = useState(false);
+    const [message, setMessage] = useState(null);
+    const [showProductInfo, setShowProductInfo] = useState(false);
+    const [chatInput, setChatInput] = useState('');
     // Navigate to chat with a specific question
     const startChatWithQuestion = (question) => {
         // Add a short delay to prevent potential double executions
@@ -157,7 +151,7 @@ function Home() {
         setMessage(message);
         setTimeout(() => setMessage(null), 5000); // Clear message after 5 seconds
     };
-    return (<Layout_1.default>
+    return (<Layout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Quick chat input bar */}
         <div className="my-6">
@@ -165,10 +159,10 @@ function Home() {
             <div className="relative">
               <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Ask anything about our products, pricing, or competitors..." className="w-full py-3 pl-12 pr-16 rounded-full border border-neutral-300 shadow-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 focus:outline-none"/>
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <lucide_react_1.Search className="h-5 w-5 text-neutral-400"/>
+                <Search className="h-5 w-5 text-neutral-400"/>
               </div>
               <button type="submit" className="absolute inset-y-0 right-0 flex items-center pr-4 text-primary-600 hover:text-primary-800">
-                <lucide_react_1.Send className="h-5 w-5"/>
+                <Send className="h-5 w-5"/>
               </button>
             </div>
           </form>
@@ -177,7 +171,7 @@ function Home() {
         {/* Main hero section */}
         <div className="text-center mb-16 mt-8">
           <h1 className="text-4xl font-bold text-neutral-900 mb-6">
-            Sales Knowledge Assistant
+            Workstream Knowledge Assistant
           </h1>
           <p className="text-xl text-neutral-600 max-w-3xl mx-auto leading-relaxed">
             Access all your sales knowledge instantly. Get answers about products, pricing, 
@@ -187,22 +181,22 @@ function Home() {
           {/* Action buttons */}
           <div className="flex flex-wrap gap-4 justify-center mt-10">
             <button onClick={startNewChat} className="flex items-center px-8 py-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition shadow-lg text-lg font-medium transform hover:scale-105">
-              <lucide_react_1.MessageSquare className="mr-2 h-5 w-5"/>
+              <MessageSquare className="mr-2 h-5 w-5"/>
               Start New Chat
             </button>
             
             <button onClick={() => router.push('/company-chat')} className="flex items-center px-6 py-4 bg-secondary-600 text-white rounded-lg hover:bg-secondary-700 transition shadow-md">
-              <lucide_react_1.Briefcase className="mr-2 h-5 w-5"/>
+              <Briefcase className="mr-2 h-5 w-5"/>
               Company Chat
             </button>
             
             <button onClick={() => setShowTrainPanel(!showTrainPanel)} className="flex items-center px-6 py-4 bg-white text-neutral-800 rounded-lg hover:bg-neutral-50 transition border border-neutral-300 shadow-sm">
-              <lucide_react_1.Upload className="mr-2 h-5 w-5 text-primary-600"/>
+              <Upload className="mr-2 h-5 w-5 text-primary-600"/>
               Train Assistant
             </button>
             
             <button onClick={() => setShowProductInfo(!showProductInfo)} className="flex items-center px-6 py-4 bg-neutral-50 text-neutral-800 rounded-lg hover:bg-neutral-100 transition border border-neutral-200 shadow-sm">
-              <lucide_react_1.Briefcase className="mr-2 h-5 w-5 text-primary-600"/>
+              <Briefcase className="mr-2 h-5 w-5 text-primary-600"/>
               Product Suite Info
             </button>
           </div>
@@ -210,7 +204,7 @@ function Home() {
           {/* Success message */}
           {message && (<div className="mt-8 p-4 bg-green-50 text-green-700 rounded-lg border border-green-200 shadow-sm relative max-w-2xl mx-auto">
               <button onClick={() => setMessage(null)} className="absolute top-2 right-2 text-green-500 hover:text-green-700">
-                <lucide_react_1.X className="h-4 w-4"/>
+                <X className="h-4 w-4"/>
               </button>
               <p>{message}</p>
             </div>)}
@@ -240,9 +234,9 @@ function Home() {
               </div>
               
               <div className="mt-4">
-                {showFileUpload && (<FileUpload_1.default onUploadComplete={handleUploadComplete}/>)}
+                {showFileUpload && (<FileUpload onUploadComplete={handleUploadComplete}/>)}
                 
-                {showTextInput && (<DirectTextInput_1.default onUploadComplete={handleUploadComplete}/>)}
+                {showTextInput && (<DirectTextInput onUploadComplete={handleUploadComplete}/>)}
               </div>
             </div>)}
           
@@ -284,7 +278,7 @@ function Home() {
                   <ul className="space-y-3">
                     {template.questions.map((question, qIndex) => (<li key={qIndex}>
                         <button onClick={() => startChatWithQuestion(question)} className="text-left w-full py-2 px-3 rounded-lg hover:bg-neutral-100 text-neutral-700 flex items-start">
-                          <lucide_react_1.Star className="h-5 w-5 text-primary-500 mr-2 mt-0.5 flex-shrink-0"/>
+                          <Star className="h-5 w-5 text-primary-500 mr-2 mt-0.5 flex-shrink-0"/>
                           <span>{question}</span>
                         </button>
                       </li>))}
@@ -306,5 +300,5 @@ function Home() {
           </div>
         </div>
       </div>
-    </Layout_1.default>);
+    </Layout>);
 }

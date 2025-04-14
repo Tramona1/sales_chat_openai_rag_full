@@ -1014,22 +1014,14 @@ Provide your analysis in JSON format with the following fields:
  * @returns An embedding vector
  */
 export async function embedTextWithGemini(text: string): Promise<number[]> {
-  if (!apiKey || apiKey === 'your_google_ai_api_key_here') {
-    throw new Error('GEMINI_API_KEY is not configured in environment');
-  }
-
+  console.warn('embedTextWithGemini is deprecated. Please use embedText from embeddingClient.ts instead.');
+  
   try {
-    // Use text-embedding-004 model for consistency with environment configuration
-    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-    
-    // Clean text and generate embedding
-    const cleanedText = text.trim().replace(/\n+/g, ' ');
-    const result = await embeddingModel.embedContent(cleanedText);
-    
-    // Return the embedding vector
-    return result.embedding.values;
+    // Import and redirect to the new embedding client
+    const { embedText } = await import('./embeddingClient');
+    return embedText(text);
   } catch (error) {
-    logError('Error generating Gemini embedding', error);
+    logError('Error in embedTextWithGemini redirection', error);
     throw error;
   }
 } 

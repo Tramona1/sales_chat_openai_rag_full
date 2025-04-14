@@ -31,20 +31,20 @@ import { parseEntities } from './metadataUtils';
 // Define a default BASE_CATEGORY_HIERARCHY if the import fails
 export const DEFAULT_CATEGORY_HIERARCHY: CategoryHierarchy[] = [
   {
-    id: 'product',
-    displayName: 'Product',
+    id: 'hiring',
+    displayName: 'Hiring',
     documentCount: 0,
     children: []
   },
   {
-    id: 'industry',
-    displayName: 'Industry',
+    id: 'compliance',
+    displayName: 'Compliance',
     documentCount: 0,
     children: []
   },
   {
-    id: 'function',
-    displayName: 'Function',
+    id: 'automation',
+    displayName: 'Automation',
     documentCount: 0,
     children: []
   }
@@ -81,25 +81,30 @@ interface DocumentWithCategories {
 /**
  * Pre-defined hierarchy relationships between categories
  * This defines which categories are children of others
+ * TODO: Update this hierarchy to reflect the current DocumentCategoryType enum values
  */
 const CATEGORY_HIERARCHY: Record<string, string[]> = {
-  // Product information hierarchy
+  // Product information hierarchy - Commented out, needs update
+  /*
   [DocumentCategoryType.PRODUCT]: [
     DocumentCategoryType.FEATURES,
     DocumentCategoryType.TECHNICAL,
     DocumentCategoryType.PRICING
   ],
-  
-  // Customer information hierarchy
+  */
+  // Customer information hierarchy - Commented out, needs update
+  /*
   [DocumentCategoryType.CUSTOMER]: [
     DocumentCategoryType.CASE_STUDY,
     DocumentCategoryType.TESTIMONIAL
   ],
-  
-  // Market information hierarchy
+  */
+  // Market information hierarchy - Commented out, needs update
+  /*
   [DocumentCategoryType.MARKET]: [
     DocumentCategoryType.COMPETITORS
   ]
+  */
 };
 
 /**

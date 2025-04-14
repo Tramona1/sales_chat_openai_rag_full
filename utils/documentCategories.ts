@@ -3,216 +3,364 @@
  * 
  * This module defines the document categories used for classifying content
  * and enabling smart query routing.
+ * 
+ * NOTE: These categories are now aligned with STANDARD_CATEGORIES from tagUtils.ts
+ * to ensure consistency across the application. Any changes to categories should be
+ * made in both places.
  */
 
 /**
- * Document category types
+ * Document category types - Aligned with STANDARD_CATEGORIES in tagUtils.ts
  */
 export enum DocumentCategoryType {
-  // Company and product information
-  PRODUCT = 'product',
-  PRICING = 'pricing',
-  FEATURES = 'features',
-  TECHNICAL = 'technical',
-  
-  // Customer information
-  CUSTOMER = 'customer',
-  CASE_STUDY = 'case_study',
-  TESTIMONIAL = 'testimonial',
-  
-  // Sales information
-  SALES_PROCESS = 'sales_process',
-  COMPETITORS = 'competitors',
-  MARKET = 'market',
-  
-  // Internal information
-  INTERNAL_POLICY = 'internal_policy',
-  TRAINING = 'training',
-  
-  // Miscellaneous
-  FAQ = 'faq',
-  GENERAL = 'general',
-  OTHER = 'other'
+  // Primary Categories
+  HIRING = 'HIRING',
+  ONBOARDING = 'ONBOARDING',
+  HR_MANAGEMENT = 'HR_MANAGEMENT',
+  PAYROLL = 'PAYROLL',
+  COMPLIANCE = 'COMPLIANCE',
+  SCHEDULING = 'SCHEDULING',
+  RETENTION = 'RETENTION',
+  OPTIMIZATION = 'OPTIMIZATION',
+  AUTOMATION = 'AUTOMATION',
+  AI_TOOLS = 'AI_TOOLS',
+  JOB_POSTING = 'JOB_POSTING',
+  CANDIDATE_SCREENING = 'CANDIDATE_SCREENING',
+  INTERVIEW_SCHEDULING = 'INTERVIEW_SCHEDULING',
+  REPORTING = 'REPORTING',
+  MOBILE_SOLUTIONS = 'MOBILE_SOLUTIONS',
+  DOCUMENTS = 'DOCUMENTS',
+  TIME_TRACKING = 'TIME_TRACKING',
+  TAX_COMPLIANCE = 'TAX_COMPLIANCE',
+  ENGAGEMENT = 'ENGAGEMENT',
+  SECURITY_PRIVACY = 'SECURITY_PRIVACY',
+
+  // Secondary Categories
+  TEXT_TO_APPLY = 'TEXT_TO_APPLY',
+  TWO_WAY_SMS = 'TWO_WAY_SMS',
+  BACKGROUND_CHECKS = 'BACKGROUND_CHECKS',
+  SHIFT_MANAGEMENT = 'SHIFT_MANAGEMENT',
+  DIGITAL_SIGNATURES = 'DIGITAL_SIGNATURES',
+  CUSTOMIZABLE_TEMPLATES = 'CUSTOMIZABLE_TEMPLATES',
+  FRANCHISE_MANAGEMENT = 'FRANCHISE_MANAGEMENT',
+  SMALL_BUSINESS_TOOLS = 'SMALL_BUSINESS_TOOLS',
+  REMOTE_WORKFORCE = 'REMOTE_WORKFORCE',
+  DESKLESS_WORKFORCE = 'DESKLESS_WORKFORCE',
+  DIVERSITY_INCLUSION = 'DIVERSITY_INCLUSION',
+  TEAM_COLLABORATION = 'TEAM_COLLABORATION',
+  CROSS_DEPT_COORDINATION = 'CROSS_DEPT_COORDINATION',
+  LEADERSHIP_DEV = 'LEADERSHIP_DEV',
+  SCALABILITY = 'SCALABILITY',
+  TRAINING_MODULES = 'TRAINING_MODULES',
+  PERFORMANCE_TRACKING = 'PERFORMANCE_TRACKING',
+  CUSTOMER_SUPPORT_INTEGRATION = 'CUSTOMER_SUPPORT_INTEGRATION',
+  JOB_BOARD_INTEGRATIONS = 'JOB_BOARD_INTEGRATIONS',
+  CALENDAR_INTEGRATIONS = 'CALENDAR_INTEGRATIONS',
+  INDUSTRY_SPECIFIC = 'INDUSTRY_SPECIFIC',
+  INTEGRATIONS = 'INTEGRATIONS',
+
+  // Foundational / Other
+  GENERAL = 'GENERAL'
 }
 
 /**
  * Category attributes for additional metadata
  */
 export interface CategoryAttributes {
-  // Display name for the UI
-  displayName: string;
-  
-  // Description of the category
-  description: string;
-  
-  // Keywords commonly associated with this category
-  associatedKeywords: string[];
-  
-  // Whether this category typically contains sensitive information
-  potentiallySensitive: boolean;
-  
-  // Whether this category requires managerial approval
-  requiresApproval: boolean;
-  
-  // UI color for visual identification (hex code)
-  color: string;
-  
-  // Priority for query routing (1-5, where 1 is highest)
-  routingPriority: number;
+  displayName: string; // Display name for the UI
+  description: string; // Description of the category
+  associatedKeywords: string[]; // Keywords commonly associated with this category
+  potentiallySensitive: boolean; // Whether this category typically contains sensitive information
+  requiresApproval: boolean; // Whether this category requires managerial approval
+  color: string; // UI color for visual identification (hex code)
+  routingPriority: number; // Priority for query routing (1-5, where 1 is highest)
 }
 
 /**
  * Map of category attributes for each document category
+ * NOTE: Using default/estimated values for new categories. Review required.
  */
 export const CATEGORY_ATTRIBUTES: Record<DocumentCategoryType, CategoryAttributes> = {
-  [DocumentCategoryType.PRODUCT]: {
-    displayName: 'Product Information',
-    description: 'General product information, overviews, and capabilities',
-    associatedKeywords: ['product', 'offering', 'solution', 'platform', 'service'],
-    potentiallySensitive: false,
-    requiresApproval: false,
-    color: '#4285F4',
-    routingPriority: 1
+  // Primary Categories
+  [DocumentCategoryType.HIRING]: {
+    displayName: 'Hiring',
+    description: 'Covers all aspects of the hiring process, from sourcing to offer letters.',
+    associatedKeywords: ['hiring', 'recruitment', 'applicant tracking', 'ats', 'sourcing', 'offer letter', 'candidate screening', 'interview scheduling'],
+    potentiallySensitive: false, requiresApproval: false, color: '#4285F4', routingPriority: 1
   },
-  [DocumentCategoryType.PRICING]: {
-    displayName: 'Pricing Information',
-    description: 'Pricing plans, tiers, and special offers',
-    associatedKeywords: ['pricing', 'cost', 'subscription', 'plan', 'tier', 'discount'],
-    potentiallySensitive: true,
-    requiresApproval: true,
-    color: '#34A853',
-    routingPriority: 1
+  [DocumentCategoryType.ONBOARDING]: {
+    displayName: 'Onboarding',
+    description: 'Information related to employee onboarding processes and documentation.',
+    associatedKeywords: ['onboarding', 'new hire', 'paperwork', 'welcome kit', 'orientation', 'i-9', 'e-verify'],
+    potentiallySensitive: true, requiresApproval: false, color: '#34A853', routingPriority: 2
   },
-  [DocumentCategoryType.FEATURES]: {
-    displayName: 'Product Features',
-    description: 'Information about specific features and functionality',
-    associatedKeywords: [
-      'feature', 'features', 'functionality', 'capabilities', 'function',
-      'new', 'latest', 'recent', 'update', 'updated', 'upgrade', 
-      'launch', 'launched', 'release', 'released', 'rollout',
-      'quarter', 'quarterly', 'month', 'monthly', 'year', 'annual',
-      'enhancement', 'improvement', 'addition'
-    ],
-    potentiallySensitive: false,
-    requiresApproval: false,
-    color: '#3B82F6',
-    routingPriority: 5
+  [DocumentCategoryType.HR_MANAGEMENT]: {
+    displayName: 'HR Management',
+    description: 'General Human Resources management topics, employee relations, records.',
+    associatedKeywords: ['hr', 'human resources', 'employee records', 'personnel', 'hr tasks', 'relations'],
+    potentiallySensitive: true, requiresApproval: false, color: '#FBBC05', routingPriority: 3
   },
-  [DocumentCategoryType.TECHNICAL]: {
-    displayName: 'Technical Documentation',
-    description: 'Technical specifications, APIs, and implementation details',
-    associatedKeywords: ['technical', 'api', 'integration', 'architecture', 'spec'],
-    potentiallySensitive: false,
-    requiresApproval: false,
-    color: '#1A73E8',
-    routingPriority: 2
+  [DocumentCategoryType.PAYROLL]: {
+    displayName: 'Payroll',
+    description: 'Payroll processing, payments, deductions, and related systems.',
+    associatedKeywords: ['payroll', 'payment', 'salary', 'wages', 'compensation', 'deductions', 'taxes'],
+    potentiallySensitive: true, requiresApproval: true, color: '#EA4335', routingPriority: 1
   },
-  [DocumentCategoryType.CUSTOMER]: {
-    displayName: 'Customer Information',
-    description: 'Customer profiles, demographics, and needs',
-    associatedKeywords: ['customer', 'client', 'buyer', 'demographic', 'segment'],
-    potentiallySensitive: true,
-    requiresApproval: true,
-    color: '#EA4335',
-    routingPriority: 1
+  [DocumentCategoryType.COMPLIANCE]: {
+    displayName: 'Compliance',
+    description: 'Legal and regulatory compliance in HR and hiring (excluding specific tax forms).',
+    associatedKeywords: ['compliance', 'legal', 'regulation', 'policy', 'eeoc', 'labor law', 'hipaa', 'ada'],
+    potentiallySensitive: true, requiresApproval: true, color: '#F44336', routingPriority: 1
   },
-  [DocumentCategoryType.CASE_STUDY]: {
-    displayName: 'Case Studies',
-    description: 'Success stories and customer implementations',
-    associatedKeywords: ['case study', 'success story', 'implementation', 'results', 'roi'],
-    potentiallySensitive: false,
-    requiresApproval: true,
-    color: '#9C27B0',
-    routingPriority: 2
+  [DocumentCategoryType.SCHEDULING]: {
+    displayName: 'Scheduling',
+    description: 'Employee scheduling, shift management, and time-off requests.',
+    associatedKeywords: ['schedule', 'scheduling', 'shift', 'rota', 'time off', 'workforce', 'shift management'],
+    potentiallySensitive: false, requiresApproval: false, color: '#FF9800', routingPriority: 2
   },
-  [DocumentCategoryType.TESTIMONIAL]: {
-    displayName: 'Testimonials',
-    description: 'Customer quotes and testimonials',
-    associatedKeywords: ['testimonial', 'quote', 'review', 'feedback', 'endorsement'],
-    potentiallySensitive: false,
-    requiresApproval: true,
-    color: '#FF9800',
-    routingPriority: 3
+  [DocumentCategoryType.RETENTION]: {
+    displayName: 'Employee Retention',
+    description: 'Strategies and information related to retaining employees.',
+    associatedKeywords: ['retention', 'turnover', 'employee satisfaction', 'loyalty', 'attrition', 'engagement'],
+    potentiallySensitive: false, requiresApproval: false, color: '#9C27B0', routingPriority: 3
   },
-  [DocumentCategoryType.SALES_PROCESS]: {
-    displayName: 'Sales Process',
-    description: 'Information on sales methodologies and processes',
-    associatedKeywords: ['sales process', 'methodology', 'pipeline', 'stages', 'closing'],
-    potentiallySensitive: true,
-    requiresApproval: false,
-    color: '#607D8B',
-    routingPriority: 2
+  [DocumentCategoryType.OPTIMIZATION]: {
+    displayName: 'Workforce Optimization',
+    description: 'Optimizing workforce performance, costs, and efficiency.',
+    associatedKeywords: ['optimization', 'efficiency', 'productivity', 'workforce planning', 'labor cost', 'analytics'],
+    potentiallySensitive: false, requiresApproval: false, color: '#009688', routingPriority: 3
   },
-  [DocumentCategoryType.COMPETITORS]: {
-    displayName: 'Competitor Analysis',
-    description: 'Information about competitors and competitive positioning',
-    associatedKeywords: ['competitor', 'competition', 'vs', 'comparison', 'alternative'],
-    potentiallySensitive: true,
-    requiresApproval: true,
-    color: '#F44336',
-    routingPriority: 2
+  [DocumentCategoryType.AUTOMATION]: {
+    displayName: 'Automation',
+    description: 'Automating HR and hiring tasks and workflows.',
+    associatedKeywords: ['automation', 'workflow', 'automated', 'streamline', 'efficiency', 'bots'],
+    potentiallySensitive: false, requiresApproval: false, color: '#795548', routingPriority: 2
   },
-  [DocumentCategoryType.MARKET]: {
-    displayName: 'Market Information',
-    description: 'Market trends, analysis, and industry information',
-    associatedKeywords: ['market', 'industry', 'trend', 'analysis', 'forecast', 'growth'],
-    potentiallySensitive: false,
-    requiresApproval: false,
-    color: '#3F51B5',
-    routingPriority: 3
+  [DocumentCategoryType.AI_TOOLS]: {
+    displayName: 'AI-Powered Tools',
+    description: 'Features and tools leveraging Artificial Intelligence.',
+    associatedKeywords: ['ai', 'artificial intelligence', 'machine learning', 'screening', 'matching', 'parsing'],
+    potentiallySensitive: false, requiresApproval: false, color: '#607D8B', routingPriority: 2
   },
-  [DocumentCategoryType.INTERNAL_POLICY]: {
-    displayName: 'Internal Policies',
-    description: 'Company policies and procedures',
-    associatedKeywords: ['policy', 'procedure', 'guideline', 'compliance', 'regulation'],
-    potentiallySensitive: true,
-    requiresApproval: true,
-    color: '#795548',
-    routingPriority: 4
+  [DocumentCategoryType.JOB_POSTING]: {
+    displayName: 'Job Posting',
+    description: 'Creating, managing, and distributing job postings to various boards.',
+    associatedKeywords: ['job posting', 'job ad', 'job description', 'job board', 'distribution', 'syndication', 'indeed', 'ziprecruiter'],
+    potentiallySensitive: false, requiresApproval: false, color: '#3F51B5', routingPriority: 2
   },
-  [DocumentCategoryType.TRAINING]: {
-    displayName: 'Training Materials',
-    description: 'Training content and onboarding materials',
-    associatedKeywords: ['training', 'onboarding', 'lesson', 'course', 'learning'],
-    potentiallySensitive: false,
-    requiresApproval: false,
-    color: '#009688',
-    routingPriority: 3
+  [DocumentCategoryType.CANDIDATE_SCREENING]: {
+    displayName: 'Candidate Screening',
+    description: 'Tools and processes for screening and filtering job applicants.',
+    associatedKeywords: ['screening', 'candidate', 'applicant', 'filter', 'assessment', 'resume', 'parsing', 'ai screening'],
+    potentiallySensitive: false, requiresApproval: false, color: '#03A9F4', routingPriority: 2
   },
-  [DocumentCategoryType.FAQ]: {
-    displayName: 'FAQs',
-    description: 'Frequently asked questions and answers',
-    associatedKeywords: ['faq', 'question', 'answer', 'common question', 'how to'],
-    potentiallySensitive: false,
-    requiresApproval: false,
-    color: '#00BCD4',
-    routingPriority: 2
+  [DocumentCategoryType.INTERVIEW_SCHEDULING]: {
+    displayName: 'Interview Scheduling',
+    description: 'Tools and processes for coordinating and scheduling interviews.',
+    associatedKeywords: ['interview', 'scheduling', 'calendar', 'booking', 'appointment', 'coordination'],
+    potentiallySensitive: false, requiresApproval: false, color: '#00BCD4', routingPriority: 2
   },
+  [DocumentCategoryType.REPORTING]: {
+    displayName: 'Reporting & Analytics',
+    description: 'Generating reports and analyzing HR, hiring, and workforce data.',
+    associatedKeywords: ['report', 'reporting', 'analytics', 'metrics', 'kpi', 'dashboard', 'data', 'insights'],
+    potentiallySensitive: true, requiresApproval: false, color: '#8BC34A', routingPriority: 2
+  },
+  [DocumentCategoryType.MOBILE_SOLUTIONS]: {
+    displayName: 'Mobile-Friendly Solutions',
+    description: 'Features and accessibility through mobile applications or responsive design.',
+    associatedKeywords: ['mobile', 'app', 'ios', 'android', 'responsive', 'on the go', 'text-to-apply', 'sms'],
+    potentiallySensitive: false, requiresApproval: false, color: '#CDDC39', routingPriority: 3
+  },
+  [DocumentCategoryType.DOCUMENTS]: {
+    displayName: 'Document Management',
+    description: 'Storing, managing, accessing, and signing HR-related documents.',
+    associatedKeywords: ['document', 'storage', 'esignature', 'digital signature', 'records', 'paperwork', 'templates', 'offer letter'],
+    potentiallySensitive: true, requiresApproval: false, color: '#FFC107', routingPriority: 2
+  },
+  [DocumentCategoryType.TIME_TRACKING]: {
+    displayName: 'Time Tracking',
+    description: 'Tracking employee work hours, attendance, time clocks, and geofencing.',
+    associatedKeywords: ['time tracking', 'timesheet', 'attendance', 'clock in', 'clock out', 'hours', 'geofencing'],
+    potentiallySensitive: false, requiresApproval: false, color: '#FF5722', routingPriority: 2
+  },
+  [DocumentCategoryType.TAX_COMPLIANCE]: {
+    displayName: 'Tax Forms & Compliance',
+    description: 'Handling specific tax forms (WOTC, I-9, etc.) and related compliance.',
+    associatedKeywords: ['tax', 'wotc', 'i-9', 'e-verify', 'compliance', 'form', 'government', 'tax credits'],
+    potentiallySensitive: true, requiresApproval: true, color: '#F44336', routingPriority: 1
+  },
+  [DocumentCategoryType.ENGAGEMENT]: {
+    displayName: 'Employee Engagement',
+    description: 'Tools and strategies for improving employee engagement, surveys, and communication.',
+    associatedKeywords: ['engagement', 'employee survey', 'feedback', 'communication', 'recognition', 'culture'],
+    potentiallySensitive: false, requiresApproval: false, color: '#E91E63', routingPriority: 3
+  },
+  [DocumentCategoryType.SECURITY_PRIVACY]: {
+    displayName: 'Security & Privacy',
+    description: 'Data security measures, privacy policies, access control, and compliance (GDPR, CCPA).',
+    associatedKeywords: ['security', 'privacy', 'data protection', 'encryption', 'gdpr', 'ccpa', 'hipaa', 'rbac', 'sso', 'mfa'],
+    potentiallySensitive: true, requiresApproval: true, color: '#673AB7', routingPriority: 1
+  },
+
+  // Secondary Categories
+  [DocumentCategoryType.TEXT_TO_APPLY]: {
+    displayName: 'Text-to-Apply Features',
+    description: 'Specific features allowing candidates to initiate applications via text message.',
+    associatedKeywords: ['text to apply', 'sms apply', 'text hiring', 'mobile application', 'qr code'],
+    potentiallySensitive: false, requiresApproval: false, color: '#4DD0E1', routingPriority: 3
+  },
+  [DocumentCategoryType.TWO_WAY_SMS]: {
+    displayName: 'Two-Way SMS Communication',
+    description: 'Features enabling two-way text message communication with candidates and employees.',
+    associatedKeywords: ['sms', 'text message', 'two way sms', 'communication', 'chat', 'candidate communication'],
+    potentiallySensitive: false, requiresApproval: false, color: '#4DD0E1', routingPriority: 3
+  },
+  [DocumentCategoryType.BACKGROUND_CHECKS]: {
+    displayName: 'Background Checks Integration',
+    description: 'Integration capabilities with third-party background check services.',
+    associatedKeywords: ['background check', 'screening', 'criminal record', 'verification', 'integration'],
+    potentiallySensitive: true, requiresApproval: false, color: '#BDBDBD', routingPriority: 2
+  },
+  [DocumentCategoryType.SHIFT_MANAGEMENT]: {
+    displayName: 'Shift Management Tools',
+    description: 'Specific tools for creating schedules, managing shifts, swaps, and coverage.',
+    associatedKeywords: ['shift', 'swap', 'open shift', 'schedule', 'coverage', 'staffing'],
+    potentiallySensitive: false, requiresApproval: false, color: '#FFB74D', routingPriority: 2
+  },
+  [DocumentCategoryType.DIGITAL_SIGNATURES]: {
+    displayName: 'Digital Signatures Collection',
+    description: 'Functionality for collecting legally binding electronic signatures on documents.',
+    associatedKeywords: ['digital signature', 'esignature', 'sign', 'document signing', 'contract', 'offer letter'],
+    potentiallySensitive: true, requiresApproval: false, color: '#FFD54F', routingPriority: 2
+  },
+  [DocumentCategoryType.CUSTOMIZABLE_TEMPLATES]: {
+    displayName: 'Customizable Templates',
+    description: 'Availability and customization options for various templates (offer letters, emails, forms).',
+    associatedKeywords: ['template', 'customizable', 'offer letter', 'email template', 'form', 'branding'],
+    potentiallySensitive: false, requiresApproval: false, color: '#AED581', routingPriority: 3
+  },
+  [DocumentCategoryType.FRANCHISE_MANAGEMENT]: {
+    displayName: 'Franchise Management Solutions',
+    description: 'Features and solutions specifically designed for franchise businesses and multi-location management.',
+    associatedKeywords: ['franchise', 'multi location', 'franchisor', 'franchisee', 'brand consistency', 'corporate'],
+    potentiallySensitive: false, requiresApproval: false, color: '#BA68C8', routingPriority: 2
+  },
+  [DocumentCategoryType.SMALL_BUSINESS_TOOLS]: {
+    displayName: 'Small Business Hiring Tools',
+    description: 'Tools, features, and pricing plans suitable for small and medium-sized businesses.',
+    associatedKeywords: ['small business', 'smb', 'startup', 'affordable', 'easy to use', 'limited budget'],
+    potentiallySensitive: false, requiresApproval: false, color: '#4FC3F7', routingPriority: 2
+  },
+  [DocumentCategoryType.REMOTE_WORKFORCE]: {
+    displayName: 'Remote Workforce Management',
+    description: 'Capabilities for managing hiring, onboarding, and HR for remote or distributed workforces.',
+    associatedKeywords: ['remote work', 'distributed team', 'work from home', 'virtual team', 'telecommute', 'hybrid work'],
+    potentiallySensitive: false, requiresApproval: false, color: '#7986CB', routingPriority: 3
+  },
+  [DocumentCategoryType.DESKLESS_WORKFORCE]: {
+    displayName: 'Deskless Workforce Solutions',
+    description: 'Solutions tailored for managing employees who do not typically work at a desk (e.g., retail, hospitality, field services).',
+    associatedKeywords: ['deskless', 'hourly worker', 'frontline', 'field worker', 'mobile workforce', 'non-desk'],
+    potentiallySensitive: false, requiresApproval: false, color: '#4DB6AC', routingPriority: 3
+  },
+  [DocumentCategoryType.DIVERSITY_INCLUSION]: {
+    displayName: 'Diversity and Inclusion Initiatives',
+    description: 'Features, reporting, or information supporting diversity, equity, and inclusion (DE&I) efforts in hiring and HR.',
+    associatedKeywords: ['diversity', 'inclusion', 'd&i', 'dei', 'equity', 'belonging', 'bias reduction', 'eeo reporting'],
+    potentiallySensitive: false, requiresApproval: false, color: '#F06292', routingPriority: 3
+  },
+  [DocumentCategoryType.TEAM_COLLABORATION]: {
+    displayName: 'Team Collaboration Tools',
+    description: 'Tools facilitating collaboration among hiring managers, recruiters, and other team members.',
+    associatedKeywords: ['collaboration', 'teamwork', 'communication', 'shared access', 'notes', 'feedback', 'hiring team'],
+    potentiallySensitive: false, requiresApproval: false, color: '#9575CD', routingPriority: 4
+  },
+  [DocumentCategoryType.CROSS_DEPT_COORDINATION]: {
+    displayName: 'Cross-Department Coordination',
+    description: 'Features supporting coordination and workflows between different departments (e.g., HR, Finance, IT).',
+    associatedKeywords: ['cross functional', 'interdepartmental', 'coordination', 'workflow', 'approval', 'integration'],
+    potentiallySensitive: false, requiresApproval: false, color: '#A1887F', routingPriority: 4
+  },
+  [DocumentCategoryType.LEADERSHIP_DEV]: {
+    displayName: 'Leadership Development Resources',
+    description: 'Resources, content, or tools related to leadership development and training.',
+    associatedKeywords: ['leadership', 'management training', 'development', 'succession planning', 'coaching'],
+    potentiallySensitive: false, requiresApproval: false, color: '#FF8A65', routingPriority: 4
+  },
+  [DocumentCategoryType.SCALABILITY]: {
+    displayName: 'Scalability for Growing Businesses',
+    description: 'Information addressing how the platform scales to accommodate business growth and high volume.',
+    associatedKeywords: ['scalability', 'growth', 'scaling', 'enterprise', 'high volume', 'performance'],
+    potentiallySensitive: false, requiresApproval: false, color: '#81C784', routingPriority: 3
+  },
+  [DocumentCategoryType.TRAINING_MODULES]: {
+    displayName: 'Training Programs & Development Modules',
+    description: 'Built-in or integrated modules for employee training and development.',
+    associatedKeywords: ['training', 'learning', 'development', 'lms', 'course', 'employee training', 'compliance training'],
+    potentiallySensitive: false, requiresApproval: false, color: '#DCE775', routingPriority: 3
+  },
+  [DocumentCategoryType.PERFORMANCE_TRACKING]: {
+    displayName: 'Performance Metrics Tracking (KPIs)',
+    description: 'Capabilities for tracking employee performance or key hiring/HR metrics.',
+    associatedKeywords: ['performance', 'kpi', 'metrics', 'tracking', 'evaluation', 'review', 'analytics'],
+    potentiallySensitive: true, requiresApproval: false, color: '#FFF176', routingPriority: 3
+  },
+  [DocumentCategoryType.CUSTOMER_SUPPORT_INTEGRATION]: {
+    displayName: 'Customer Support Integration',
+    description: 'Integration capabilities with customer support platforms (e.g., Zendesk, Salesforce Service Cloud).',
+    associatedKeywords: ['support', 'helpdesk', 'zendesk', 'salesforce', 'ticketing', 'customer service', 'integration'],
+    potentiallySensitive: false, requiresApproval: false, color: '#64B5F6', routingPriority: 4
+  },
+  [DocumentCategoryType.JOB_BOARD_INTEGRATIONS]: {
+    displayName: 'Job Board Integrations',
+    description: 'Integration capabilities with external job boards (e.g., Indeed, ZipRecruiter, LinkedIn).',
+    associatedKeywords: ['job board', 'integration', 'indeed', 'ziprecruiter', 'linkedin', 'posting', 'syndication'],
+    potentiallySensitive: false, requiresApproval: false, color: '#7986CB', routingPriority: 3
+  },
+  [DocumentCategoryType.CALENDAR_INTEGRATIONS]: {
+    displayName: 'Calendar Integrations',
+    description: 'Integration capabilities with calendar systems (e.g., Google Calendar, Outlook Calendar).',
+    associatedKeywords: ['calendar', 'integration', 'google calendar', 'outlook', 'scheduling', 'sync', 'interview scheduling'],
+    potentiallySensitive: false, requiresApproval: false, color: '#4DD0E1', routingPriority: 3
+  },
+  [DocumentCategoryType.INDUSTRY_SPECIFIC]: {
+    displayName: 'Industry Specific',
+    description: 'Solutions, features, or content tailored to specific industries (e.g., Restaurants, Retail, Healthcare).',
+    associatedKeywords: ['industry', 'vertical', 'restaurant', 'retail', 'healthcare', 'logistics', 'manufacturing', 'hospitality'],
+    potentiallySensitive: false, requiresApproval: false, color: '#90CAF9', routingPriority: 2
+  },
+  [DocumentCategoryType.INTEGRATIONS]: {
+    displayName: 'Integrations',
+    description: 'General information about third-party integrations and API capabilities.',
+    associatedKeywords: ['integration', 'api', 'connect', 'third party', 'ecosystem', 'marketplace', 'payroll integration', 'hris integration'],
+    potentiallySensitive: false, requiresApproval: false, color: '#BDBDBD', routingPriority: 2
+  },
+
+  // Foundational / Other
   [DocumentCategoryType.GENERAL]: {
-    displayName: 'General Information',
-    description: 'General information that doesn\'t fit other categories',
-    associatedKeywords: ['general', 'information', 'about', 'misc'],
-    potentiallySensitive: false,
-    requiresApproval: false,
-    color: '#9E9E9E',
-    routingPriority: 5
-  },
-  [DocumentCategoryType.OTHER]: {
-    displayName: 'Other',
-    description: 'Uncategorized content that requires review',
-    associatedKeywords: ['other', 'miscellaneous', 'unclassified'],
-    potentiallySensitive: false,
-    requiresApproval: true,
-    color: '#757575',
-    routingPriority: 5
+    displayName: 'General / Other',
+    description: 'General information, company overview, or content that doesn\'t fit other specific categories.',
+    associatedKeywords: ['general', 'information', 'about', 'misc', 'other', 'uncategorized', 'overview', 'company'],
+    potentiallySensitive: false, requiresApproval: false, color: '#9E9E9E', routingPriority: 5
   }
 };
 
 /**
- * Get all available document categories
+ * Get all available document categories (enum keys)
  */
 export function getAllCategories(): DocumentCategoryType[] {
-  return Object.values(DocumentCategoryType);
+  // Filter out numeric keys if the enum is not string-based
+  return Object.values(DocumentCategoryType).filter(
+    value => typeof value === 'string'
+  ) as DocumentCategoryType[];
+}
+
+/**
+ * Get all standard categories (now includes primary and secondary)
+ */
+export function getStandardCategories(): DocumentCategoryType[] {
+  return getAllCategories(); // All defined enum members are now considered standard
 }
 
 /**
@@ -245,76 +393,20 @@ export function getHighPriorityCategories(): DocumentCategoryType[] {
 /**
  * Get category attributes for a specific category
  */
-export function getCategoryAttributes(category: DocumentCategoryType): CategoryAttributes {
+export function getCategoryAttributes(category: DocumentCategoryType): CategoryAttributes | undefined {
   return CATEGORY_ATTRIBUTES[category];
 }
 
 /**
- * Find categories that match a set of keywords
+ * Map a legacy category to its standardized equivalent
+ * (Now mostly returns the input as legacy categories are removed/mapped implicitly)
+ * @param category The category to map
+ * @returns The standardized category
  */
-export function findCategoriesByKeywords(keywords: string[]): DocumentCategoryType[] {
-  const normalizedKeywords = keywords.map(k => k.toLowerCase().trim());
-  
-  return Object.entries(CATEGORY_ATTRIBUTES)
-    .filter(([_, attributes]) => {
-      return attributes.associatedKeywords.some(keyword => 
-        normalizedKeywords.some(nk => nk.includes(keyword) || keyword.includes(nk))
-      );
-    })
-    .map(([category]) => category as DocumentCategoryType);
-}
-
-/**
- * Determine if a text likely belongs to a specific category
- */
-export function detectCategoryFromText(text: string): DocumentCategoryType[] {
-  const normalizedText = text.toLowerCase();
-  
-  // Calculate "score" for each category based on keyword matches
-  const scores = Object.entries(CATEGORY_ATTRIBUTES).map(([category, attributes]) => {
-    const matchCount = attributes.associatedKeywords.filter(keyword => 
-      normalizedText.includes(keyword.toLowerCase())
-    ).length;
-    
-    // Calculate score based on number of matches and keyword length (longer = more specific)
-    const score = attributes.associatedKeywords.reduce((total, keyword) => {
-      if (normalizedText.includes(keyword.toLowerCase())) {
-        return total + keyword.length;
-      }
-      return total;
-    }, 0);
-    
-    return { 
-      category: category as DocumentCategoryType, 
-      matchCount, 
-      score,
-      priority: attributes.routingPriority
-    };
-  });
-  
-  // Sort by score (descending) and filter out zero matches
-  const sortedScores = scores
-    .filter(item => item.matchCount > 0)
-    .sort((a, b) => {
-      // First sort by match count
-      if (b.matchCount !== a.matchCount) {
-        return b.matchCount - a.matchCount;
-      }
-      // Then by score (keyword length)
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
-      // Finally by priority
-      return a.priority - b.priority;
-    });
-  
-  // If we have matches, return the top categories (up to 3)
-  if (sortedScores.length > 0) {
-    return sortedScores.slice(0, 3).map(item => item.category);
-  }
-  
-  // Default to GENERAL if no matches
-  return [DocumentCategoryType.GENERAL];
+export function mapToStandardCategory(category: DocumentCategoryType): DocumentCategoryType {
+  // Since legacy categories are removed from the enum, this function
+  // mainly acts as a passthrough unless specific explicit mappings are needed later.
+  return category;
 }
 
 /**
@@ -326,7 +418,10 @@ export enum QualityControlFlag {
   NEEDS_CLARIFICATION = 'needs_clarification',
   CONTAINS_CONTRADICTIONS = 'contains_contradictions',
   OUTDATED = 'outdated',
-  UNRELIABLE_SOURCE = 'unreliable_source'
+  UNRELIABLE_SOURCE = 'unreliable_source',
+  OUTDATED_CONTENT = 'outdated_content', // Keep for compatibility?
+  INCOMPLETE_CONTENT = 'incomplete_content',
+  FORMATTING_ISSUES = 'formatting_issues'
 }
 
 /**
@@ -337,7 +432,10 @@ export function requiresHumanReview(flag: QualityControlFlag): boolean {
     QualityControlFlag.PENDING_REVIEW,
     QualityControlFlag.NEEDS_CLARIFICATION,
     QualityControlFlag.CONTAINS_CONTRADICTIONS,
-    QualityControlFlag.UNRELIABLE_SOURCE
+    QualityControlFlag.UNRELIABLE_SOURCE,
+    QualityControlFlag.OUTDATED, // Added outdated as needing review
+    QualityControlFlag.OUTDATED_CONTENT,
+    QualityControlFlag.INCOMPLETE_CONTENT
   ].includes(flag);
 }
 
@@ -357,9 +455,45 @@ export enum ConfidenceLevel {
 export enum EntityType {
   PERSON = 'person',
   ORGANIZATION = 'organization',
-  PRODUCT = 'product',
-  FEATURE = 'feature',
+  PRODUCT = 'product', // e.g., Workstream Platform
+  FEATURE = 'feature', // e.g., Text-to-Apply, Shift Scheduling
   PRICE = 'price',
   DATE = 'date',
-  LOCATION = 'location'
-} 
+  LOCATION = 'location', // e.g., California, New York, specific city
+  INDUSTRY = 'industry', // e.g., Restaurant, Retail, Healthcare
+  JOB_TITLE = 'job_title', // e.g., Manager, Server, RN
+  COMPETITOR = 'competitor', // e.g., ADP, Gusto, Indeed Hire
+  INTEGRATION_PARTNER = 'integration_partner', // e.g., QuickBooks, Google Calendar
+  TECHNOLOGY = 'technology', // e.g., AI, SMS, API, SSO
+  REGULATION = 'regulation', // e.g., I-9, WOTC, AB5, HIPAA
+  OTHER = 'other'
+}
+
+/**
+ * Basic rules-based category detection (Fallback)
+ * TODO: Implement more robust logic if needed, maybe using keywords from CATEGORY_ATTRIBUTES.
+ */
+export function detectCategoryFromText(text: string): [DocumentCategoryType, number] {
+  const lowerText = text.toLowerCase();
+  // Prioritize technical keywords
+  if (/\b(api|sdk|integration|technical|developer|code|endpoint)\b/.test(lowerText)) {
+    return [DocumentCategoryType.INTEGRATIONS, 0.7]; // Or TECHNICAL if that's added back
+  }
+  if (/\b(compliance|regulation|law|wotc|i-9|e-verify|tax form|hipaa|ab5)\b/.test(lowerText)) {
+    return [DocumentCategoryType.COMPLIANCE, 0.8];
+  }
+  if (/\b(payroll|wage|salary|paycheck|deduction)\b/.test(lowerText)) {
+    return [DocumentCategoryType.PAYROLL, 0.7];
+  }
+  if (/\b(hiring|recruitment|ats|applicant|candidate|job posting|screening|interview)\b/.test(lowerText)) {
+    return [DocumentCategoryType.HIRING, 0.6];
+  }
+  if (/\b(onboarding|new hire|orientation|paperwork)\b/.test(lowerText)) {
+    return [DocumentCategoryType.ONBOARDING, 0.6];
+  }
+  if (/\b(schedule|shift|time off|clock in|attendance)\b/.test(lowerText)) {
+    return [DocumentCategoryType.SCHEDULING, 0.6];
+  }
+  // Add more rules based on associatedKeywords...
+  return [DocumentCategoryType.GENERAL, 0.3]; // Default fallback
+}

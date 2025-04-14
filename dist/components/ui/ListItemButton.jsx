@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const ListItemButton = ({ children, className = '', selected = false, onClick, disabled = false, }) => {
     return (<div className={`
         px-3 py-2
@@ -19,4 +14,4 @@ const ListItemButton = ({ children, className = '', selected = false, onClick, d
       {children}
     </div>);
 };
-exports.default = ListItemButton;
+export default ListItemButton;

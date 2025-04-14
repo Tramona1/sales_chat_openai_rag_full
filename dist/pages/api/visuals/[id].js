@@ -1,13 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const visualStorageManager_1 = require("../../../utils/visualStorageManager");
-const performanceMonitoring_1 = require("../../../utils/performanceMonitoring");
+import { getVisual, readVisualContent, visualExists } from '../../../utils/visualStorageManager';
+import { recordMetric } from '../../../utils/performanceMonitoring';
 /**
  * API endpoint for retrieving visual content
  * Supports thumbnails and download options
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
     // Only allow GET requests
     if (req.method !== 'GET') {
         return res.status(405).json({ error: 'Method not allowed' });
@@ -20,19 +17,19 @@ async function handler(req, res) {
             return res.status(400).json({ error: 'Invalid visual ID' });
         }
         // Check if the visual exists
-        const exists = await (0, visualStorageManager_1.visualExists)(id);
+        const exists = await visualExists(id);
         if (!exists) {
             return res.status(404).json({ error: 'Visual not found' });
         }
         // Get visual metadata
-        const visual = await (0, visualStorageManager_1.getVisual)(id);
+        const visual = await getVisual(id);
         if (!visual) {
             return res.status(404).json({ error: 'Visual metadata not found' });
         }
         // Check if we should return the thumbnail
         const useThumbnail = req.query.thumbnail === 'true';
         // Read the visual content
-        const content = await (0, visualStorageManager_1.readVisualContent)(id, useThumbnail);
+        const content = await readVisualContent(id, useThumbnail);
         if (!content) {
             return res.status(404).json({ error: 'Visual content not found' });
         }
@@ -46,7 +43,7 @@ async function handler(req, res) {
         }
         // Record performance metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('visualApi', 'getVisual', duration, true, {
+        recordMetric('visualApi', 'getVisual', duration, true, {
             visualId: id,
             visualType: visual.type,
             useThumbnail,
@@ -59,7 +56,7 @@ async function handler(req, res) {
         console.error('Error serving visual content:', error);
         // Record error metric
         const duration = Date.now() - startTime;
-        (0, performanceMonitoring_1.recordMetric)('visualApi', 'getVisual', duration, false, {
+        recordMetric('visualApi', 'getVisual', duration, false, {
             error: error instanceof Error ? error.message : 'Unknown error'
         });
         return res.status(500).json({ error: 'Internal server error' });

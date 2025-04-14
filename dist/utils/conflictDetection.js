@@ -1,21 +1,15 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.ConflictType = void 0;
-exports.detectDocumentConflicts = detectDocumentConflicts;
-exports.detectConflictsWithGemini = detectConflictsWithGemini;
-exports.formatDocumentSnippet = formatDocumentSnippet;
-const errorHandling_1 = require("./errorHandling");
-const geminiProcessor_1 = require("./geminiProcessor");
+import { logInfo, logError } from './logger';
+import { detectConflictWithGemini } from './geminiProcessor';
 /**
  * Types of conflicts that can be detected
  */
-var ConflictType;
+export var ConflictType;
 (function (ConflictType) {
     ConflictType["CONTRADICTORY"] = "contradictory";
     ConflictType["OUTDATED"] = "outdated";
     ConflictType["INCOMPLETE"] = "incomplete";
     ConflictType["DUPLICATE"] = "duplicate";
-})(ConflictType || (exports.ConflictType = ConflictType = {}));
+})(ConflictType || (ConflictType = {}));
 /**
  * Detect conflicts between documents
  *
@@ -28,7 +22,7 @@ var ConflictType;
  * @param useGemini Whether to use Gemini for enhanced conflict detection
  * @returns Array of conflict groups
  */
-function detectDocumentConflicts(documents, entityName, useGemini = false) {
+export function detectDocumentConflicts(documents, entityName, useGemini = false) {
     // Return early if no documents
     if (!documents || documents.length === 0) {
         return [];
@@ -43,7 +37,7 @@ function detectDocumentConflicts(documents, entityName, useGemini = false) {
     // If entity name is provided, filter documents for that entity
     let relevantDocs = documents;
     if (entityName) {
-        relevantDocs = documents.filter(doc => doc.text.toLowerCase().includes(entityName.toLowerCase()));
+        relevantDocs = documents.filter(doc => doc.text && doc.text.toLowerCase().includes(entityName.toLowerCase()));
     }
     // Detect CEO/leadership conflicts
     const leadershipConflicts = detectLeadershipConflicts(relevantDocs);
@@ -61,7 +55,7 @@ function detectDocumentConflicts(documents, entityName, useGemini = false) {
         conflictGroups.push(...featureConflicts);
     }
     // Log conflict detection results
-    (0, errorHandling_1.logInfo)(`Pattern-based conflict detection completed`, {
+    logInfo(`Pattern-based conflict detection completed`, {
         totalDocuments: documents.length,
         conflictsFound: conflictGroups.length,
         highPriorityConflicts: conflictGroups.filter(g => g.isHighPriority).length
@@ -78,8 +72,7 @@ function detectDocumentConflicts(documents, entityName, useGemini = false) {
  * @param entityName Optional entity name to focus conflict detection
  * @returns Array of enhanced conflict groups
  */
-async function detectConflictsWithGemini(documents, entityName) {
-    var _a, _b, _c, _d, _e, _f;
+export async function detectConflictsWithGemini(documents, entityName) {
     const conflictGroups = [];
     // Return early if no documents
     if (!documents || documents.length === 0) {
@@ -141,12 +134,12 @@ async function detectConflictsWithGemini(documents, entityName) {
         try {
             const { doc1, doc2, topic } = pair;
             // Check for conflicts using Gemini
-            const conflictAnalysis = await (0, geminiProcessor_1.detectConflictWithGemini)({
-                id: ((_a = doc1.metadata) === null || _a === void 0 ? void 0 : _a.source) || 'doc1',
-                text: doc1.text
+            const conflictAnalysis = await detectConflictWithGemini({
+                id: doc1.metadata?.source || 'doc1',
+                text: doc1.text || ''
             }, {
-                id: ((_b = doc2.metadata) === null || _b === void 0 ? void 0 : _b.source) || 'doc2',
-                text: doc2.text
+                id: doc2.metadata?.source || 'doc2',
+                text: doc2.text || ''
             });
             // If no conflict detected, continue to next pair
             if (!conflictAnalysis.hasConflict || conflictAnalysis.confidence < 0.5) {
@@ -154,17 +147,14 @@ async function detectConflictsWithGemini(documents, entityName) {
             }
             // Create a new conflict group or add to existing one
             const existingGroupIndex = conflictGroups.findIndex(g => g.topic === topic &&
-                g.documents.some(d => {
-                    var _a, _b, _c, _d;
-                    return ((_a = d.metadata) === null || _a === void 0 ? void 0 : _a.source) === ((_b = doc1.metadata) === null || _b === void 0 ? void 0 : _b.source) ||
-                        ((_c = d.metadata) === null || _c === void 0 ? void 0 : _c.source) === ((_d = doc2.metadata) === null || _d === void 0 ? void 0 : _d.source);
-                }));
+                g.documents.some(d => d.metadata?.source === doc1.metadata?.source ||
+                    d.metadata?.source === doc2.metadata?.source));
             if (existingGroupIndex >= 0) {
                 // Add to existing group
                 const group = conflictGroups[existingGroupIndex];
                 // Add documents if not already present
                 [doc1, doc2].forEach(doc => {
-                    if (!group.documents.some(d => { var _a, _b; return ((_a = d.metadata) === null || _a === void 0 ? void 0 : _a.source) === ((_b = doc.metadata) === null || _b === void 0 ? void 0 : _b.source); })) {
+                    if (!group.documents.some(d => d.metadata?.source === doc.metadata?.source)) {
                         group.documents.push(doc);
                     }
                 });
@@ -173,8 +163,8 @@ async function detectConflictsWithGemini(documents, entityName) {
                     type: conflictAnalysis.conflictType || ConflictType.CONTRADICTORY,
                     description: conflictAnalysis.conflictDescription || 'Semantic contradiction detected',
                     affectedDocIds: [
-                        ((_c = doc1.metadata) === null || _c === void 0 ? void 0 : _c.source) || '',
-                        ((_d = doc2.metadata) === null || _d === void 0 ? void 0 : _d.source) || ''
+                        doc1.metadata?.source || '',
+                        doc2.metadata?.source || ''
                     ].filter(Boolean),
                     confidence: conflictAnalysis.confidence,
                     detectedBy: 'gemini'
@@ -201,8 +191,8 @@ async function detectConflictsWithGemini(documents, entityName) {
                             type: conflictAnalysis.conflictType || ConflictType.CONTRADICTORY,
                             description: conflictAnalysis.conflictDescription || 'Semantic contradiction detected',
                             affectedDocIds: [
-                                ((_e = doc1.metadata) === null || _e === void 0 ? void 0 : _e.source) || '',
-                                ((_f = doc2.metadata) === null || _f === void 0 ? void 0 : _f.source) || ''
+                                doc1.metadata?.source || '',
+                                doc2.metadata?.source || ''
                             ].filter(Boolean),
                             confidence: conflictAnalysis.confidence,
                             detectedBy: 'gemini'
@@ -217,11 +207,11 @@ async function detectConflictsWithGemini(documents, entityName) {
             }
         }
         catch (error) {
-            (0, errorHandling_1.logError)('Error analyzing conflicts with Gemini', error);
+            logError('Error analyzing conflicts with Gemini', error);
         }
     }
     // Log conflict detection results
-    (0, errorHandling_1.logInfo)(`Gemini-enhanced conflict detection completed`, {
+    logInfo(`Gemini-enhanced conflict detection completed`, {
         totalDocuments: documents.length,
         conflictsFound: conflictGroups.length,
         highPriorityConflicts: conflictGroups.filter(g => g.isHighPriority).length,
@@ -235,11 +225,10 @@ async function detectConflictsWithGemini(documents, entityName) {
  * Detect conflicts in leadership information (CEO, executives)
  */
 function detectLeadershipConflicts(documents) {
-    var _a, _b;
     // Pattern for leadership mentions
     const ceoPattern = /\b(ceo|chief\s+executive|founder|co-founder)\b/i;
     // Filter for documents mentioning leadership
-    const leadershipDocs = documents.filter(doc => ceoPattern.test(doc.text.toLowerCase()));
+    const leadershipDocs = documents.filter(doc => doc.text && ceoPattern.test(doc.text.toLowerCase()));
     if (leadershipDocs.length <= 1) {
         return null; // No conflicts possible with 0-1 documents
     }
@@ -253,6 +242,8 @@ function detectLeadershipConflicts(documents) {
             /([A-Z][a-z]+\s+[A-Z][a-z]+)(?:,| is| -| –)\s+(?:the\s+)?(?:co-founder|founder)\s+(?:and|&)\s+(?:ceo|chief\s+executive)/i
         ];
         for (const pattern of ceoMentionPatterns) {
+            if (!doc.text)
+                continue;
             const matches = doc.text.match(pattern);
             if (matches && matches[1]) {
                 const name = matches[1].trim();
@@ -260,10 +251,10 @@ function detectLeadershipConflicts(documents) {
                 const contextEnd = Math.min(doc.text.length, doc.text.indexOf(matches[0]) + matches[0].length + 50);
                 const context = doc.text.substring(contextStart, contextEnd);
                 ceoMentions.push({
-                    docId: ((_a = doc.metadata) === null || _a === void 0 ? void 0 : _a.source) || '',
+                    docId: doc.metadata?.source || '',
                     name,
                     context,
-                    createdAt: ((_b = doc.metadata) === null || _b === void 0 ? void 0 : _b.createdAt) ? new Date(doc.metadata.createdAt) : new Date(0)
+                    createdAt: doc.metadata?.createdAt ? new Date(doc.metadata.createdAt) : new Date(0)
                 });
             }
         }
@@ -323,14 +314,13 @@ function detectFeatureConflicts(documents) {
 function isNewer(doc1, doc2) {
     // Try different date fields in order of preference
     const getDate = (doc) => {
-        var _a, _b, _c;
-        if ((_a = doc.metadata) === null || _a === void 0 ? void 0 : _a.lastUpdated) {
+        if (doc.metadata?.lastUpdated) {
             return new Date(doc.metadata.lastUpdated);
         }
-        if ((_b = doc.metadata) === null || _b === void 0 ? void 0 : _b.createdAt) {
+        if (doc.metadata?.createdAt) {
             return new Date(doc.metadata.createdAt);
         }
-        if ((_c = doc.metadata) === null || _c === void 0 ? void 0 : _c.timestamp) {
+        if (doc.metadata?.timestamp) {
             return new Date(doc.metadata.timestamp);
         }
         return new Date(0); // Default to epoch if no date
@@ -340,7 +330,7 @@ function isNewer(doc1, doc2) {
 /**
  * Format a document snippet for display
  */
-function formatDocumentSnippet(doc, maxLength = 100) {
+export function formatDocumentSnippet(doc, maxLength = 100) {
     if (!doc.text)
         return '';
     const text = doc.text.substring(0, maxLength);

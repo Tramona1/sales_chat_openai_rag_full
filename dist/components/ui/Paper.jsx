@@ -1,9 +1,4 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const react_1 = __importDefault(require("react"));
+import React from 'react';
 const Paper = ({ children, elevation = 1, square = false, variant = 'elevation', className = '' }) => {
     // Shadow styles based on elevation
     const shadowStyles = {
@@ -24,4 +19,4 @@ const Paper = ({ children, elevation = 1, square = false, variant = 'elevation',
       {children}
     </div>);
 };
-exports.default = Paper;
+export default Paper;

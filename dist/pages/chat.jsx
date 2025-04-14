@@ -1,59 +1,26 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = ChatPage;
-const react_1 = __importStar(require("react"));
-const router_1 = require("next/router");
-const axios_1 = __importDefault(require("axios"));
-const link_1 = __importDefault(require("next/link"));
-const lucide_react_1 = require("lucide-react");
-const ChatMessage_1 = __importDefault(require("@/components/ChatMessage"));
-const chatStorage_1 = require("@/utils/chatStorage");
-function ChatPage() {
-    const router = (0, router_1.useRouter)();
-    const [messages, setMessages] = (0, react_1.useState)([]);
-    const [input, setInput] = (0, react_1.useState)('');
-    const [isLoading, setIsLoading] = (0, react_1.useState)(false);
-    const [sessionId, setSessionId] = (0, react_1.useState)(null);
-    const endOfMessagesRef = (0, react_1.useRef)(null);
-    const textareaRef = (0, react_1.useRef)(null);
+import React, { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/router';
+import Link from 'next/link';
+import { Send, ChevronLeft, Loader2, } from 'lucide-react';
+import ChatMessage from '@/components/ChatMessage';
+import { generateSessionTitle, extractKeywords } from '@/utils/chatStorage';
+import { trackEvent } from '@/utils/analytics';
+import { ChatFeedback } from '@/components/enhanced-tracking';
+export default function ChatPage() {
+    const router = useRouter();
+    const [messages, setMessages] = useState([]);
+    const [input, setInput] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [sessionId, setSessionId] = useState(null);
+    const endOfMessagesRef = useRef(null);
+    const textareaRef = useRef(null);
+    const [chatTitle, setChatTitle] = useState('New Chat');
+    const [isCompanyChat, setIsCompanyChat] = useState(false);
+    const [companyName, setCompanyName] = useState('');
+    const [companyInfo, setCompanyInfo] = useState('');
+    const [salesNotes, setSalesNotes] = useState('');
     // Initialize with welcome message and handle URL parameters
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         // Check if router is ready and has query parameters
         if (!router.isReady)
             return;
@@ -137,38 +104,47 @@ function ChatPage() {
     };
     // Function to save the current chat session
     const saveChatSession = async () => {
-        if (messages.length <= 1)
-            return; // Don't save if we only have the welcome message
         try {
-            // Convert our messages to the format expected by the API
-            const storedMessages = messages.map(msg => ({
+            // Make sure we have messages and a title
+            if (!messages.length || !chatTitle.trim()) {
+                return;
+            }
+            // Format the messages for storage
+            const formattedMessages = messages.map(msg => ({
                 role: msg.role === 'user' ? 'user' : 'assistant',
                 content: msg.content,
                 timestamp: msg.timestamp.toISOString()
             }));
-            // Get keywords and generate a title
-            const keywords = (0, chatStorage_1.extractKeywords)(storedMessages);
-            const title = (0, chatStorage_1.generateSessionTitle)(storedMessages);
-            const response = await fetch('/api/admin/chat-sessions', {
+            // Prepare session data
+            const sessionData = {
+                title: chatTitle,
+                sessionType: isCompanyChat ? 'company' : 'general',
+                messages: formattedMessages,
+                salesRepName: 'Anonymous User', // Would be replaced by user info in a real auth system
+                companyName: isCompanyChat ? companyName : undefined,
+                companyInfo: isCompanyChat ? companyInfo : undefined,
+                salesNotes: salesNotes
+            };
+            // Call the API to save the session
+            const response = await fetch('/api/storage/chat-operations', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    sessionType: 'general',
-                    title,
-                    messages: storedMessages,
-                    keywords,
-                }),
+                body: JSON.stringify(sessionData),
             });
-            const data = await response.json();
-            if (data.sessionId) {
-                setSessionId(data.sessionId);
-                console.log(`Chat session saved with ID: ${data.sessionId}`);
+            if (!response.ok) {
+                throw new Error(`Failed to save chat session: ${response.statusText}`);
             }
+            const data = await response.json();
+            // Update the session ID
+            setSessionId(data.id);
+            console.log('Chat session saved successfully with ID:', data.id);
+            return data.id;
         }
         catch (error) {
-            console.error('Failed to save chat session:', error);
+            console.error('Error saving chat session:', error);
+            // Implement better error handling here
         }
     };
     // Update existing session
@@ -183,18 +159,21 @@ function ChatPage() {
                 timestamp: msg.timestamp.toISOString()
             }));
             // Get keywords and generate a title
-            const keywords = (0, chatStorage_1.extractKeywords)(storedMessages);
-            const title = (0, chatStorage_1.generateSessionTitle)(storedMessages);
+            const keywords = extractKeywords(storedMessages);
+            const title = generateSessionTitle(storedMessages);
             await fetch(`/api/admin/chat-sessions/${sessionId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    sessionType: 'general',
+                    sessionType: isCompanyChat ? 'company' : 'general',
                     title,
                     messages: storedMessages,
                     keywords,
+                    companyName: isCompanyChat ? companyName : undefined,
+                    companyInfo: isCompanyChat ? companyInfo : undefined,
+                    salesNotes
                 }),
             });
         }
@@ -203,7 +182,7 @@ function ChatPage() {
         }
     };
     // Save session when messages change
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         // Skip if no messages or only welcome message
         if (messages.length <= 1)
             return;
@@ -233,57 +212,80 @@ function ChatPage() {
     const processMessageForResponse = async (messageText, currentMessages) => {
         try {
             setIsLoading(true);
-            // Create context from recent messages
-            const recentMessages = currentMessages
-                .slice(-5)
-                .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-                .join('\n');
-            // Determine if this is a company-specific query
+            // Log start of processing
+            console.log("Processing message for response:", messageText.substring(0, 50) + "...");
+            // Determine if this is company-specific
             const isCompanyQuery = isCompanySpecificQuery(messageText);
-            // Set options for the API call
-            const options = isCompanyQuery ? {
-                // Use lower hybrid ratio for company queries to favor BM25 term matching
-                hybridRatio: 0.3,
-                // Increase search results limit for company queries
-                limit: 5
-            } : {};
-            // Call API with the message
-            const response = await axios_1.default.post('/api/query', {
+            // Prepare the request body
+            const requestBody = {
                 query: messageText,
-                context: recentMessages,
-                options: options
-            });
-            // Generate a unique ID for the message
-            const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            // Log conversation for admin review and feedback tracking
-            await axios_1.default.post('/api/log', {
-                user: 'Anonymous',
-                query: messageText,
-                response: response.data.answer,
-                isCompanyQuery: isCompanyQuery,
                 sessionId: sessionId,
-                messageId: messageId,
-            });
-            // Add bot response
-            setMessages([
-                ...currentMessages,
-                {
-                    id: messageId,
-                    role: 'bot',
-                    content: response.data.answer,
-                    timestamp: new Date()
+                conversationHistory: currentMessages.map(msg => ({
+                    role: msg.role === 'user' ? 'user' : 'assistant',
+                    content: msg.content
+                })),
+                options: {
+                    includeSourceCitations: true,
+                    useGemini: true
                 }
-            ]);
+            };
+            // Call the actual query API with the proper POST request
+            const response = await fetch('/api/query', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestBody),
+            });
+            if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+            }
+            const result = await response.json();
+            // Create a unique ID for the bot message
+            const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            // Add bot response to messages
+            const botMessage = {
+                id: messageId,
+                role: 'bot',
+                content: result.answer || "I'm sorry, I couldn't generate a response. Please try again.",
+                timestamp: new Date()
+            };
+            // Update messages with bot response
+            setMessages([...currentMessages, botMessage]);
+            // Log the conversation for admin review if enabled
+            try {
+                if (sessionId) {
+                    await fetch('/api/log-conversation', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            sessionId,
+                            message: messageText,
+                            response: result.answer,
+                            metadata: {
+                                sessionType: isCompanyQuery ? 'company' : 'general',
+                                timestamp: new Date().toISOString()
+                            }
+                        }),
+                    });
+                }
+            }
+            catch (logError) {
+                console.error("Failed to log conversation:", logError);
+                // Non-blocking, continue despite log failure
+            }
         }
         catch (error) {
-            console.error('Error getting response:', error);
-            // Add error message
+            console.error("Error processing message:", error);
+            // Add error message to chat
             setMessages([
                 ...currentMessages,
                 {
                     id: Date.now().toString(),
                     role: 'bot',
-                    content: 'Sorry, I encountered an error while processing your request. Please try again.',
+                    content: "Sorry, I encountered an error processing your request. Please try again.",
                     timestamp: new Date()
                 }
             ]);
@@ -313,6 +315,16 @@ function ChatPage() {
             setMessages(updatedMessages);
         }
         setInput('');
+        // Track message sent event
+        trackEvent({
+            event_type: 'chat_message_sent',
+            session_id: sessionId || undefined,
+            event_data: {
+                message_type: 'text',
+                content_length: messageText.length,
+                is_company_specific: isCompanySpecificQuery(messageText)
+            }
+        });
         // Reset textarea height
         if (textareaRef.current) {
             textareaRef.current.style.height = 'auto';
@@ -322,55 +334,64 @@ function ChatPage() {
     };
     // Handle feedback on assistant messages
     const handleFeedback = async (messageIndex, feedbackType) => {
-        const message = messages[messageIndex];
-        if (message.role !== 'bot')
-            return;
-        // Update UI immediately
-        const updatedMessages = [...messages];
-        updatedMessages[messageIndex] = {
-            ...message,
-            feedback: feedbackType
-        };
-        setMessages(updatedMessages);
-        // Find the corresponding user query (message before this one)
-        let userQuery = '';
-        if (messageIndex > 0 && updatedMessages[messageIndex - 1].role === 'user') {
-            userQuery = updatedMessages[messageIndex - 1].content;
-        }
-        // Submit feedback to API
         try {
+            // Don't allow feedback on system messages or multiple feedback submissions
+            if (messages[messageIndex].role !== 'bot' || messages[messageIndex].feedback) {
+                return;
+            }
+            // Find the preceding user message to get the query
+            let userMessageIndex = messageIndex - 1;
+            while (userMessageIndex >= 0) {
+                if (messages[userMessageIndex].role === 'user') {
+                    break;
+                }
+                userMessageIndex--;
+            }
+            if (userMessageIndex < 0) {
+                console.error('Could not find user message for feedback');
+                return;
+            }
+            // Update UI immediately
+            const updatedMessages = [...messages];
+            updatedMessages[messageIndex] = {
+                ...updatedMessages[messageIndex],
+                feedback: feedbackType
+            };
+            setMessages(updatedMessages);
+            // Send to API
             const response = await fetch('/api/feedback', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    query: userQuery,
-                    response: message.content,
+                    query: messages[userMessageIndex].content,
+                    response: messages[messageIndex].content,
                     feedback: feedbackType,
-                    messageIndex,
+                    messageIndex: messageIndex,
                     sessionId: sessionId,
-                    messageId: message.id,
                     metadata: {
-                        sessionType: 'general'
+                        isCompanyChat: isCompanyChat,
+                        companyName: companyName || undefined
                     }
-                }),
+                })
             });
             if (!response.ok) {
-                console.error('Failed to submit feedback');
+                throw new Error('Failed to record feedback');
             }
+            console.log('Feedback submitted successfully');
         }
         catch (error) {
             console.error('Error submitting feedback:', error);
+            // Don't revert UI state to avoid confusion
         }
     };
     // Always scroll to bottom when messages change
-    (0, react_1.useEffect)(() => {
+    useEffect(() => {
         scrollToBottom();
     }, [messages]);
     const scrollToBottom = () => {
-        var _a;
-        (_a = endOfMessagesRef.current) === null || _a === void 0 ? void 0 : _a.scrollIntoView({ behavior: 'smooth' });
+        endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
     // Handle input change and auto-resize textarea
     const handleInputChange = (e) => {
@@ -412,10 +433,10 @@ function ChatPage() {
       {/* Header */}
       <header className="bg-[#202123] text-white p-3 border-b border-gray-700 flex items-center justify-between">
         <div className="flex items-center">
-          <link_1.default href="/" className="flex items-center text-gray-300 hover:text-white transition">
-            <lucide_react_1.ChevronLeft className="h-5 w-5 mr-1"/>
+          <Link href="/" className="flex items-center text-gray-300 hover:text-white transition">
+            <ChevronLeft className="h-5 w-5 mr-1"/>
             <span>Back to Hub</span>
-          </link_1.default>
+          </Link>
         </div>
         <h1 className="text-xl font-semibold text-center flex-1">Workstream Knowledge Assistant</h1>
         <div className="flex space-x-2">
@@ -439,27 +460,16 @@ function ChatPage() {
               
               {/* Message content */}
               <div className="flex-1 min-w-0">
-                <ChatMessage_1.default message={message.content} role={message.role} timestamp={message.timestamp}/>
+                <ChatMessage message={message.content} role={message.role} timestamp={message.timestamp}/>
                 
                 {/* Feedback buttons (only show for assistant messages) */}
-                {message.role === 'bot' && index > 0 && (<div className="mt-2 flex justify-end gap-2">
-                    <button onClick={() => handleFeedback(index, 'positive')} className={`p-1 rounded-full ${message.feedback === 'positive'
-                    ? 'bg-green-800 text-green-200'
-                    : 'hover:bg-gray-700 text-gray-400'}`} aria-label="Helpful" title="Helpful">
-                      <lucide_react_1.ThumbsUp className="h-4 w-4"/>
-                    </button>
-                    <button onClick={() => handleFeedback(index, 'negative')} className={`p-1 rounded-full ${message.feedback === 'negative'
-                    ? 'bg-red-800 text-red-200'
-                    : 'hover:bg-gray-700 text-gray-400'}`} aria-label="Not helpful" title="Not helpful">
-                      <lucide_react_1.ThumbsDown className="h-4 w-4"/>
-                    </button>
-                  </div>)}
+                {message.role === 'bot' && index > 0 && (<ChatFeedback messageIndex={index} query={index > 0 ? messages[index - 1].content : ''} response={message.content} sessionId={sessionId || undefined} onFeedbackSubmitted={(type) => handleFeedback(index, type)}/>)}
               </div>
             </div>
           </div>))}
         
         {isLoading && (<div className="flex items-center justify-center p-4">
-            <lucide_react_1.Loader2 className="h-6 w-6 text-gray-400 animate-spin"/>
+            <Loader2 className="h-6 w-6 text-gray-400 animate-spin"/>
           </div>)}
         
         <div ref={endOfMessagesRef}/>
@@ -472,7 +482,7 @@ function ChatPage() {
           <button onClick={() => handleSendMessage()} disabled={isLoading || !input.trim()} className={`absolute right-3 top-3 rounded-md p-1 ${isLoading || !input.trim()
             ? 'text-gray-600 cursor-not-allowed'
             : 'text-gray-300 hover:text-white hover:bg-gray-700'}`}>
-            <lucide_react_1.Send className="h-5 w-5"/>
+            <Send className="h-5 w-5"/>
           </button>
         </div>
       </div>

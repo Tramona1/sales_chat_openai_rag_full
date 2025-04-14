@@ -1,46 +1,7 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = UploadForm;
-const react_1 = __importStar(require("react"));
-const VisualDocumentIcon_1 = __importDefault(require("./ui/icons/VisualDocumentIcon"));
-function UploadForm({ onSuccess, onError }) {
-    const [formState, setFormState] = (0, react_1.useState)({
+import React, { useState, useRef } from 'react';
+import VisualDocumentIcon from './ui/icons/VisualDocumentIcon';
+export default function UploadForm({ onSuccess, onError }) {
+    const [formState, setFormState] = useState({
         files: [],
         isUploading: false,
         contextualProcessing: true,
@@ -48,7 +9,7 @@ function UploadForm({ onSuccess, onError }) {
         error: null,
         success: null
     });
-    const fileInputRef = (0, react_1.useRef)(null);
+    const fileInputRef = useRef(null);
     // List of accepted file types
     const acceptedFileTypes = [
         'application/pdf',
@@ -179,7 +140,7 @@ function UploadForm({ onSuccess, onError }) {
     };
     const getFileIcon = (file) => {
         if (file.type.includes('image')) {
-            return <VisualDocumentIcon_1.default size={20} className="mr-2 text-blue-500"/>;
+            return <VisualDocumentIcon size={20} className="mr-2 text-blue-500"/>;
         }
         else if (file.type.includes('pdf')) {
             return (<svg className="w-5 h-5 mr-2 text-red-500" fill="currentColor" viewBox="0 0 20 20">
@@ -210,7 +171,7 @@ function UploadForm({ onSuccess, onError }) {
             <p>{formState.success}</p>
           </div>)}
         
-        <div className="border-2 border-dashed border-gray-300 rounded-md p-6 mb-4 text-center cursor-pointer hover:border-blue-500 transition-colors" onClick={() => { var _a; return (_a = fileInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }} onDragOver={handleDragOver} onDrop={handleDrop}>
+        <div className="border-2 border-dashed border-gray-300 rounded-md p-6 mb-4 text-center cursor-pointer hover:border-blue-500 transition-colors" onClick={() => fileInputRef.current?.click()} onDragOver={handleDragOver} onDrop={handleDrop}>
           <input type="file" multiple onChange={handleFileChange} className="hidden" ref={fileInputRef} accept={acceptedFileTypes.join(',')}/>
           
           <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">

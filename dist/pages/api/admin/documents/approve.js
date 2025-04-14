@@ -1,91 +1,68 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = handler;
-const adminWorkflow_1 = require("@/utils/adminWorkflow");
-const errorHandling_1 = require("@/utils/errorHandling");
+import { logInfo, logError } from '@/utils/logger';
+import { getSupabaseAdmin } from '@/utils/supabaseClient';
 /**
  * API endpoint for approving pending documents
- * This endpoint moves documents from pending to the vector store with all AI-generated metadata
+ * This endpoint marks documents as approved in the Supabase 'documents' table.
+ * Actual processing/embedding likely happened during upload or should be triggered here/elsewhere.
  */
-async function handler(req, res) {
+export default async function handler(req, res) {
+    // Only allow POST requests
     if (req.method !== 'POST') {
-        return res.status(405).json({ message: 'Method not allowed' });
+        return res.status(405).json({ error: 'Method Not Allowed' });
     }
     try {
-        // Get document IDs from request
-        const { documentIds } = req.body;
+        const { documentIds, reviewerComments } = req.body;
         if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {
-            return res.status(400).json({ message: 'Invalid or missing document IDs' });
+            return res.status(400).json({ error: 'Document IDs are required' });
         }
-        (0, errorHandling_1.logInfo)('Approving documents', { count: documentIds.length });
-        // Track results
-        const results = {
-            success: true,
-            documentsProcessed: 0,
-            failures: 0,
-            message: ''
-        };
-        // Process each document
-        const approvalPromises = documentIds.map(async (id) => {
-            try {
-                // Get the document first to confirm it exists
-                const pendingDoc = await (0, adminWorkflow_1.getPendingDocumentById)(id);
-                if (!pendingDoc) {
-                    (0, errorHandling_1.logError)(`Document ${id} not found in pending queue`, null);
-                    results.failures++;
-                    return false;
-                }
-                // Log the metadata that will be preserved
-                (0, errorHandling_1.logInfo)(`Approving document ${id} with AI-generated metadata`, {
-                    metadataFields: Object.keys(pendingDoc.metadata)
-                });
-                // Approve document - this preserves all AI-generated metadata
-                const success = await (0, adminWorkflow_1.approveOrRejectDocument)(id, {
-                    approved: true,
-                    reviewerComments: 'Approved with all AI-generated tags preserved',
-                    reviewedBy: req.headers['x-user-email'] || 'admin'
-                });
-                if (success) {
-                    results.documentsProcessed++;
-                    return true;
+        logInfo(`Approving documents`, { count: documentIds.length });
+        const supabase = getSupabaseAdmin();
+        const updatePromises = documentIds.map(docId => supabase
+            .from('documents')
+            .update({ approved: true, updated_at: new Date().toISOString() })
+            .eq('id', docId));
+        const results = await Promise.allSettled(updatePromises);
+        // Process results
+        const successes = [];
+        const failures = [];
+        results.forEach((result, index) => {
+            const docId = documentIds[index];
+            if (result.status === 'fulfilled') {
+                if (result.value.error) {
+                    logError(`Failed to approve document ${docId} in Supabase`, result.value.error);
+                    failures.push({ id: docId, error: result.value.error.message });
                 }
                 else {
-                    results.failures++;
-                    return false;
+                    successes.push(docId);
                 }
             }
-            catch (error) {
-                (0, errorHandling_1.logError)(`Failed to approve document ${id}`, error);
-                results.failures++;
-                return false;
+            else {
+                logError(`Failed to execute approval update for document ${docId}`, result.reason);
+                failures.push({ id: docId, error: result.reason?.message || 'Unknown execution error' });
             }
         });
-        // Wait for all approvals to complete
-        await Promise.all(approvalPromises);
-        // Set result message
-        if (results.failures === 0) {
-            results.message = `Successfully approved ${results.documentsProcessed} document(s) with all AI-generated metadata preserved`;
-        }
-        else if (results.documentsProcessed > 0) {
-            results.message = `Partially successful: Approved ${results.documentsProcessed} document(s), but failed to approve ${results.failures} document(s)`;
-            results.success = false;
+        const allSucceeded = failures.length === 0;
+        if (allSucceeded) {
+            return res.status(200).json({
+                success: true,
+                message: `Successfully approved ${successes.length} document(s)`
+            });
         }
         else {
-            results.message = `Failed to approve any documents (${results.failures} failures)`;
-            results.success = false;
+            const succeededCount = successes.length;
+            const failedCount = failures.length;
+            return res.status(207).json({
+                partialSuccess: true,
+                message: `Approved ${succeededCount} document(s), failed to approve ${failedCount} document(s)`,
+                failures
+            });
         }
-        // Return results
-        return res.status(results.success ? 200 : 500).json({
-            ...results,
-            preservedAIMetadata: true
-        });
     }
     catch (error) {
-        (0, errorHandling_1.logError)('Error approving documents', error);
+        logError('Error in document approval endpoint', error);
         return res.status(500).json({
-            success: false,
-            message: 'Failed to approve documents',
-            error: error instanceof Error ? error.message : 'Unknown error'
+            error: 'Failed to process approval request',
+            message: error instanceof Error ? error.message : 'Unknown error'
         });
     }
 }
