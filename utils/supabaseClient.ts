@@ -15,29 +15,37 @@ dotenv.config();
 /**
  * Gets Supabase configuration from environment variables
  * This is done as a function to ensure values are loaded at runtime
+ * 
+ * IMPORTANT: The system expects the following environment variables:
+ * - NEXT_PUBLIC_SUPABASE_URL: The URL to your Supabase instance
+ * - NEXT_PUBLIC_SUPABASE_ANON_KEY: The anonymous/public API key
+ * - SUPABASE_SERVICE_KEY: The service role key (with admin privileges)
+ * 
+ * The NEXT_PUBLIC_ prefix is required for client-side access.
  */
 function getSupabaseConfig() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+  // Check for both formats for backwards compatibility
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
   const serviceKey = process.env.SUPABASE_SERVICE_KEY || '';
   
   // <<< TEMPORARY DIAGNOSTIC LOG >>>
   console.log('*** [DEBUG] Reading Supabase Config: ***');
   console.log(` - NEXT_PUBLIC_SUPABASE_URL: ${process.env.NEXT_PUBLIC_SUPABASE_URL}`);
   console.log(` - NEXT_PUBLIC_SUPABASE_ANON_KEY: ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`);
-  console.log(` - SUPABASE_SERVICE_KEY: ${process.env.SUPABASE_SERVICE_KEY}`);
+  console.log(` - SUPABASE_SERVICE_KEY: ${process.env.SUPABASE_SERVICE_KEY ? '[SET]' : '[NOT SET]'}`);
   console.log('*** --- ***');
   // <<< END TEMPORARY DIAGNOSTIC LOG >>>
   
   // Validate that environment variables are set
   if (!url || !anonKey || !serviceKey) {
     const missingVars = [];
-    if (!url) missingVars.push('SUPABASE_URL');
-    if (!anonKey) missingVars.push('SUPABASE_ANON_KEY');
+    if (!url) missingVars.push('NEXT_PUBLIC_SUPABASE_URL');
+    if (!anonKey) missingVars.push('NEXT_PUBLIC_SUPABASE_ANON_KEY');
     if (!serviceKey) missingVars.push('SUPABASE_SERVICE_KEY');
     
     logError(`Missing Supabase environment variables: ${missingVars.join(', ')}`);
-    console.error(`Missing Supabase environment variables: ${missingVars.join(', ')}`, { 
+    console.error(`Missing Supabase environment variables: ${missingVars.join(', ')}. Check your .env or .env.local file.`, { 
       url: !!url, 
       anonKey: !!anonKey, 
       serviceKey: !!serviceKey 

@@ -6,6 +6,7 @@
  */
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { generateStructuredGeminiResponse } from './geminiClient';
 import { logError, logInfo } from './logger';
 import { DocumentCategoryType, getStandardCategories } from './documentCategories';
 import { STANDARD_CATEGORIES } from './tagUtils';
@@ -123,9 +124,12 @@ export interface QueryAnalysisResult {
     name: string;
     importance: number;
   }>;
+  primaryCategory?: string;
+  secondaryCategories?: string[];
   suggestedFilters: Record<string, any>;
   expectedContentTypes: string[];
   confidence: number;
+  technicalLevel?: number;
 }
 
 /**
@@ -479,78 +483,89 @@ export async function processDocumentWithEnhancedLabels(
 }
 
 /**
- * Analyze a user query using Gemini
- * @param query User query text
- * @returns Analysis of query intent and structure
+ * Analyze a user query using Gemini to understand intent, entities, and context
+ * 
+ * @param query The user query string
+ * @returns A promise resolving to the QueryAnalysisResult
  */
 export async function analyzeQueryWithGemini(
   query: string
 ): Promise<QueryAnalysisResult> {
+  // Get the category values from STANDARD_CATEGORIES to use in the prompt
+  const categoryValues = STANDARD_CATEGORIES.map(cat => cat.value).join(', ');
+  
+  const systemPrompt = `You are an expert query analyzer for a RAG system. Analyze the user query and extract:
+1.  **Intent**: What is the user trying to achieve? (choose one: factual, technical, comparison, overview)
+2.  **Entities**: Key people, companies, products, features mentioned.
+3.  **Primary Category**: The single most relevant category for this query, chosen ONLY from this list: [${categoryValues}]. Default to GENERAL if unsure.
+4.  **Secondary Categories**: 1-2 additional relevant categories from the same list: [${categoryValues}].
+5.  **Suggested Filters**: Any implicit filters (e.g., specific date range, technical level).
+6.  **Expected Content Types**: What kind of document content would best answer this? (e.g., tutorial, API doc, case study, pricing page).
+7.  **Confidence**: Your confidence (0-1) in this analysis.
+8.  **Technical Level**: How technical is the query? (1=basic, 5=expert)`;
+
+  const userPrompt = `Query: "${query}"
+
+Return the analysis as a JSON object with fields: intent, entities (array of {type, name, importance}), primaryCategory, secondaryCategories (array), suggestedFilters (object), expectedContentTypes (array), technicalLevel (number 1-5), confidence (number).
+
+Ensure 'primaryCategory' and 'secondaryCategories' use ONLY values from the provided list: [${categoryValues}].`;
+
+  const responseSchema = {
+    type: "object",
+    properties: {
+      intent: { type: "string", enum: ["factual", "technical", "comparison", "overview"] },
+      entities: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string" },
+            name: { type: "string" },
+            importance: { type: "number" }
+          },
+          required: ["type", "name", "importance"]
+        }
+      },
+      primaryCategory: { type: "string", enum: [...STANDARD_CATEGORIES.map(c => c.value), "GENERAL"] },
+      secondaryCategories: { type: "array", items: { type: "string", enum: STANDARD_CATEGORIES.map(c => c.value) } },
+      suggestedFilters: { type: "object" },
+      expectedContentTypes: { type: "array", items: { type: "string" } },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      technicalLevel: { type: "number", minimum: 1, maximum: 5 }
+    },
+    required: ["intent", "entities", "primaryCategory", "secondaryCategories", "suggestedFilters", "expectedContentTypes", "confidence", "technicalLevel"]
+  };
+
   try {
-    logInfo('Analyzing query with Gemini', { query });
+    const result = await generateStructuredGeminiResponse(
+      systemPrompt,
+      userPrompt,
+      responseSchema
+    );
 
-    // Create model
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
-    // Generate prompt
-    const prompt = `
-You are an AI assistant specializing in query analysis for a knowledge base system.
-
-Analyze the following user query and extract structured information about its intent and entities.
-
-QUERY: "${query}"
-
-Provide your analysis in the following JSON format:
-{
-  "intent": "One of: [factual, technical, comparison, overview]",
-  "entities": [
-    {
-      "type": "The entity type (person, company, product, feature, etc.)",
-      "name": "The entity name",
-      "importance": "A number from 0-1 indicating entity importance to the query"
-    }
-  ],
-  "suggestedFilters": {
-    // Any filters that should be applied to the search, such as
-    "categories": ["Relevant categories"],
-    "technicalLevel": "Suggested technical level (0-3)"
-  },
-  "expectedContentTypes": ["Types of content that would best answer this query"],
-  "confidence": "A number from 0-1 indicating your confidence in this analysis"
-}
-`;
-
-    // Generate response
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const responseText = response.text();
-
-    // Extract JSON
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('Failed to extract JSON from Gemini response');
-    }
-
-    // Parse JSON
-    const analysis = JSON.parse(jsonMatch[0]) as QueryAnalysisResult;
-
-    logInfo('Query analyzed successfully with Gemini', {
-      intent: analysis.intent,
-      entityCount: analysis.entities.length,
-      confidence: analysis.confidence
-    });
-
-    return analysis;
+    // Validate and return with defaults
+    return {
+      intent: result?.intent || 'factual',
+      entities: result?.entities || [],
+      primaryCategory: result?.primaryCategory || 'GENERAL',
+      secondaryCategories: result?.secondaryCategories || [],
+      suggestedFilters: result?.suggestedFilters || {},
+      expectedContentTypes: result?.expectedContentTypes || [],
+      confidence: result?.confidence || 0.5,
+      technicalLevel: result?.technicalLevel || 1
+    };
   } catch (error) {
     logError('Error analyzing query with Gemini', error);
-    
-    // Return fallback analysis
+    // Return a default analysis on error
     return {
       intent: 'factual',
       entities: [],
+      primaryCategory: 'GENERAL',
+      secondaryCategories: [],
       suggestedFilters: {},
       expectedContentTypes: [],
-      confidence: 0
+      confidence: 0.1,
+      technicalLevel: 1
     };
   }
 }

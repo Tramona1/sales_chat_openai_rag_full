@@ -188,42 +188,99 @@ export async function fallbackSearch(query: string): Promise<Array<VectorStoreIt
   logInfo(`[fallbackSearch] Performing fallback keyword search for query: "${query}"`);
   
   try {
-    // Use the built-in full-text search capability with plainto_tsquery for better keyword matching
-    const { data, error } = await supabase
+    // Try fulltext search first (with higher limit for better recall)
+    logInfo('[fallbackSearch] Trying fulltext search first');
+    const { data: textSearchData, error: textSearchError } = await supabase
       .from('document_chunks')
       .select('id, document_id, chunk_index, text, metadata')
       .textSearch('text', query, {
         type: 'plain',
         config: 'english'
       })
-      .limit(10);
+      .limit(20); // Increased from 10 to 20 for better recall
       
-    if (error) {
-      logError(`[fallbackSearch] Error: ${error.message}`);
-      throw new Error(`Fallback search error: ${error.message}`);
+    if (!textSearchError && textSearchData && textSearchData.length > 0) {
+      logInfo(`[fallbackSearch] Fulltext search found ${textSearchData.length} results`);
+      
+      // Map the results to the expected format with a better score for text search
+      return textSearchData.map((item) => ({
+        id: item.id,
+        document_id: item.document_id,
+        chunk_index: item.chunk_index || 0,
+        text: item.text || '',
+        metadata: item.metadata || {},
+        embedding: [], // Empty embedding for efficiency
+        score: 0.8 // Higher score for fulltext search results (was 0.5)
+      }));
     }
     
-    if (!data || !Array.isArray(data)) {
-      logWarning('[fallbackSearch] No results found or invalid response');
+    // If fulltext search fails or returns no results, try ILIKE search
+    logInfo('[fallbackSearch] Fulltext search failed or returned no results, trying ILIKE search');
+    const { data: ilikeData, error: ilikeError } = await supabase
+      .from('document_chunks')
+      .select('id, document_id, chunk_index, text, metadata')
+      .ilike('text', `%${query}%`)
+      .limit(20);
+      
+    if (ilikeError) {
+      logError(`[fallbackSearch] ILIKE search error: ${ilikeError.message}`);
+      throw new Error(`Fallback ILIKE search error: ${ilikeError.message}`);
+    }
+    
+    if (!ilikeData || !Array.isArray(ilikeData) || ilikeData.length === 0) {
+      logWarning('[fallbackSearch] ILIKE search found no results, returning empty array');
       return [];
     }
     
-    logInfo(`[fallbackSearch] Found ${data.length} results`);
+    logInfo(`[fallbackSearch] ILIKE search found ${ilikeData.length} results`);
     
-    // Map the results to the expected format with a basic score
-    return data.map((item) => ({
+    // Map the results to the expected format with a score
+    return ilikeData.map((item) => ({
       id: item.id,
       document_id: item.document_id,
       chunk_index: item.chunk_index || 0,
       text: item.text || '',
       metadata: item.metadata || {},
       embedding: [], // Empty embedding for efficiency
-      score: 0.5 // Default score for fallback results
+      score: 0.7 // Score for ILIKE results (was 0.5)
     }));
   } catch (error) {
     logError('[fallbackSearch] Error during fallback search', error);
-    // Return empty array on error
-    return [];
+    
+    // As a last resort, try a very basic query to return some results
+    try {
+      logWarning('[fallbackSearch] All search methods failed, attempting basic retrieval of recent documents');
+      const { data: basicData, error: basicError } = await supabase
+        .from('document_chunks')
+        .select('id, document_id, chunk_index, text, metadata')
+        .order('id', { ascending: false }) // Get newest documents first
+        .limit(10);
+        
+      if (basicError) {
+        logError(`[fallbackSearch] Basic retrieval error: ${basicError.message}`);
+        return []; // Return empty array as last resort
+      }
+      
+      if (!basicData || !Array.isArray(basicData)) {
+        return [];
+      }
+      
+      logInfo(`[fallbackSearch] Basic retrieval found ${basicData.length} results`);
+      
+      // Map the results with a lower score since they're not query-relevant
+      return basicData.map((item) => ({
+        id: item.id,
+        document_id: item.document_id,
+        chunk_index: item.chunk_index || 0,
+        text: item.text || '',
+        metadata: item.metadata || {},
+        embedding: [], // Empty embedding for efficiency
+        score: 0.3 // Lower score for non-query-relevant results
+      }));
+    } catch (finalError) {
+      logError('[fallbackSearch] Final fallback attempt also failed', finalError);
+      return []; // Return empty array on all failures
+    }
   }
 }
 
@@ -479,6 +536,28 @@ export async function hybridSearch(
   }
   
   try {
+    // Test a simple text search with Supabase's built-in search capabilities before running the hybrid search
+    logDebug('[hybridSearch] Testing simple text search with Supabase');
+    
+    try {
+      const { data: textMatchTest, error: textMatchError } = await supabase
+        .from('document_chunks')
+        .select('id, text')
+        .textSearch('text', query, { type: 'plain', config: 'english' })
+        .limit(3);
+        
+      if (textMatchError) {
+        logWarning(`[hybridSearch] Text search test error: ${textMatchError.message}`);
+      } else {
+        logInfo(`[hybridSearch] Text search test found ${textMatchTest?.length || 0} results`);
+        if (textMatchTest && textMatchTest.length > 0) {
+          logInfo(`[hybridSearch] Sample text match: "${textMatchTest[0].text.substring(0, 100)}..."`);
+        }
+      }
+    } catch (err) {
+      logWarning(`[hybridSearch] Error testing text search: ${err}`);
+    }
+    
     // Generate query embedding
     logDebug('[hybridSearch] Generating embedding for query');
     
@@ -487,23 +566,34 @@ export async function hybridSearch(
     logDebug(`[hybridSearch] Original query: "${query}", Cleaned query: "${cleanedQuery}"`);
     
     const queryEmbedding = await embeddingClient.embedText(cleanedQuery);
-    logDebug(`[hybridSearch] Embedding generated with ${queryEmbedding?.length ?? 0} dimensions`);
+    logInfo(`[hybridSearch] Embedding generated with ${queryEmbedding?.length} dimensions and provider: ${embeddingClient.getProvider()}`);
+    logInfo(`[hybridSearch] EMBEDDING_MODEL set to: ${process.env.EMBEDDING_MODEL || 'not set'}`);
+    
+    // Output first few values of the embedding to verify it's not all zeros
+    if (queryEmbedding && queryEmbedding.length > 0) {
+      logInfo(`[hybridSearch] First 5 embedding values: [${queryEmbedding.slice(0, 5).join(', ')}]`);
+    }
 
     // Prepare options and weights with improved defaults
     const limit = options.limit || 10;
     
-    // Use provided weights or default to balanced (0.5/0.5)
-    const vectorWeight = options.vectorWeight !== undefined ? options.vectorWeight : 0.5;
-    const keywordWeight = options.keywordWeight !== undefined ? options.keywordWeight : 0.5;
+    // Use provided weights or default to keywords-heavy (0.1/0.9) since vector search seems to have issues
+    // Original balanced weights were (0.5/0.5)
+    const vectorWeight = options.vectorWeight !== undefined ? options.vectorWeight : 0.1;
+    const keywordWeight = options.keywordWeight !== undefined ? options.keywordWeight : 0.9;
     
-    // Use a more lenient default threshold (0.2 instead of 0.7)
-    const matchThreshold = options.matchThreshold !== undefined ? options.matchThreshold : 0.2;
+    // Use a more lenient default threshold (0.1 instead of 0.2)
+    const matchThreshold = options.matchThreshold !== undefined ? options.matchThreshold : 0.1;
+    
+    // Log the modified weights
+    logInfo('[hybridSearch] IMPORTANT: Using keyword-heavy weights due to vector search issues');
+    logInfo(`[hybridSearch] vectorWeight=${vectorWeight}, keywordWeight=${keywordWeight}, matchThreshold=${matchThreshold}`);
     
     // Log where values are coming from
     logDebug('[hybridSearch] Parameter sources:');
-    logDebug(`[hybridSearch] vectorWeight=${vectorWeight} (${options.vectorWeight !== undefined ? 'from options' : 'default'})`);
-    logDebug(`[hybridSearch] keywordWeight=${keywordWeight} (${options.keywordWeight !== undefined ? 'from options' : 'default'})`);
-    logDebug(`[hybridSearch] matchThreshold=${matchThreshold} (${options.matchThreshold !== undefined ? 'from options' : 'default'})`);
+    logDebug(`[hybridSearch] vectorWeight=${vectorWeight} (${options.vectorWeight !== undefined ? 'from options' : 'default modified'})`);
+    logDebug(`[hybridSearch] keywordWeight=${keywordWeight} (${options.keywordWeight !== undefined ? 'from options' : 'default modified'})`);
+    logDebug(`[hybridSearch] matchThreshold=${matchThreshold} (${options.matchThreshold !== undefined ? 'from options' : 'default modified'})`);
     logDebug(`[hybridSearch] limit=${limit} (${options.limit ? 'from options' : 'default'})`);
     
     // Prepare filter based on options

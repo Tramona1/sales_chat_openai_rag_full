@@ -1,31 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CircularProgress,
-  Container,
-  Divider,
-  FormControl,
-  Grid,
-  InputLabel,
-  MenuItem,
-  Paper,
-  Select,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-  Chip,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-} from '@mui/material';
-import {
   BarChart,
   Bar,
   XAxis,
@@ -38,8 +12,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { getSupabaseClient } from '../../utils/supabaseClient';
+import { getSupabase } from '../../utils/supabaseClient';
 
 // Colors for the charts
 const COLORS = [
@@ -102,7 +75,12 @@ const SearchAnalyticsTab: React.FC = () => {
     setError(null);
     
     try {
-      const supabase = getSupabaseClient();
+      const supabase = getSupabase();
+      
+      // Add null check for supabase client
+      if (!supabase) {
+        throw new Error('Failed to initialize Supabase client');
+      }
       
       // Get recent search traces
       const { data: tracesData, error: tracesError } = await supabase
@@ -139,8 +117,8 @@ const SearchAnalyticsTab: React.FC = () => {
   }, [timeRange]);
   
   // Handle time range change
-  const handleTimeRangeChange = (event: React.ChangeEvent<{ value: unknown }>) => {
-    setTimeRange(event.target.value as number);
+  const handleTimeRangeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setTimeRange(Number(e.target.value));
   };
   
   // Select a trace for detailed view
@@ -182,363 +160,233 @@ const SearchAnalyticsTab: React.FC = () => {
   };
   
   return (
-    <Container maxWidth="lg">
-      <Box my={4}>
-        <Typography variant="h4" component="h1" gutterBottom>
-          Search Analytics & Category Distribution
-        </Typography>
+    <div className="container mx-auto px-4 py-8">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-4">Search Analytics &amp; Category Distribution</h1>
         
-        <Box mb={4} display="flex" alignItems="center">
-          <FormControl variant="outlined" style={{ minWidth: 200, marginRight: 16 }}>
-            <InputLabel id="time-range-label">Time Range</InputLabel>
-            <Select
-              labelId="time-range-label"
+        <div className="flex items-center mb-4">
+          <div className="mr-4">
+            <label htmlFor="time-range" className="block text-sm font-medium mb-1">Time Range</label>
+            <select
+              id="time-range"
+              className="border rounded px-3 py-2 min-w-[200px]"
               value={timeRange}
               onChange={handleTimeRangeChange}
-              label="Time Range"
             >
-              <MenuItem value={1}>Last 24 Hours</MenuItem>
-              <MenuItem value={7}>Last 7 Days</MenuItem>
-              <MenuItem value={30}>Last 30 Days</MenuItem>
-              <MenuItem value={90}>Last 90 Days</MenuItem>
-            </Select>
-          </FormControl>
+              <option value={1}>Last 24 Hours</option>
+              <option value={7}>Last 7 Days</option>
+              <option value={30}>Last 30 Days</option>
+              <option value={90}>Last 90 Days</option>
+            </select>
+          </div>
           
-          <Button 
-            variant="contained" 
-            color="primary" 
+          <button 
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
             onClick={fetchData}
             disabled={loading}
           >
-            {loading ? <CircularProgress size={24} /> : 'Refresh Data'}
-          </Button>
-        </Box>
+            {loading ? 'Loading...' : 'Refresh Data'}
+          </button>
+        </div>
         
         {error && (
-          <Paper elevation={2} style={{ padding: 16, marginBottom: 24, backgroundColor: '#ffebee' }}>
-            <Typography color="error">Error: {error}</Typography>
-          </Paper>
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
+            <p>Error: {error}</p>
+          </div>
         )}
         
         {!loading && !error && (
-          <>
-            <Grid container spacing={4}>
-              {/* Category Distribution Chart */}
-              <Grid item xs={12} md={6}>
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
-                      Category Distribution
-                    </Typography>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <PieChart>
-                        <Pie
-                          data={categoryChartData}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, percentage }) => `${name}: ${percentage.toFixed(1)}%`}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                        >
-                          {categoryChartData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value, name, props) => [`${value} queries (${props.payload.percentage.toFixed(1)}%)`, name]} />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </Grid>
-              
-              {/* Sales vs Non-Sales Content Ratio */}
-              <Grid item xs={12} md={6}>
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
-                      Sales vs. Non-Sales Content Ratio
-                    </Typography>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <PieChart>
-                        <Pie
-                          data={salesRatioData}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, value }) => `${name}: ${value.toFixed(1)}%`}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                        >
-                          <Cell fill="#3f51b5" />
-                          <Cell fill="#4caf50" />
-                        </Pie>
-                        <Tooltip formatter={(value) => [`${value.toFixed(1)}%`]} />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </Grid>
-              
-              {/* Intent Distribution */}
-              <Grid item xs={12}>
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
-                      Query Intent Distribution
-                    </Typography>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart
-                        data={intentChartData}
-                        margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis />
-                        <Tooltip />
-                        <Legend />
-                        <Bar dataKey="value" name="Count" fill="#8884d8" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </Grid>
-            </Grid>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Category Distribution Chart */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Category Distribution</h2>
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={categoryChartData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {categoryChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value, name, props) => {
+                      if (props && props.payload && props.payload.percentage) {
+                        return [`${value} (${props.payload.percentage.toFixed(1)}%)`, name];
+                      }
+                      return [value, name];
+                    }} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
             
-            {/* Recent Searches Table */}
-            <Box mt={4}>
-              <Typography variant="h6" gutterBottom>
-                Recent Searches
-              </Typography>
-              <TableContainer component={Paper}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Query</TableCell>
-                      <TableCell>Time</TableCell>
-                      <TableCell>Primary Category</TableCell>
-                      <TableCell>Sales Ratio</TableCell>
-                      <TableCell>Filter Relaxed</TableCell>
-                      <TableCell>Results</TableCell>
-                      <TableCell>Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {traces.map((trace) => (
-                      <TableRow key={trace.id}>
-                        <TableCell>{trace.query}</TableCell>
-                        <TableCell>{formatDate(trace.timestamp)}</TableCell>
-                        <TableCell>
-                          <Chip 
-                            label={trace.query_analysis.primaryCategory} 
-                            color={trace.query_analysis.primaryCategory.includes('CASE_STUDIES') || 
-                                  trace.query_analysis.primaryCategory.includes('SALES') ? 
-                                  'primary' : 'default'} 
-                            size="small" 
-                          />
-                        </TableCell>
-                        <TableCell>{(trace.result_stats.salesContentRatio * 100).toFixed(1)}%</TableCell>
-                        <TableCell>{trace.search_decisions.filterRelaxed ? 'Yes' : 'No'}</TableCell>
-                        <TableCell>{trace.result_stats.finalResultCount}</TableCell>
-                        <TableCell>
-                          <Button
-                            size="small"
-                            variant="outlined"
+            {/* Sales vs Non-Sales Content Ratio */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Sales vs Non-Sales Content</h2>
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={salesRatioData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      <Cell fill="#3f51b5" />
+                      <Cell fill="#f44336" />
+                    </Pie>
+                    <Tooltip formatter={(value) => {
+                      if (typeof value === 'number') {
+                        return [`${value.toFixed(1)}%`];
+                      }
+                      return [value];
+                    }} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            
+            {/* Intent Distribution */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Query Intent Distribution</h2>
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={intentChartData}
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="value" fill="#8884d8" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            
+            {/* Recent Searches */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Recent Searches</h2>
+              <div className="overflow-x-auto">
+                <table className="min-w-full bg-white">
+                  <thead>
+                    <tr>
+                      <th className="py-2 px-4 border-b text-left">Query</th>
+                      <th className="py-2 px-4 border-b text-left">Time</th>
+                      <th className="py-2 px-4 border-b text-left">Results</th>
+                      <th className="py-2 px-4 border-b text-left">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {traces.slice(0, 10).map((trace) => (
+                      <tr key={trace.id} className="hover:bg-gray-50">
+                        <td className="py-2 px-4 border-b">{trace.query}</td>
+                        <td className="py-2 px-4 border-b">{formatDate(trace.timestamp)}</td>
+                        <td className="py-2 px-4 border-b">{trace.result_stats.finalResultCount}</td>
+                        <td className="py-2 px-4 border-b">
+                          <button
+                            className="text-blue-600 hover:underline"
                             onClick={() => handleSelectTrace(trace)}
                           >
                             Details
-                          </Button>
-                        </TableCell>
-                      </TableRow>
+                          </button>
+                        </td>
+                      </tr>
                     ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Box>
-            
-            {/* Search Trace Details */}
-            {selectedTrace && (
-              <Box mt={4}>
-                <Paper elevation={3} style={{ padding: 24 }}>
-                  <Typography variant="h6" gutterBottom>
-                    Search Trace Details: "{selectedTrace.query}"
-                  </Typography>
-                  
-                  <Accordion defaultExpanded>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography>Query Analysis</Typography>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Grid container spacing={2}>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Primary Category:</Typography>
-                          <Typography variant="body2">{selectedTrace.query_analysis.primaryCategory}</Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Secondary Categories:</Typography>
-                          <Box display="flex" flexWrap="wrap" gap={0.5}>
-                            {selectedTrace.query_analysis.secondaryCategories.map((category, i) => (
-                              <Chip key={i} label={category} size="small" />
-                            ))}
-                          </Box>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Intent:</Typography>
-                          <Typography variant="body2">{selectedTrace.query_analysis.intent}</Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Technical Level:</Typography>
-                          <Typography variant="body2">{selectedTrace.query_analysis.technicalLevel}/5</Typography>
-                        </Grid>
-                        <Grid item xs={12}>
-                          <Typography variant="subtitle2">Entities:</Typography>
-                          <Box display="flex" flexWrap="wrap" gap={0.5}>
-                            {selectedTrace.query_analysis.entities.map((entity, i) => (
-                              <Chip 
-                                key={i} 
-                                label={`${entity.name} (${entity.type})`} 
-                                size="small"
-                                variant="outlined" 
-                              />
-                            ))}
-                          </Box>
-                        </Grid>
-                      </Grid>
-                    </AccordionDetails>
-                  </Accordion>
-                  
-                  <Accordion>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography>Search Decisions</Typography>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Grid container spacing={2}>
-                        <Grid item xs={12}>
-                          <Typography variant="subtitle2">Initial Filter:</Typography>
-                          <pre style={{ overflowX: 'auto', backgroundColor: '#f5f5f5', padding: 8 }}>
-                            {JSON.stringify(selectedTrace.search_decisions.initialFilter, null, 2)}
-                          </pre>
-                        </Grid>
-                        <Grid item xs={12}>
-                          <Typography variant="subtitle2">Applied Filter:</Typography>
-                          <pre style={{ overflowX: 'auto', backgroundColor: '#f5f5f5', padding: 8 }}>
-                            {JSON.stringify(selectedTrace.search_decisions.appliedFilter, null, 2)}
-                          </pre>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Filter Relaxed:</Typography>
-                          <Typography variant="body2">
-                            {selectedTrace.search_decisions.filterRelaxed ? 'Yes' : 'No'}
-                          </Typography>
-                        </Grid>
-                        {selectedTrace.search_decisions.relaxationReason && (
-                          <Grid item xs={6}>
-                            <Typography variant="subtitle2">Relaxation Reason:</Typography>
-                            <Typography variant="body2">
-                              {selectedTrace.search_decisions.relaxationReason}
-                            </Typography>
-                          </Grid>
-                        )}
-                        {selectedTrace.search_decisions.categoryBalancing && (
-                          <Grid item xs={12}>
-                            <Typography variant="subtitle2">Category Balancing:</Typography>
-                            <Box>
-                              <Typography variant="body2">
-                                Before: Sales {selectedTrace.search_decisions.categoryBalancing.before.sales}, 
-                                Non-Sales {selectedTrace.search_decisions.categoryBalancing.before.nonSales}
-                              </Typography>
-                              <Typography variant="body2">
-                                After: Sales {selectedTrace.search_decisions.categoryBalancing.after.sales}, 
-                                Non-Sales {selectedTrace.search_decisions.categoryBalancing.after.nonSales}
-                              </Typography>
-                            </Box>
-                          </Grid>
-                        )}
-                      </Grid>
-                    </AccordionDetails>
-                  </Accordion>
-                  
-                  <Accordion>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography>Result Statistics</Typography>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Grid container spacing={2}>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Initial Result Count:</Typography>
-                          <Typography variant="body2">{selectedTrace.result_stats.initialResultCount}</Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Final Result Count:</Typography>
-                          <Typography variant="body2">{selectedTrace.result_stats.finalResultCount}</Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Sales Content Ratio:</Typography>
-                          <Typography variant="body2">
-                            {(selectedTrace.result_stats.salesContentRatio * 100).toFixed(1)}%
-                          </Typography>
-                        </Grid>
-                        <Grid item xs={12}>
-                          <Typography variant="subtitle2">Categories in Results:</Typography>
-                          <Box display="flex" flexWrap="wrap" gap={0.5} mt={1}>
-                            {Object.entries(selectedTrace.result_stats.categoriesInResults).map(([category, count], i) => (
-                              <Chip 
-                                key={i} 
-                                label={`${category}: ${count}`} 
-                                size="small"
-                                color={category.includes('CASE_STUDIES') || category.includes('SALES') ? 'primary' : 'default'}
-                              />
-                            ))}
-                          </Box>
-                        </Grid>
-                      </Grid>
-                    </AccordionDetails>
-                  </Accordion>
-                  
-                  <Accordion>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography>Timing Information</Typography>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Grid container spacing={2}>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Analysis Time:</Typography>
-                          <Typography variant="body2">{selectedTrace.timings.analysis}ms</Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Search Time:</Typography>
-                          <Typography variant="body2">{selectedTrace.timings.search}ms</Typography>
-                        </Grid>
-                        {selectedTrace.timings.reranking && (
-                          <Grid item xs={6}>
-                            <Typography variant="subtitle2">Reranking Time:</Typography>
-                            <Typography variant="body2">{selectedTrace.timings.reranking}ms</Typography>
-                          </Grid>
-                        )}
-                        <Grid item xs={6}>
-                          <Typography variant="subtitle2">Total Time:</Typography>
-                          <Typography variant="body2">{selectedTrace.timings.total}ms</Typography>
-                        </Grid>
-                      </Grid>
-                    </AccordionDetails>
-                  </Accordion>
-                </Paper>
-              </Box>
-            )}
-          </>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         )}
         
-        {loading && (
-          <Box display="flex" justifyContent="center" my={4}>
-            <CircularProgress />
-          </Box>
+        {/* Selected Trace Details */}
+        {selectedTrace && (
+          <div className="mt-8 bg-white rounded-lg shadow p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold">Search Details</h2>
+              <button 
+                className="text-gray-600 hover:text-gray-800"
+                onClick={() => setSelectedTrace(null)}
+              >
+                Close
+              </button>
+            </div>
+            
+            <div className="mb-6">
+              <h3 className="text-lg font-medium mb-2">Query Information</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p><strong>Query:</strong> {selectedTrace.query}</p>
+                  <p><strong>Time:</strong> {formatDate(selectedTrace.timestamp)}</p>
+                  <p><strong>Intent:</strong> {selectedTrace.query_analysis.intent}</p>
+                  <p><strong>Technical Level:</strong> {selectedTrace.query_analysis.technicalLevel}</p>
+                </div>
+                <div>
+                  <p><strong>Primary Category:</strong> {selectedTrace.query_analysis.primaryCategory}</p>
+                  <p><strong>Secondary Categories:</strong> {selectedTrace.query_analysis.secondaryCategories.join(', ') || 'None'}</p>
+                  <p><strong>Filter Relaxed:</strong> {selectedTrace.search_decisions.filterRelaxed ? 'Yes' : 'No'}</p>
+                  {selectedTrace.search_decisions.relaxationReason && (
+                    <p><strong>Relaxation Reason:</strong> {selectedTrace.search_decisions.relaxationReason}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="mb-6">
+              <h3 className="text-lg font-medium mb-2">Result Statistics</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p><strong>Initial Result Count:</strong> {selectedTrace.result_stats.initialResultCount}</p>
+                  <p><strong>Final Result Count:</strong> {selectedTrace.result_stats.finalResultCount}</p>
+                  <p><strong>Sales Content Ratio:</strong> {(selectedTrace.result_stats.salesContentRatio * 100).toFixed(1)}%</p>
+                </div>
+                <div>
+                  <p><strong>Categories in Results:</strong></p>
+                  <ul className="list-disc pl-5">
+                    {Object.entries(selectedTrace.result_stats.categoriesInResults).map(([category, count]) => (
+                      <li key={category}>{category}: {count}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <h3 className="text-lg font-medium mb-2">Timing Information</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p><strong>Analysis Time:</strong> {selectedTrace.timings.analysis.toFixed(1)} ms</p>
+                  <p><strong>Search Time:</strong> {selectedTrace.timings.search.toFixed(1)} ms</p>
+                  {selectedTrace.timings.reranking !== undefined && (
+                    <p><strong>Reranking Time:</strong> {selectedTrace.timings.reranking.toFixed(1)} ms</p>
+                  )}
+                </div>
+                <div>
+                  <p><strong>Total Time:</strong> {selectedTrace.timings.total.toFixed(1)} ms</p>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
-      </Box>
-    </Container>
+      </div>
+    </div>
   );
 };
 

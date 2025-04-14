@@ -1,543 +1,818 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { analyzeQuery, getRetrievalParameters } from '../../utils/queryAnalysis';
-import { standardizeApiErrorResponse } from '../../utils/errorHandling';
-import { logError, logInfo, logDebug, logWarning } from '../../utils/logger';
-import * as modelConfig from '../../utils/modelConfig';
-// TEMPORARY FIX: Hardcode feature flags instead of importing
-// import { isFeatureEnabled } from '../../utils/featureFlags';
-import { recordMetric } from '../../utils/performanceMonitoring';
-import { MultiModalVectorStoreItem } from '../../types/vectorStore';
-import { getSupabaseAdmin, testSupabaseConnection } from '../../utils/supabaseClient';
+import { getSupabase } from '../../utils/supabaseClient';
+import { logInfo, logWarning, logError, logDebug } from '../../lib/logging';
+import { testSupabaseConnection } from '../../lib/supabase';
+import { FEATURE_FLAGS } from '../../lib/featureFlags';
+import { recordMetric, metrics } from '../../lib/metrics';
+import { generateAnswer } from '../../utils/answerGenerator';
+import { analyzeQueryWithGemini } from '../../utils/geminiProcessor';
+import { hybridSearch, fallbackSearch, HybridSearchResponse } from '../../utils/hybridSearch';
+import { expandQuery } from '../../utils/queryExpansion';
+import { rerankWithGemini } from '../../utils/reranking';
+import { QueryAnalysisResult } from '../../utils/geminiProcessor';
 import { DocumentCategoryType } from '../../utils/documentCategories';
-import { analyzeVisualQuery } from '../../utils/queryAnalysis';
-import { MultiModalSearchResult, RankedSearchResult, MultiModalRerankOptions } from '../../utils/reranking';
-import { HybridSearchFilter } from '../../utils/hybridSearch';
-import { QueryEntity } from '../../utils/queryAnalysis';
+import { MultiModalRerankOptions } from '../../utils/reranking';
 
-// TEMPORARY FIX: Hardcode feature flags
-const FEATURE_FLAGS = {
-  contextualReranking: true,
-  contextualEmbeddings: true,
-  multiModalSearch: true,
-  enhancedAnswerGeneration: true
+// Import types - properly define to match the response from analyzeQueryWithGemini
+interface QueryEntity {
+  name?: string;
+  type?: string;
+  importance?: number;
+}
+
+// Define missing types
+type HybridSearchFilter = {
+  primaryCategory?: DocumentCategoryType;
+  secondaryCategories?: DocumentCategoryType[];
+  technicalLevelMin?: number;
+  technicalLevelMax?: number;
+  requiredEntities?: string[];
+  keywords?: string[];
+  customFilters?: Record<string, any>;
 };
 
-// Define a type for the modules we'll import dynamically
-interface DynamicModules {
-  hybridSearch: any;
-  fallbackSearch: any;
-  rerankWithGemini: any;
-  analyzeQuery: any;
-  generateAnswer: any;
-  performMultiModalSearch?: any;
-  performFtsSearch?: any;
-  [key: string]: any;
+// Update the SearchResultItem to match what rerankWithGemini expects
+interface SearchResultItem {
+  id?: string;
+  document_id?: string;
+  text: string;
+  metadata?: Record<string, any>;
+  score: number;
+  vectorScore?: number;
+  keywordScore?: number;
+  // Add the 'item' field that MultiModalSearchResult requires
+  item: {
+    id: string;
+    text: string;
+    // Define metadata strictly as expected by MultiModalSearchResult/rerankWithGemini
+    metadata: { 
+      category?: string; 
+      technicalLevel?: number; 
+      [key: string]: any; // Allow other arbitrary fields
+    };
+    // visualContent?: VisualContent | VisualContent[]; // Keep commented out unless strictly needed
+  };
 }
 
-// Import at runtime to avoid TypeScript import resolution issues
-async function importModules(): Promise<DynamicModules> {
-  try {
-    // Check if Supabase is configured and connected
-    const isSupabaseConnected = await testSupabaseConnection();
+// Correctly define these types based on what rerankWithGemini expects
+interface RankedSearchResultItem extends SearchResultItem {
+  text: string; // Ensure text is definitely required
+}
 
-    if (!isSupabaseConnected) {
-      logError('Supabase is not connected, some features may not work correctly');
+type RankedSearchResult = RankedSearchResultItem;
+type MultiModalSearchResult = SearchResultItem; // Now compatible because SearchResultItem includes item
+// Remove local definition
+/*
+type MultiModalRerankOptions = {
+  includeVisualContext?: boolean;
+  prioritizeVisualTypes?: string[];
+};
+*/
+
+// Mock model config
+const modelConfig = {
+  getSystemPromptForQuery: (query: string) => {
+    return "You are a helpful assistant answering questions based on retrieved information.";
+  }
+};
+
+// Other utility functions
+function getRetrievalParameters(analysis: QueryAnalysisResult) {
+  // Simple implementation
+  return {
+    technicalLevelRange: {
+      min: analysis.technicalLevel || 1,
+      max: analysis.technicalLevel ? analysis.technicalLevel + 2 : 3
     }
+  };
+}
 
-    // Import the modules we need
-    const { hybridSearch, fallbackSearch } = await import('../../utils/hybridSearch');
-    const { rerankWithGemini } = await import('../../utils/reranking');
-    const { analyzeQuery } = await import('../../utils/queryAnalysis');
-    const { generateAnswer } = await import('../../utils/answerGeneration');
+function analyzeVisualQuery(query: string) {
+  // Simple implementation
+  return {
+    isVisualQuery: query.toLowerCase().includes('image') || query.toLowerCase().includes('picture'),
+    visualTypes: []
+  };
+}
 
-    // Import Supabase-specific modules if available
-    let supabaseModules: Partial<DynamicModules> = {};
-    if (isSupabaseConnected) {
-      try {
-        const { performMultiModalSearch } = await import('../../utils/multiModalProcessing');
-        const { performFtsSearch } = await import('../../utils/ftsSearch');
+/**
+ * Determines whether a user query needs to be rewritten to add Workstream context.
+ * 
+ * This function analyzes the query and its entity analysis to decide if the query
+ * is implicitly about Workstream but doesn't mention it explicitly. For example,
+ * queries like "Who is the CEO?" or "Tell me about pricing" without specifying
+ * which company are assumed to be about Workstream.
+ * 
+ * The function uses the following criteria:
+ * 1. If another organization (not Workstream) is explicitly mentioned, no rewriting occurs.
+ * 2. If the query contains ambiguous terms like "our", "we", "us", "my", "the company",
+ *    it's considered ambiguous and rewritten to include Workstream.
+ * 3. If the query is a simple standalone noun like "ceo", "products", "pricing" without
+ *    organizational context, it's rewritten to include Workstream.
+ * 
+ * @param {string} originalQuery - The user's original search query
+ * @param {QueryAnalysisResult} analysis - The result of query analysis containing entities
+ * @returns {{ rewrite: boolean; rewrittenQuery?: string }} - Object indicating whether
+ *          rewriting is needed and the rewritten query if applicable
+ */
+function shouldRewriteQuery(originalQuery: string, analysis: QueryAnalysisResult): { rewrite: boolean; rewrittenQuery?: string } {
+  const queryLower = originalQuery.toLowerCase();
+  let isExplicitlyNotWorkstream = false;
+  let mentionsWorkstream = queryLower.includes('workstream');
+  let containsAmbiguousTerms = false;
 
-        supabaseModules = {
-          performMultiModalSearch,
-          performFtsSearch
-        };
-      } catch (importError) {
-        logError('Error importing Supabase-specific modules:', importError);
+  // 1. Check if another organization is mentioned
+  if (analysis.entities && analysis.entities.length > 0) {
+    for (const entity of analysis.entities) {
+      // Normalize entity name for comparison
+      const entityNameLower = entity.name?.toLowerCase();
+      if (entity.type === 'ORGANIZATION' && entityNameLower && entityNameLower !== 'workstream') {
+        isExplicitlyNotWorkstream = true;
+        break; // Found another org, no need to rewrite
+      }
+      if (entity.type === 'ORGANIZATION' && entityNameLower === 'workstream') {
+          mentionsWorkstream = true; // Confirm Workstream was detected
       }
     }
-
-    return {
-      hybridSearch,
-      fallbackSearch,
-      rerankWithGemini,
-      analyzeQuery,
-      generateAnswer,
-      ...supabaseModules
-    };
-  } catch (error) {
-    console.error('Error importing modules:', error);
-    throw error;
   }
+
+  // If explicitly about another company, don't rewrite
+  if (isExplicitlyNotWorkstream) {
+    return { rewrite: false };
+  }
+
+  // 2. Check for ambiguous terms if Workstream isn't explicitly mentioned
+  const ambiguousPronouns = /\b(our|we|us|my|the company)\b/i;
+  if (!mentionsWorkstream && ambiguousPronouns.test(queryLower)) {
+    containsAmbiguousTerms = true;
+  }
+
+  // 3. Check for simple standalone queries like "ceo" or "pricing"
+  const simpleStandaloneTerms = [
+    "ceo", "chief executive officer", 
+    "products", "product", "offering", "offerings", 
+    "pricing", "price", "cost", "subscription",
+    "features", "capabilities", "demo", "demonstration",
+    "contact", "headquarters", "location", "founded", "history"
+  ];
+  
+  const isSimpleQuery = simpleStandaloneTerms.some(term => {
+    // Check if the query is just the term or contains the term with simple context
+    // For example: "who is the ceo" or "tell me about pricing"
+    const termRegex = new RegExp(`\\b${term}\\b`, 'i');
+    return termRegex.test(queryLower) && queryLower.length < term.length + 20;
+  });
+
+  if (!mentionsWorkstream && (containsAmbiguousTerms || isSimpleQuery)) {
+    const trimmedQuery = originalQuery.trim();
+    // Insert Workstream in an appropriate place
+    let rewrittenQuery = '';
+    
+    // Handle queries starting with "what is" or "who is"
+    if (/^(what|who)\s+is/i.test(trimmedQuery)) {
+      rewrittenQuery = trimmedQuery.replace(/^(what|who)\s+is/i, '$1 is the Workstream');
+    } 
+    // Handle queries like "tell me about X"
+    else if (/^tell\s+(me|us)\s+about/i.test(trimmedQuery)) {
+      rewrittenQuery = trimmedQuery.replace(/^tell\s+(me|us)\s+about/i, 'tell $1 about Workstream');
+    }
+    // Handle simple "our X" or "we X" queries 
+    else if (/^(our|we|us|my)\b/i.test(trimmedQuery)) {
+      rewrittenQuery = trimmedQuery.replace(/^(our|we|us|my)\b/i, 'Workstream');
+    }
+    // Default: just append Workstream to the query
+    else {
+      rewrittenQuery = `Workstream ${trimmedQuery}`;
+    }
+    
+    return { rewrite: true, rewrittenQuery };
+  }
+
+  return { rewrite: false };
 }
 
+// API handler
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Start timing the API call
   const startTime = Date.now();
-  let queryLogId: string | null = null; // Variable to store the ID of the created query log
-
-  // Only allow POST method
-  if (req.method !== 'POST') {
-    recordMetric('api', 'query', Date.now() - startTime, false, { error: 'Method not allowed' });
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  let success = false;
 
   try {
-    // Verify Supabase connection
-    const isSupabaseConnected = await testSupabaseConnection();
-    if (!isSupabaseConnected) {
-      logWarning('Supabase connection failed, falling back to local data if available');
-    } else {
-      logInfo('Supabase connected successfully');
+    // Check for required parameters
+    if (!req.body || !req.body.query) {
+      res.status(400).json({ error: 'Missing required parameters: query' });
+      return;
     }
-
-    // Load modules dynamically
-    const modules = await importModules();
-
-    // Extract query parameters, including sessionId
+    
+    // Extract parameters from request
     const {
-      query,
-      limit = 5,
+      query: originalQuery,
+      limit = 10,
       useContextualRetrieval = true,
-      includeSourceDocuments = false,
-      includeSourceCitations = true,
-      conversationHistory = '',
-      searchMode = 'hybrid',
-      includeVisualContent = false,
-      visualTypes = [],
-      sessionId // Extract sessionId from request body
+      searchMode = 'hybrid'
     } = req.body;
 
-    // Validate query
-    if (!query || typeof query !== 'string') {
-      recordMetric('api', 'query', Date.now() - startTime, false, { error: 'Invalid query' });
-      return res.status(400).json({ error: 'Query is required and must be a string' });
+    logInfo(`Processing query: "${originalQuery}"`);
+    
+    // Analyze the query to understand intent, entities, etc.
+    const analysisStartTime = Date.now();
+    const queryAnalysis = await analyzeQueryWithGemini(originalQuery);
+    recordMetric('query', metrics.QUERY_ANALYSIS, Date.now() - analysisStartTime, true);
+    
+    // Check if we should rewrite the query to include "Workstream" context
+    let queryToUse = originalQuery;
+    let queryWasRewritten = false;
+    
+    // Only attempt query rewriting if the feature flag is enabled
+    if (FEATURE_FLAGS.queryRewriting) {
+      const rewriteStartTime = Date.now();
+      const { rewrite, rewrittenQuery } = shouldRewriteQuery(originalQuery, queryAnalysis);
+      
+      if (rewrite && rewrittenQuery) {
+        // Don't rewrite product queries with "Workstream" if they already mention products
+        const isProductQuery = /\b(product|products|feature|features|capabilities|offerings)\b/i.test(originalQuery);
+        if (!isProductQuery) {
+          queryToUse = rewrittenQuery;
+          queryWasRewritten = true;
+          logInfo(`Rewrote query: "${originalQuery}" -> "${rewrittenQuery}"`);
+        } else {
+          logInfo(`Skipped rewriting product query: "${originalQuery}"`);
+        }
+      }
+      
+      recordMetric('query', metrics.QUERY_REWRITE, Date.now() - rewriteStartTime, true);
     }
-
-    // <<< Initialize timing variables HERE >>>
-    let retrievalDuration = 0;
-    let rerankDuration = 0;
-    let answerDuration = 0;
-    const retrievalStartTime = Date.now(); // Start retrieval timer
-
-    // Analyze query and determine the best search strategy
-    const queryAnalysis = await modules.analyzeQuery(query);
+    
+    // Check for visual query (image-focused)
+    const visualAnalysis = analyzeVisualQuery(queryToUse);
+    
+    // Get retrieval parameters based on query analysis
     const retrievalParams = getRetrievalParameters(queryAnalysis);
 
-    // --- FIX: Construct the search filter manually ---
-    const searchFilter: HybridSearchFilter = queryAnalysis.applyMetadataFiltering ? {
-        primaryCategory: queryAnalysis.primaryCategory as DocumentCategoryType,
-        secondaryCategories: queryAnalysis.secondaryCategories as DocumentCategoryType[],
-        technicalLevelMin: Math.max(1, (retrievalParams.technicalLevelRange?.min || 1) - 1),
-        technicalLevelMax: Math.min(10, (retrievalParams.technicalLevelRange?.max || 3) + 1),
-        // Use entities directly from queryAnalysis, mapping to names with explicit types and filtering undefined
-        requiredEntities: queryAnalysis.entities?.map((entity: QueryEntity) => entity.name).filter((name: string | undefined) => !!name) as string[]
-    } : {};
-
-    // Check if contextual retrieval is enabled by feature flags
-    // TEMPORARY FIX: Use hardcoded flags instead of isFeatureEnabled
-    const contextualRetrievalEnabled = FEATURE_FLAGS.contextualReranking &&
-                                       FEATURE_FLAGS.contextualEmbeddings &&
-                                       useContextualRetrieval;
-
-    // Flag to check if we should use multi-modal search
-    // TEMPORARY FIX: Use hardcoded flags instead of isFeatureEnabled
-    const useMultiModal = includeVisualContent &&
-                          FEATURE_FLAGS.multiModalSearch &&
-                          'performMultiModalSearch' in modules;
-
-    let searchResultsResponse: any;
-    let searchError = null;
-    let actualSearchResults: any[] = []; // Initialize as empty array
-
-    logInfo(`Performing ${searchMode} search for query: "${query}"`);
-
-    // Choose search strategy based on inputs and feature flags
-    try {
-      if (useMultiModal) {
-        // Use multi-modal search if visual content is requested
-        if (!modules.performMultiModalSearch) {
-          throw new Error('Multi-modal search requested but not available');
-        }
-
-        searchResultsResponse = await modules.performMultiModalSearch(query, {
-          limit: Math.max(limit * 3, 15), // Retrieve more than needed for reranking
-          includeVisualContent,
-          visualTypes: visualTypes as any[]
-        });
-      } else if (searchMode === 'hybrid' || searchMode === 'vector') {
-        // Use hybrid search for both hybrid and vector modes
-        // For 'vector' mode, we can set vectorWeight to 1.0 to make it pure vector search
-        const vectorWeight = searchMode === 'vector' ? 1.0 : 0.3;
-        const keywordWeight = searchMode === 'vector' ? 0.0 : 0.7;
-        const matchThreshold = 0.2;
-
-        // <<< ADDED LOGGING >>>
-        logInfo(`[QueryAPI] Preparing to call hybridSearch (explicit hybrid/vector mode). Query: "${query}", Mode: ${searchMode}`);
-        searchResultsResponse = await modules.hybridSearch(query, {
-          limit: Math.max(limit * 3, 15),
-          vectorWeight,
-          keywordWeight,
-          matchThreshold,
-          // Pass the constructed filter object
-          filter: Object.keys(searchFilter).length > 0 ? searchFilter : undefined
-        });
-      } else if (searchMode === 'fts' || searchMode === 'keyword') {
-        // Use FTS search if specified (renamed from bm25 to fts)
-        if (!modules.performFtsSearch) {
-          throw new Error('FTS search requested but not available');
-        }
-
-        searchResultsResponse = await modules.performFtsSearch(query, {
-          limit: Math.max(limit * 3, 15)
-        });
-      } else {
-        // Default to hybrid search (with consistent parameters)
-        // <<< ADDED LOGGING >>>
-        logInfo(`[QueryAPI] Preparing to call hybridSearch (default mode). Query: "${query}", Mode: ${searchMode}`);
-        searchResultsResponse = await modules.hybridSearch(query, {
-          limit: Math.max(limit * 3, 15),
-          vectorWeight: 0.3, // Emphasis on keywords for consistent retrieval
-          keywordWeight: 0.7, // Emphasis on keywords for consistent retrieval
-          matchThreshold: 0.2, // Lower threshold for better recall
-          // Pass the constructed filter object
-          filter: Object.keys(searchFilter).length > 0 ? searchFilter : undefined
-        });
+    // Check if this query is about products
+    const isProductQuery = /\b(product|products|feature|features|capabilities|offerings|integrations|integration)\b/i.test(queryToUse);
+    
+    // Search for relevant content
+    const searchStartTime = Date.now();
+    let searchResults: any[] = []; // Use any[] to avoid typing issues temporarily
+    
+    // Define search options from the query analysis
+    // Note: We explicitly cast primaryCategory and secondaryCategories to DocumentCategoryType
+    // to ensure type compatibility with the HybridSearchOptions interface
+    const searchOptions = {
+      limit: limit,
+      vectorWeight: isProductQuery ? 0.3 : 0.7, // Emphasize keywords for product searches
+      keywordWeight: isProductQuery ? 0.7 : 0.3, // Emphasize keywords for product searches
+      matchThreshold: 0.2,
+      filter: {
+        primaryCategory: queryAnalysis.primaryCategory as DocumentCategoryType | undefined,
+        secondaryCategories: queryAnalysis.secondaryCategories as DocumentCategoryType[] | undefined,
+        technicalLevelMin: retrievalParams.technicalLevelRange.min,
+        technicalLevelMax: retrievalParams.technicalLevelRange.max,
+        requiredEntities: [] as string[],
+        keywords: [] as string[]
       }
-    } catch (error) {
-      // Log search error
-      const errorMessage = error instanceof Error ? error.message : 'Unknown search error';
-      logError(`Search error (${searchMode} mode):`, error);
-      searchError = error instanceof Error ? error : new Error(errorMessage);
-
-      // Try fallback search if primary search fails
-      try {
-        logInfo('Attempting fallback keyword search');
-        const fallbackResultsArray = await modules.fallbackSearch(query);
-        searchResultsResponse = { results: fallbackResultsArray || [] };
-      } catch (fallbackError) {
-        logError('Fallback search also failed:', fallbackError);
-        searchResultsResponse = { results: [] }; // Ensure it's an object with empty results
-      }
-    }
-    // <<< Assign retrievalDuration *after* try/catch for search >>>
-    retrievalDuration = Date.now() - retrievalStartTime; 
-    retrievalDuration = Date.now() - retrievalStartTime;
-    actualSearchResults = searchResultsResponse?.results || []; // Ensure results array exists
-
-    // *** NEW LOGGING POINT 3 ***
-    logInfo(`[QueryAPI] routeQuery returned. Results array length: ${actualSearchResults?.length ?? 'undefined/null'}`);
-    // Log first result ID if exists (using actualSearchResults)
-    if (actualSearchResults && actualSearchResults.length > 0) {
-      // Ensure we access the ID correctly based on its structure
-      logInfo(`[QueryAPI] routeQuery first result ID: ${actualSearchResults[0]?.id}`);
+    };
+    
+    // Enhanced tag and category mapping based on query content
+    if (queryAnalysis.primaryCategory || queryAnalysis.secondaryCategories) {
+      logInfo(`Using query analysis categories - Primary: ${queryAnalysis.primaryCategory || 'none'}, Secondary: ${(queryAnalysis.secondaryCategories || []).join(', ') || 'none'}`);
     } else {
-      logInfo(`[QueryAPI] routeQuery returned no results or results array is empty/null.`);
+      // Extract categories and tags from the query if not provided by analysis
+      const { primaryCategory, secondaryCategories, keywords } = extractCategoriesFromQuery(queryToUse);
+      
+      if (primaryCategory) {
+        searchOptions.filter.primaryCategory = primaryCategory;
+        logInfo(`Extracted primary category: ${primaryCategory}`);
+      }
+      
+      if (secondaryCategories.length > 0) {
+        searchOptions.filter.secondaryCategories = secondaryCategories;
+        logInfo(`Extracted secondary categories: ${secondaryCategories.join(', ')}`);
+      }
+      
+      if (keywords.length > 0) {
+        searchOptions.filter.keywords = keywords;
+        logInfo(`Extracted keywords: ${keywords.join(', ')}`);
+      }
     }
-    // --- End Logging Point 3 ---
-
-
-    // --- ADDED CHECK: Handle empty results BEFORE logging/mapping ---
-    if (!actualSearchResults || actualSearchResults.length === 0) {
-      logWarning('[QueryAPI] No results found from hybridSearch/fallback, returning 404.');
-      recordMetric('api', 'query', Date.now() - startTime, false, {
-        error: searchError ? searchError.message : 'No results found',
-        retrievalDuration
-      });
-      return res.status(404).json({
-        error: 'No results found for query',
-        query,
-        timings: { retrievalMs: retrievalDuration }
-      });
-    } // --- END ADDED CHECK ---
-
-    // --- DEBUG LOGGING (Now safe because array is not empty) ---
-    logDebug('[QueryAPI] Before map - actualSearchResults type:', typeof actualSearchResults);
-    logDebug('[QueryAPI] Before map - actualSearchResults isArray:', Array.isArray(actualSearchResults));
-    logDebug('[QueryAPI] Before map - actualSearchResults length:', actualSearchResults?.length);
-    try {
-      // Log only IDs and scores for brevity and safety
-      logDebug('[QueryAPI] Before map - actualSearchResults content (IDs/Scores):',
-        JSON.stringify(actualSearchResults.map((r: any) => ({ id: r?.id, score: r?.score })))
-      );
-    } catch (e) {
-      logError('[QueryAPI] Failed to stringify actualSearchResults summary');
+    
+    // For product-related queries, ensure we're using appropriate product tags
+    if (isProductQuery) {
+      const productKeywords = extractProductKeywords(queryToUse);
+      
+      // Apply product-specific filtering
+      if (productKeywords.length > 0) {
+        // Use extracted keywords as required entities
+        searchOptions.filter.requiredEntities = productKeywords;
+        logInfo(`Using product keywords for search: ${productKeywords.join(', ')}`);
+        
+        // ALWAYS set primary category for product queries to ensure relevant results
+        // If no primary category set or it's not product-related, use product as default
+        if (!searchOptions.filter.primaryCategory || 
+            ![DocumentCategoryType.PRODUCT_OVERVIEW, 
+              DocumentCategoryType.PRODUCT_COMPARISON, 
+              DocumentCategoryType.PRICING_INFORMATION, 
+              DocumentCategoryType.INTEGRATIONS].includes(searchOptions.filter.primaryCategory)) {
+          searchOptions.filter.primaryCategory = DocumentCategoryType.PRODUCT_OVERVIEW;
+          logInfo(`Setting primary category to PRODUCT_OVERVIEW based on product query`);
+        }
+        
+        // Add specific product types to secondary categories if appropriate
+        const productTypes = mapProductKeywordsToCategories(productKeywords);
+        if (!searchOptions.filter.secondaryCategories) {
+          searchOptions.filter.secondaryCategories = [];
+        }
+        
+        // Add PRODUCT_OVERVIEW as a fallback secondary category if not already present
+        // and it's not already the primary category
+        if (searchOptions.filter.primaryCategory !== DocumentCategoryType.PRODUCT_OVERVIEW &&
+            !searchOptions.filter.secondaryCategories.includes(DocumentCategoryType.PRODUCT_OVERVIEW)) {
+          searchOptions.filter.secondaryCategories.push(DocumentCategoryType.PRODUCT_OVERVIEW);
+          logInfo(`Added PRODUCT_OVERVIEW to secondary categories as fallback`);
+        }
+        
+        // Add product types to secondary categories if not already included
+        if (productTypes.length > 0) {
+          productTypes.forEach(type => {
+            if (!searchOptions.filter.secondaryCategories!.includes(type)) {
+              searchOptions.filter.secondaryCategories!.push(type);
+            }
+          });
+          logInfo(`Added product types to secondary categories: ${productTypes.join(', ')}`);
+        }
+        
+        // If no specific product types were found but we know it's a product query,
+        // add relevant backup categories to increase chances of finding matches
+        if (productTypes.length === 0) {
+          const backupCategories = [
+            DocumentCategoryType.HIRING,
+            DocumentCategoryType.ONBOARDING,
+            DocumentCategoryType.PAYROLL
+          ];
+          
+          backupCategories.forEach(category => {
+            if (!searchOptions.filter.secondaryCategories!.includes(category)) {
+              searchOptions.filter.secondaryCategories!.push(category);
+            }
+          });
+          logInfo(`Added backup product categories for general product query`);
+        }
+      }
     }
-    // --- END DEBUG LOGGING ---
+    
+    // Perform search based on selected mode, using the real implementations
+    if (searchMode === 'hybrid' || searchMode === 'default') {
+      try {
+        // Use the real hybrid search implementation
+        const hybridResults = await hybridSearch(queryToUse, searchOptions);
+        searchResults = hybridResults.results || [];
+      } catch (searchError) {
+        logError('Error in hybrid search:', searchError);
+        // Fall back to text search if hybrid search fails
+        try {
+          // For now, just do another hybrid search with different parameters
+          const keywordResults = await hybridSearch(queryToUse, {
+            ...searchOptions,
+            vectorWeight: 0.1,  // Almost all keyword weight
+            keywordWeight: 0.9
+          });
+          searchResults = keywordResults.results || [];
+        } catch (ftsError) {
+          logError('Error in fallback text search:', ftsError);
+          searchResults = [];
+        }
+      }
+    } else if (searchMode === 'keyword') {
+      // Use hybrid search with keyword emphasis
+      try {
+        const keywordResults = await hybridSearch(queryToUse, {
+          ...searchOptions,
+          vectorWeight: 0.1,  // Almost all keyword weight
+          keywordWeight: 0.9
+        });
+        searchResults = keywordResults.results || [];
+      } catch (ftsError) {
+        logError('Error in keyword search:', ftsError);
+        searchResults = [];
+      }
+    } else if (searchMode === 'multimodal' && FEATURE_FLAGS.multiModalSearch && visualAnalysis.isVisualQuery) {
+      // For now, just use the hybrid search and we'll enhance this later for multimodal
+      try {
+        const hybridResults = await hybridSearch(queryToUse, {
+          ...searchOptions,
+          // Add visual search parameters when implementing multimodal search
+        });
+        searchResults = hybridResults.results || [];
+      } catch (multimodalError) {
+        logError('Error in multimodal search:', multimodalError);
+        searchResults = [];
+      }
+    }
+    
+    // Fallback search if no results - try query expansion
+    if (searchResults.length === 0) {
+      logWarning(`No results found for "${queryToUse}". Attempting expanded search.`);
+      
+      try {
+        // Use the directly imported query expansion function
+        const expandedQueryResult = await expandQuery(queryToUse);
+        if (expandedQueryResult && expandedQueryResult.expandedQuery !== queryToUse) {
+          logInfo(`Expanded query: "${queryToUse}" -> "${expandedQueryResult.expandedQuery}"`);
+          const expandedResults = await hybridSearch(expandedQueryResult.expandedQuery, {
+            ...searchOptions,
+            vectorWeight: 0.4,
+            keywordWeight: 0.6 // Emphasize keywords even more for expanded queries
+          });
+          searchResults = expandedResults.results || [];
+        }
+        
+        // If still no results, try fallback search
+        if (searchResults.length === 0) {
+          logWarning(`No results from expanded search. Attempting fallback search.`);
+          const fallbackResults = await fallbackSearch(queryToUse);
+          searchResults = fallbackResults.map(item => ({
+            ...item,
+            score: item.score || 0.5 // Ensure score exists
+          }));
+          
+          // If even fallback failed, try with original query in case rewriting caused issues
+          if (searchResults.length === 0 && queryWasRewritten) {
+            logWarning(`No results from fallback search. Trying original query: "${originalQuery}"`);
+            const originalQueryResults = await fallbackSearch(originalQuery);
+            searchResults = originalQueryResults.map(item => ({
+              ...item,
+              score: item.score || 0.5 // Ensure score exists
+            }));
+          }
+        }
+      } catch (fallbackError) {
+        logError('Error in fallback search:', fallbackError);
+      }
+    }
+    
+    recordMetric('search', metrics.HYBRID_SEARCH, Date.now() - searchStartTime, searchResults.length > 0);
+    
+    // Convert search results to the SearchResultItem format
+    const processedResults: SearchResultItem[] = searchResults.map(result => ({
+      id: result.id,
+      document_id: result.document_id,
+      text: result.text || '',
+      metadata: result.metadata || {}, // Keep general metadata here
+      score: result.score || result.similarity || 0.5,
+      vectorScore: result.vectorScore,
+      keywordScore: result.keywordScore,
+      // Ensure the 'item' structure matches MultiModalSearchResult
+      item: {
+        id: result.id || '', // Keep fallback, but needs verification
+        text: result.text || '',
+        // Populate metadata strictly
+        metadata: {
+          category: result.metadata?.category,
+          technicalLevel: result.metadata?.technicalLevel,
+          // Spread remaining metadata to satisfy [key: string]: any
+          ...(result.metadata || {})
+        }
+      }
+    }));
 
-    // Rerank results
-    const rerankStartTime = Date.now();
-    let rerankedResults: RankedSearchResult[];
-
-    // Prepare results for reranker input - Mapping is now safe
-    const resultsForReranker: MultiModalSearchResult[] = actualSearchResults
-      .map((result: any, index: number) => ({
-        item: {
-          // Add null checks for robustness, though the array should be valid now
-          id: result?.id || `initial-result-${index}`,
-          text: result?.text || result?.originalText || '',
-          metadata: result?.metadata || {},
-          visualContent: result?.visualContent || result?.metadata?.visualContent
-        },
-        score: result?.score || 0
-      }));
-
-    if (contextualRetrievalEnabled && resultsForReranker.length > 0) {
-      logInfo(`Reranking ${resultsForReranker.length} results for query: "${query}"`);
-
-      // Analyze query for visual focus
-      const visualAnalysis = analyzeVisualQuery(query);
-
-      // Prepare reranking options
+    // Use processedResults instead of searchResults for further operations
+    if (FEATURE_FLAGS.contextualReranking && useContextualRetrieval && processedResults.length > 0) {
+      const rerankStartTime = Date.now();
+      
+      // Setting up reranking options using the imported type's properties
       const rerankOptions: MultiModalRerankOptions = {
-        limit: limit,
-        includeScores: true,
-        useVisualContext: true,
-        visualFocus: visualAnalysis.isVisualQuery,
-        visualTypes: visualAnalysis.visualTypes,
-        timeoutMs: 5000
+        useVisualContext: visualAnalysis.isVisualQuery, // Use correct property name
+        visualFocus: visualAnalysis.isVisualQuery,    // Use correct property name (assuming intent matches)
+        visualTypes: visualAnalysis.visualTypes       // Property name is the same
       };
-
-      // Call the new reranker function
-      rerankedResults = await modules.rerankWithGemini(
-        query,
-        resultsForReranker,
+      
+      // Rerank results using Gemini
+      try {
+        // Use the direct rerankWithGemini function
+        const rerankedResults = await rerankWithGemini(
+          originalQuery, // Use original query for reranking
+          processedResults, // processedResults structure should now be compatible
         rerankOptions
       );
 
-    } else {
-      logInfo(`Skipping reranking for query: "${query}"`);
-      rerankedResults = resultsForReranker
-        .sort((a, b) => (b.score || 0) - (a.score || 0))
-        .slice(0, limit)
-        .map(r => ({
-            ...r,
-            originalScore: r.score,
-            explanation: 'Reranking skipped',
-            item: {
-              ...r.item,
-              metadata: {
-                ...r.item.metadata,
-                rerankScore: r.score,
-                originalScore: r.score
-              }
-            }
-        }));
+        // Update processedResults with reranked results
+        // Type assertion to ensure compatibility
+        processedResults.splice(0, processedResults.length, ...rerankedResults as unknown as SearchResultItem[]);
+        
+        recordMetric('search', metrics.RERANKING, Date.now() - rerankStartTime, true);
+      } catch (rerankError) {
+        logError('Error during reranking:', rerankError);
+        recordMetric('search', metrics.RERANKING, Date.now() - rerankStartTime, false);
+        // Continue with un-reranked results
+      }
     }
-
-    // <<< Ensure only assignment, no re-declaration >>>
-    rerankDuration = Date.now() - rerankStartTime;
-
-    // Generate an answer from the results
+    
+    // Prepare context for answer generation
+    const context = processedResults.map(result => ({
+      text: result.text,
+      source: result.metadata?.source || result.metadata?.url || 'Unknown source',
+      relevance: result.score || 0,
+      metadata: result.metadata || {} // Include full metadata for better context
+    }));
+    
+    // Log some debug info about the search results
+    if (processedResults.length > 0) {
+      logInfo(`Found ${processedResults.length} results for query: "${queryToUse}"`);
+      processedResults.slice(0, 3).forEach((result, idx) => {
+        logInfo(`Result ${idx+1}: ${result.text.substring(0, 100)}...`);
+      });
+    } else {
+      logWarning(`No results found for query: "${queryToUse}"`);
+    }
+    
+    // Determine if we should include source citations based on result quality
+    const includeCitations = FEATURE_FLAGS.sourceCitations && 
+                            processedResults.length > 0 &&
+                            processedResults.some(result => result.score > 0.4); // Only cite if we have decent results
+    
+    // Generate answer from search results using the real LLM-based implementation
     const answerStartTime = Date.now();
+    
+    // Create a customized system prompt for product queries
+    let systemPrompt = modelConfig.getSystemPromptForQuery(originalQuery);
+    
+    // Add special instructions for product-related queries
+    if (isProductQuery) {
+      systemPrompt = `
+You are a knowledgeable Sales Assistant for Workstream, a company providing HR, Payroll, and Hiring solutions for the hourly workforce.
 
-    // Check if we have valid results before processing
-    if (!rerankedResults || !Array.isArray(rerankedResults) || rerankedResults.length === 0) {
-      logWarning('No reranked results available, returning empty response');
-      return res.status(404).json({
-        error: 'No results found after reranking',
-        query,
-        timings: {
-          retrievalMs: retrievalDuration,
-          rerankingMs: rerankDuration
-        }
-      });
+When answering questions about Workstream's products and features, provide a comprehensive and structured response that:
+1. Clearly lists and describes the relevant products/features mentioned in the context
+2. Highlights key benefits and value propositions for each product
+3. Organizes information in a logical way (e.g., by product category)
+4. Includes specific capabilities and differentiators from the context
+5. Maintains a helpful, informative tone appropriate for sales conversations
+
+IMPORTANT INSTRUCTIONS:
+- Answer based ONLY on the provided context
+- For product-related questions, try to provide a comprehensive overview of multiple products when available
+- If information about specific products is not in the context, be transparent about what IS available
+- Avoid repeating the user's question in your response
+- Do not make up information that isn't present in the context
+- Focus on factual information about products, their features, and benefits
+`;
+      logInfo(`Using specialized product query system prompt`);
     }
+    
+    // If we have no results or poor results, add instructions to be honest about limitations
+    if (processedResults.length === 0 || !processedResults.some(result => result.score > 0.3)) {
+      systemPrompt += `
 
-    // Process the search results for answer generation with better error handling
-    const searchContext = rerankedResults.map((result: any, index: number) => {
-      // Handle potentially malformed results by providing defaults
-      if (!result) {
-        logWarning(`Result at index ${index} is undefined or null, using default values`);
-        return {
-          text: 'No content available',
-          source: 'Unknown',
-          score: 0,
-          metadata: {}
-        };
-      }
-
-      // Extract the item safely
-      const item = result.item || result;
-
-      if (!item) {
-        logWarning(`Item at index ${index} could not be extracted, using default values`);
-        return {
-          text: 'No content available',
-          source: 'Unknown',
-          score: result.score || 0,
-          metadata: {}
-        };
-      }
-
-      // Extract visual content if available and requested
-      // let visualContent = null;
-      // if (includeVisualContent &&
-      //     item.visualContent &&
-      //     Array.isArray(item.visualContent)) {
-      //   visualContent = item.visualContent.map((vc: any) => ({
-      //     type: vc.type || 'unknown',
-      //     description: vc.description || '',
-      //     text: vc.extractedText || ''
-      //   }));
-      // }
-
-      // Format the chunk for the answer generation with safe fallbacks
-      return {
-        text: item.text || item.content || 'No content available',
-        source: (item.metadata && item.metadata.source) || item.source || 'Unknown',
-        score: result.score || 0,
-        metadata: item.metadata || {},
-      };
-    });
-
-    // *** NEW DETAILED CONTEXT LOGGING ***
-    logInfo(`[QueryAPI] Context being passed to generateAnswer (${searchContext.length} items):`);
-    searchContext.forEach((item, index) => {
-      logInfo(`[QueryAPI] Context Item ${index + 1}: Source: ${item.source}, Score: ${item.score?.toFixed(4)}, Text Preview: "${item.text.substring(0, 200)}..."`);
-      // Uncomment for full text if needed, but can be very verbose:
-      // logDebug(`[QueryAPI] Context Item ${index + 1} Full Text:`, item.text);
-    });
-    // *** END DETAILED CONTEXT LOGGING ***
-
-    // Get system prompt for this query
-    const systemPrompt = modelConfig.getSystemPromptForQuery(query);
-
-    // Generate the answer
-    const answer = await modules.generateAnswer(
-      query,
-      searchContext,
-      {
-        systemPrompt,
-        includeSourceCitations, // Assuming this is the correct prop name
-        maxSourcesInAnswer: includeSourceDocuments ? limit : 3,
-        conversationHistory: conversationHistory || '',
-      }
-    );
-
-    // <<< Ensure only assignment, no re-declaration >>>
-    answerDuration = Date.now() - answerStartTime;
-    const totalDuration = Date.now() - startTime;
-
-    // Record success metrics
-    recordMetric('api', 'query', totalDuration, true, {
-      queryLength: query.length,
-      resultCount: rerankedResults.length,
-      retrievalDuration,
-      rerankDuration,
-      answerDuration
-    });
-
-    // --- >>> Log Query to Supabase <<< ---
-    const supabase = getSupabaseAdmin();
-    if (supabase) {
-      try {
-        const initialResultIds = actualSearchResults.map((r: any) => r?.id).filter(Boolean);
-        const finalResultIds = rerankedResults.map((r: any) => r?.item?.id).filter(Boolean);
-
-        const logData = {
-          session_id: sessionId, // Use sessionId from request
-          query: query, // Changed column name to just 'query'
-          // query_embedding: null, // Leave null for now
-          // response_text: answer, // Optional: Log the generated answer text? Maybe too verbose.
-          retrieved_chunk_ids: initialResultIds,
-          reranked_chunk_ids: finalResultIds, // Use final results for both reranked and final
-          final_chunk_ids: finalResultIds,
-          hybrid_ratio: searchMode === 'hybrid' ? (req.body.vectorWeight !== undefined ? req.body.vectorWeight : 0.3) : (searchMode === 'vector' ? 1.0 : 0.0), // Approximate based on mode/params
-          initial_candidates_count: actualSearchResults.length,
-          reranked_candidates_count: rerankedResults.length,
-          execution_time_ms: totalDuration,
-          retrieval_time_ms: retrievalDuration,
-          rerank_time_ms: rerankDuration,
-          generation_time_ms: answerDuration,
-          contextual_retrieval_used: contextualRetrievalEnabled,
-          multi_modal_query: useMultiModal,
-          metadata: { // Store other useful info
-            searchMode: searchMode,
-            limitRequested: limit,
-            queryAnalysis: queryAnalysis // Store the analysis output
-          }
-        };
-
-        logInfo('[QueryAPI] Inserting record into query_logs...');
-        const { data: logInsertData, error: logInsertError } = await supabase
-          .from('query_logs')
-          .insert(logData)
-          .select('id') // Select the ID of the newly created log
-          .single(); // Expect a single row back
-
-        if (logInsertError) {
-          logError('[QueryAPI] Failed to insert into query_logs:', logInsertError);
-        } else if (logInsertData && logInsertData.id) {
-            queryLogId = logInsertData.id; // Store the ID
-            logInfo(`[QueryAPI] Successfully logged query with ID: ${queryLogId}`);
-        } else {
-            logWarning('[QueryAPI] Query log inserted but failed to retrieve ID.');
-        }
-      } catch (dbError) {
-        logError('[QueryAPI] Error during query_logs insertion:', dbError);
-      }
-    } else {
-        logWarning('[QueryAPI] Supabase client not available, skipping query_logs insert.');
+SPECIAL INSTRUCTION FOR LIMITED INFORMATION:
+- The context provided does not contain sufficient information to answer this question in detail
+- Please be HONEST and CLEAR that you don't have enough information in the provided context
+- Avoid making up information or providing generic responses that imply you have knowledge you don't
+- Suggest that the user ask about something you might be able to help with, such as Workstream's products or features
+`;
+      logInfo(`Adding limited information instruction to system prompt`);
     }
-    // --- >>> End Query Logging <<< ---
-
-    // Prepare the response
-    const response: any = { // Use 'any' temporarily to allow adding queryLogId
+    
+    const answer = await generateAnswer(originalQuery, context, {
+      systemPrompt: systemPrompt,
+      includeSourceCitations: includeCitations,
+      maxSourcesInAnswer: 5,
+    });
+    recordMetric('query', metrics.ANSWER_GENERATION, Date.now() - answerStartTime, true);
+    
+    // Prepare and return the response
+    success = true;
+    res.status(200).json({
+      query: originalQuery,
       answer,
-      query,
-      timings: {
-        totalMs: totalDuration,
-        retrievalMs: retrievalDuration,
-        rerankingMs: rerankDuration,
-        answerGenerationMs: answerDuration
+      resultCount: processedResults.length,
+      metadata: {
+        queryAnalysis,
+        queryWasRewritten,
+        rewrittenQuery: queryWasRewritten ? queryToUse : undefined,
+        isProductQuery,
+        isVisualQuery: visualAnalysis.isVisualQuery,
+        processingTimeMs: Date.now() - startTime
       }
-    };
-
-    // Add queryLogId to the response for feedback linking
-    if (queryLogId) {
-      response.queryLogId = queryLogId;
-    }
-
-    // Add source documents if requested
-    if (includeSourceDocuments) {
-      // Add source documents to the response
-      response.sourceDocuments = rerankedResults.map((result: any) => {
-        const item = result.item || result;
-        return {
-          text: item.text || item.content || '',
-          source: item.metadata?.source || item.source || 'Unknown',
-          score: result.score,
-          metadata: item.metadata || {}
-        };
-      });
-    }
-
-    logInfo('[QueryAPI] Successfully processed query, returning response.');
-    return res.status(200).json(response);
+    });
+    
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error processing query';
-
-    // Log the error
     logError('Error processing query:', error);
-
-    // Record error metrics
-    recordMetric('api', 'query', Date.now() - startTime, false, {
-      error: errorMessage
+    res.status(500).json({ 
+      error: 'An error occurred while processing your query',
+      details: process.env.NODE_ENV === 'development' ? String(error) : undefined
     });
-
-    // Return a standardized error response
-    return res.status(500).json({
-      error: 'Error processing your query',
-      message: errorMessage
-    });
+  } finally {
+    // Record overall API metrics
+    recordMetric('api', metrics.API_QUERY, Date.now() - startTime, success);
   }
+}
+
+// Helper function to extract product keywords from query
+function extractProductKeywords(query: string): string[] {
+  const keywords: string[] = [];
+  const queryLower = query.toLowerCase();
+  
+  // Look for known product names and features - expanded list with more variations
+  const productTerms = [
+    // Text-to-Apply Related
+    'text-to-apply', 'text to apply', 'texting', 'sms', 'messaging', 'text messaging',
+    'applicant texting', 'candidate texting', 'job application texting',
+    
+    // Onboarding Related
+    'onboarding', 'e-verify', 'everify', 'i9', 'forms', 'documents', 'paperwork',
+    'employee onboarding', 'digital onboarding', 'automated onboarding', 'new hire',
+    'background check', 'background screening', 'screening', 'verification',
+    
+    // Payroll Related
+    'payroll', 'payment', 'direct deposit', 'pay', 'paychecks', 'payroll processing',
+    'wage', 'wages', 'salary', 'compensation', 'paystub', 'paystubs',
+    
+    // Scheduling Related
+    'scheduling', 'schedule', 'shifts', 'shift management', 'time tracking',
+    'time clock', 'attendance', 'timesheets', 'time sheets', 'clock in', 'clock out',
+    
+    // Recruiting/Hiring Related
+    'recruiting', 'recruitment', 'hiring', 'applicant tracking', 'ats',
+    'job posting', 'job postings', 'job listing', 'job listings', 'talent acquisition',
+    'candidate', 'candidates', 'application', 'applications', 'job application',
+    
+    // HR Related
+    'compliance', 'hr', 'human resources', 'employee management',
+    'workforce management', 'employee data', 'hr management',
+    
+    // Integration Related
+    'integration', 'integrations', 'api', 'connect', 'connection',
+    'third-party', 'third party', 'software integration',
+    
+    // General Product Terms
+    'product', 'products', 'feature', 'features', 'solution', 'solutions',
+    'platform', 'service', 'services', 'software', 'tool', 'tools',
+    'offering', 'offerings', 'capability', 'capabilities'
+  ];
+  
+  productTerms.forEach(term => {
+    if (queryLower.includes(term)) {
+      keywords.push(term);
+      
+      // If the query is asking about "our products" or similar, add a specific keyword
+      if (queryLower.match(/\b(our|your|workstream('s)?)\s+(products?|features?|offerings?)\b/) &&
+          !keywords.includes('product_overview')) {
+        keywords.push('product_overview');
+      }
+    }
+  });
+  
+  // If no specific product keywords were found but the query is about products generally
+  if (keywords.length === 0 && 
+      (queryLower.includes('product') || 
+       queryLower.includes('offering') || 
+       queryLower.includes('feature') || 
+       queryLower.match(/\b(what|tell|list|show).*(products?|features?|offerings?)\b/))) {
+    keywords.push('product_overview');
+  }
+  
+  return keywords;
+}
+
+/**
+ * Extracts categories and tags from a query string
+ * @param query The user's query
+ * @returns Object containing primary category, secondary categories, and keywords
+ */
+function extractCategoriesFromQuery(query: string): {
+  primaryCategory?: DocumentCategoryType;
+  secondaryCategories: DocumentCategoryType[];
+  keywords: string[];
+} {
+  const queryLower = query.toLowerCase();
+  let primaryCategory: DocumentCategoryType | undefined = undefined;
+  const secondaryCategories: DocumentCategoryType[] = [];
+  const keywords: string[] = [];
+
+  // Map of category indicators to primary categories
+  const categoryMappings: Record<string, DocumentCategoryType> = {
+    // Product-related categories
+    'product': DocumentCategoryType.PRODUCT_OVERVIEW,
+    'feature': DocumentCategoryType.PRODUCT_OVERVIEW,
+    'integration': DocumentCategoryType.INTEGRATIONS,
+    'text to apply': DocumentCategoryType.TEXT_TO_APPLY,
+    'text-to-apply': DocumentCategoryType.TEXT_TO_APPLY,
+    'sms': DocumentCategoryType.TWO_WAY_SMS,
+    'onboarding': DocumentCategoryType.ONBOARDING,
+    'payroll': DocumentCategoryType.PAYROLL,
+    'scheduling': DocumentCategoryType.SCHEDULING,
+    'hiring': DocumentCategoryType.HIRING,
+
+    // Topic-based categories
+    'compliance': DocumentCategoryType.COMPLIANCE,
+    'legal': DocumentCategoryType.LEGAL,
+    'regulation': DocumentCategoryType.COMPLIANCE,
+    'privacy': DocumentCategoryType.SECURITY_PRIVACY,
+    'security': DocumentCategoryType.SECURITY_PRIVACY,
+    'pricing': DocumentCategoryType.PRICING_INFORMATION,
+    'cost': DocumentCategoryType.PRICING_INFORMATION,
+    'subscription': DocumentCategoryType.PRICING_INFORMATION,
+    'plan': DocumentCategoryType.PRICING_INFORMATION,
+    
+    // Customer/support categories
+    'support': DocumentCategoryType.GENERAL,
+    'help': DocumentCategoryType.GENERAL,
+    'troubleshoot': DocumentCategoryType.GENERAL,
+    'issue': DocumentCategoryType.GENERAL,
+    'training': DocumentCategoryType.TRAINING_MODULES,
+    'learn': DocumentCategoryType.TRAINING_MODULES,
+    'tutorial': DocumentCategoryType.TRAINING_MODULES,
+    'guide': DocumentCategoryType.GENERAL,
+    'documentation': DocumentCategoryType.DOCUMENTS,
+    
+    // Company categories
+    'about': DocumentCategoryType.COMPANY_INFO,
+    'history': DocumentCategoryType.COMPANY_INFO,
+    'team': DocumentCategoryType.COMPANY_INFO,
+    'leadership': DocumentCategoryType.LEADERSHIP_DEV,
+    'ceo': DocumentCategoryType.COMPANY_INFO,
+    'founder': DocumentCategoryType.COMPANY_INFO,
+    'company': DocumentCategoryType.COMPANY_INFO
+  };
+  
+  // Search for category indicators in the query
+  Object.entries(categoryMappings).forEach(([indicator, category]) => {
+    if (queryLower.includes(indicator)) {
+      if (!primaryCategory) {
+        primaryCategory = category;
+      } else if (category !== primaryCategory && !secondaryCategories.includes(category)) {
+        secondaryCategories.push(category);
+      }
+      
+      // Add the detected indicator as a keyword
+      if (!keywords.includes(indicator)) {
+        keywords.push(indicator);
+      }
+    }
+  });
+  
+  // Extract additional keywords from the query
+  // Split the query into words and filter out common words
+  const commonWords = ['and', 'or', 'the', 'a', 'an', 'in', 'on', 'with', 'for', 'to', 'from', 'by', 'about', 'tell', 'me'];
+  const queryWords = queryLower.split(/\W+/).filter(word => word.length > 3 && !commonWords.includes(word));
+  
+  // Add important words as keywords
+  queryWords.forEach(word => {
+    if (!keywords.includes(word)) {
+      keywords.push(word);
+    }
+  });
+  
+  return {
+    primaryCategory,
+    secondaryCategories,
+    keywords
+  };
+}
+
+/**
+ * Maps product keywords to appropriate product categories
+ * @param productKeywords List of detected product keywords
+ * @returns List of product category tags
+ */
+function mapProductKeywordsToCategories(productKeywords: string[]): DocumentCategoryType[] {
+  const categoryMap: Record<string, { category: DocumentCategoryType, keywords: string[] }> = {
+    'recruiting': { 
+      category: DocumentCategoryType.HIRING, 
+      keywords: ['text-to-apply', 'text to apply', 'texting', 'sms', 'hiring', 'recruitment', 'recruiting', 'applicant tracking']
+    },
+    'onboarding': { 
+      category: DocumentCategoryType.ONBOARDING, 
+      keywords: ['onboarding', 'e-verify', 'everify', 'i9', 'forms', 'documents', 'background check', 'background screening', 'screening']
+    },
+    'payroll': { 
+      category: DocumentCategoryType.PAYROLL, 
+      keywords: ['payroll', 'payment', 'direct deposit']
+    },
+    'scheduling': { 
+      category: DocumentCategoryType.SCHEDULING, 
+      keywords: ['scheduling', 'schedule', 'shifts', 'time tracking']
+    },
+    'compliance': { 
+      category: DocumentCategoryType.COMPLIANCE, 
+      keywords: ['compliance', 'hr', 'human resources']
+    },
+    'integration': { 
+      category: DocumentCategoryType.INTEGRATIONS, 
+      keywords: ['integration', 'integrations', 'api']
+    }
+  };
+  
+  const categories = new Set<DocumentCategoryType>();
+  
+  productKeywords.forEach(keyword => {
+    Object.values(categoryMap).forEach(({ category, keywords }) => {
+      if (keywords.some(k => keyword.includes(k) || k.includes(keyword))) {
+        categories.add(category);
+      }
+    });
+  });
+  
+  return Array.from(categories);
 }

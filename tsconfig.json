@@ -9,6 +9,7 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
+    "downlevelIteration": true,
     "noEmit": false,
     "outDir": "./dist",
     "jsx": "preserve",
@@ -24,7 +25,8 @@
     "lib": [
       "dom",
       "dom.iterable",
-      "esnext"
+      "esnext",
+      "es2018"
     ],
     "plugins": [
       {

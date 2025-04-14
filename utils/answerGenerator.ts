@@ -10,6 +10,7 @@ import { AI_SETTINGS } from './modelConfig';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getModelForTask } from './modelConfig';
 import { recordMetric } from './performanceMonitoring';
+import { getGeminiClient } from './geminiClient';
 
 /**
  * Interface for search result items that will be passed to the answer generator
@@ -42,22 +43,38 @@ function estimateTokenCount(text: string): number {
  */
 function isBasicConversational(query: string): boolean {
   const conversationalPatterns = [
-    // Basic greetings only
-    'hello', 'hi', 'hey', 'greetings', 'howdy', 
+    // Basic greetings
+    'hello', 'hi', 'hey', 'greetings', 'howdy', 'hola', 'yo', 'sup', 
+    'good morning', 'good afternoon', 'good evening', 'morning', 'afternoon', 'evening',
     // Simple gratitude
-    'thanks', 'thank you',
+    'thanks', 'thank you', 'thx', 'ty',
     // Basic farewells
-    'bye', 'goodbye'
+    'bye', 'goodbye', 'see you', 'cya',
+    // Very short, vague responses
+    'ok', 'okay', 'k', 'hmm', 'um', 'uh', 'eh',
+    'not sure', 'dunno', 'don\'t know', 'idk', 
+    'maybe', 'perhaps', 'possibly',
+    'cool', 'nice', 'great', 'awesome', 'sounds good'
   ];
   
   const lowerQuery = query.toLowerCase().trim();
   
-  // Only match exact greetings or very simple patterns
-  return conversationalPatterns.some(pattern => 
+  // Match exact greetings or very simple patterns
+  if (conversationalPatterns.some(pattern => 
     lowerQuery === pattern || 
     lowerQuery === pattern + '!' ||
-    lowerQuery === pattern + '.'
-  );
+    lowerQuery === pattern + '.' ||
+    lowerQuery === pattern + '?')) {
+    return true;
+  }
+  
+  // Check for very short queries (1-2 words) that are likely not substantive questions
+  const wordCount = lowerQuery.split(/\s+/).length;
+  if (wordCount <= 2 && lowerQuery.length < 12) {
+    return true;
+  }
+  
+  return false;
 }
 
 /**
@@ -70,9 +87,13 @@ async function handleConversationalQuery(
   const systemPrompt = `
 You are a helpful, professional AI assistant supporting the sales team at Workstream, a company providing HR, Payroll, and Hiring solutions for the hourly workforce.
 
-Your job is to assist with any sales-related questions—ranging from product features, pricing, onboarding, customer types, or processes—based on our internal knowledge.
+Your responses should be friendly, engaging, and conversational. For short or vague queries, provide a helpful, friendly response that encourages more specific questions about Workstream's products and services.
 
-Stay concise, helpful, and accurate. Use a tone that reflects Workstream's brand: confident, supportive, and human.`;
+Remember:
+- Be concise but helpful
+- Maintain a friendly, conversational tone
+- Gently guide the conversation toward Workstream's products/services without being pushy
+- If the user seems unsure, offer some suggestions for topics they might want to learn about`;
 
   // Process conversation history to a string format if provided
   const historyText = conversationHistory ? formatConversationHistory(conversationHistory) : '';
@@ -86,7 +107,17 @@ Stay concise, helpful, and accurate. Use a tone that reflects Workstream's brand
     return await generateGeminiChatCompletion(systemPrompt, userPrompt);
   } catch (error) {
     logError('Error generating conversational response with Gemini', error);
-    return "Hello! I'm here to help with your sales questions. What would you like to know about our company, products, or services?";
+    
+    // Provide different fallback responses based on query type
+    const lowerQuery = query.toLowerCase().trim();
+    
+    if (lowerQuery.match(/^(hi|hey|hello|howdy|sup|yo)/)) {
+      return "Hi there! I'm the Workstream assistant. How can I help you learn about our HR, hiring, and payroll solutions for hourly workers today?";
+    } else if (lowerQuery.match(/^(not sure|idk|don't know|dunno)/)) {
+      return "No problem! I can help with information about Workstream's products like Text-to-Apply for hiring, our onboarding platform, payroll solutions, and more. What specific area would you like to explore?";
+    } else {
+      return "I'm here to help with any questions about Workstream's HR, hiring, and payroll solutions. Would you like to learn about specific products, features, or how we help businesses with hourly workers?";
+    }
   }
 }
 
@@ -197,7 +228,9 @@ Answer:
     attempt++;
     const apiCallStartTime = Date.now();
     try {
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+      // Use the getGeminiClient utility to ensure proper API key handling
+      const genAI = getGeminiClient();
+      
       const model = genAI.getGenerativeModel({ model: modelName });
       const generationPromise = model.generateContent(prompt);
       const timeoutPromise = new Promise((_, reject) => 

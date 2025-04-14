@@ -24,6 +24,7 @@ This project implements a Retrieval-Augmented Generation (RAG) system tailored f
   - [Perplexity API Integration](#perplexity-api-integration)
   - [Admin Dashboard](#admin-dashboard)
 - [Standardized Categories & Tagging](#standardized-categories--tagging)
+  - [DocumentCategoryType Enum](#documentcategorytype-enum)
 - [Authentication](#authentication)
 - [Utilities Overview](#utilities-overview)
 - [Supabase Integration](#supabase-integration)
@@ -35,6 +36,7 @@ This project implements a Retrieval-Augmented Generation (RAG) system tailored f
 - [UI and Styling](#ui-and-styling)
 - [Contributing](#contributing)
 - [License](#license)
+- [API Keys Configuration](#api-keys-configuration)
 
 ## Core Features
 
@@ -44,6 +46,7 @@ This project implements a Retrieval-Augmented Generation (RAG) system tailored f
 - 💾 **Vector Store**: Efficient storage and retrieval of semantic embeddings using Supabase and `pgvector`. [See Vector Store Details](./docs/vector_store_management.md)
 - 🔍 **Hybrid Search & RAG Pipeline**: Combines vector similarity (semantic) and full-text keyword search, followed by advanced reranking and answer generation. [See RAG Pipeline Details](./docs/rag_pipeline_details.md)
 - ✨ **Advanced Reranking**: LLM-based (Gemini) reranking of search results considering text relevance, visual context, and content quality scores.
+- 🧠 **LLM-Driven Architecture**: Fully LLM-powered system without hardcoded responses, enabling sophisticated query understanding and natural answers. [See LLM Architecture](./docs/llm_architecture.md)
 - 🏢 **Company Research**: Automatic company information retrieval and verification using Perplexity API integration. [See Perplexity Integration Details](./docs/perplexity_integration.md)
 - 💬 **Chat Interface**: Separate interfaces for general knowledge base queries and specific company research chat. [See Chat System Overview](./docs/chat_system.md)
 - 📊 **Admin Dashboard**: Comprehensive analytics and system management tools. [See Admin Dashboard Overview](./docs/admin_dashboard.md)
@@ -85,10 +88,38 @@ The core Retrieval-Augmented Generation pipeline involves these steps:
     *   Rules for down-ranking specific content types (e.g., job postings for non-hiring queries).
     *   Includes a heuristic-based fallback (`applyFallbackReranking`) if Gemini fails.
 4.  **Context Creation**: Filter, deduplicate, and format the top-ranked chunks into a concise context. If the context exceeds token limits, it may be summarized using Gemini (`utils/answerGenerator.ts::summarizeContext`). Source citations are prepared.
-5.  **Answer Generation**: Send the query, conversation history, and curated context (potentially including formatted visual details) to an LLM (OpenAI primary, Gemini fallback) via `utils/answerGenerator.ts`. Handles conversational queries, zero-result scenarios, and visual context integration.
+5.  **Answer Generation**: Send the query, conversation history, and curated context (potentially including formatted visual details) to an LLM (Gemini) via `utils/answerGenerator.ts`. Handles conversational queries, zero-result scenarios, and visual context integration.
 6.  **Response Formatting**: Structure the final answer, potentially including citations or structured data, for display in the chat interface.
 
 [Detailed documentation on the RAG Pipeline](./docs/rag_pipeline_details.md)
+
+### LLM-Powered Answer Generation
+
+The system uses a fully LLM-based approach for understanding and answering user queries:
+
+1. **Direct LLM Integration**: The architecture directly uses LLM capabilities without intermediary layers or hardcoded responses. This enables the system to scale effectively with increasing data and query complexity.
+   
+2. **LLM Answer Generation**: The `utils/answerGenerator.ts` module handles:
+   * Processing retrieved context from search results
+   * Intelligently formatting conversational greetings and simple queries
+   * Generating coherent, context-sensitive responses using Gemini LLM
+   * Handling large context windows with automatic summarization
+   * Providing fallback mechanisms when information is incomplete
+   * Managing citation and source attribution
+
+3. **Query Understanding**: The system leverages Gemini's capabilities to analyze queries via `utils/geminiProcessor.ts`:
+   * Extract intent and entities from natural language
+   * Categorize query types (product, technical, informational)
+   * Determine appropriate search parameters and filters
+   * Handle conversation context for multi-turn interactions
+
+4. **Context-Sensitive Response Generation**: The LLM adapts responses based on:
+   * Query type (greeting, product question, technical query)
+   * Available context from retrieved documents
+   * Conversation history and user intent
+   * Metadata from retrieved documents (categories, technical level)
+
+This fully LLM-driven approach ensures responses are natural, comprehensive, and directly relevant to user queries while maintaining the ability to acknowledge limitations when information is not available.
 
 ## Key Components
 
@@ -170,14 +201,23 @@ Provides user interfaces for interacting with the knowledge base and company res
 
 ## Standardized Categories & Tagging
 
-The application uses a standardized category system for document classification and filtering to ensure consistency.
+The system uses a consistent approach to categorization and tagging throughout the application:
 
-- **Definition**: Categories are defined in `utils/tagUtils.ts` (`STANDARD_CATEGORIES`) and `utils/documentCategories.ts` (`DocumentCategoryType`).
-- **Examples**: `GENERAL`, `PRODUCT`, `TECHNICAL`, `FEATURES`, `SALES`, `INDUSTRY`, `COMPETITIVE`, `REFERENCE`, `INTERNAL`, `PRICING`, `COMPARISON`, `CUSTOMER_CASE`.
-- **Usage**: Applied during document processing, used for filtering in search (`HybridSearchFilter`), and displayed in UI components.
-- **Recent Improvements**: Enhanced tagging system with improved LLM prompts, better category selection logic, and more consistent entity extraction. [See Improved Tagging System](./docs/improved_tagging_system.md)
+### DocumentCategoryType Enum
 
-[Detailed Documentation on Categories & Tagging](./docs/category_and_tagging.md)
+The document categorization system is built around a strongly-typed enum (`DocumentCategoryType`) defined in `utils/documentCategories.ts`. This provides:
+
+- **Type Safety**: Ensures categories are consistent across the application
+- **Standardized Values**: Prevents typos and inconsistencies in category names
+- **IDE Support**: Enables autocomplete and validation during development
+
+The enum includes categories like:
+- Primary categories (HIRING, ONBOARDING, HR_MANAGEMENT, PAYROLL, etc.)
+- Secondary categories (TEXT_TO_APPLY, TWO_WAY_SMS, BACKGROUND_CHECKS, etc.)
+- Sales-focused categories (CASE_STUDIES, PRICING_INFORMATION, etc.)
+- Content types (BLOG, COMPANY_INFO, LEGAL)
+
+Using this enum throughout the codebase (search filters, document metadata, query analysis) ensures consistent classification and improves search relevance.
 
 ## Authentication
 
@@ -233,6 +273,8 @@ Describes how Supabase services (Database, `pgvector`, Auth, Storage, RPC) are u
     - `NEXT_PUBLIC_SUPABASE_URL`: Your Supabase project URL (found in Project Settings > API). **Must** start with `NEXT_PUBLIC_`.
     - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase project `anon` key (found in Project Settings > API). **Must** start with `NEXT_PUBLIC_`.
     - `SUPABASE_SERVICE_KEY`: Your Supabase project `service_role` key (found in Project Settings > API). **Do NOT** prefix with `NEXT_PUBLIC_`. This key must be kept secret.
+
+    > **Important Note:** The system expects Supabase credentials to use the exact variable names shown above. The `NEXT_PUBLIC_` prefix is required for client-side access, while the service key should never be exposed to the client. Using different variable names may cause connection issues.
 
 4.  Run the development server:
     ```bash
@@ -341,3 +383,121 @@ We welcome contributions! Please follow standard Git workflow:
 ## License
 
 This project is licensed under the MIT License. 
+
+## Overview
+This repository contains the code for the Workstream Sales Chat RAG (Retrieval-Augmented Generation) system. The system is designed to provide accurate information about Workstream by retrieving relevant documents from a knowledge base and generating answers based on those documents.
+
+## Key Features
+
+### Query Rewriting
+The system automatically rewrites ambiguous queries to provide better context. For example, when a user asks about "the CEO" or "pricing" without specifying a company, the system assumes they are referring to Workstream.
+
+#### How Query Rewriting Works
+1. The system analyzes the query to identify any explicitly mentioned organizations.
+2. If another organization (not Workstream) is explicitly mentioned, no rewriting occurs.
+3. If the query contains ambiguous terms like "our", "we", "us", "my", or "the company", or if it's a simple query like "ceo", "products", "pricing" without context, the system rewrites the query to include "Workstream".
+4. The rewritten query is then used for searching, while the original query is preserved for user-facing responses.
+
+#### Implementation Details
+- The `shouldRewriteQuery` function in `pages/api/query.ts` determines whether a query needs rewriting.
+- The function takes the original query string and the query analysis result.
+- It returns an object with a `rewrite` boolean and an optional `rewrittenQuery` string.
+- For debugging, the response includes metadata about whether the query was rewritten.
+
+Example query transformations:
+- "Who is the CEO?" → "Who is the Workstream CEO?"
+- "Tell me about pricing" → "Tell me about Workstream pricing"
+- "What are our products?" → "What are Workstream products?"
+
+### Answer Generation
+The system generates natural language answers based on the retrieved documents, citing sources when appropriate.
+
+#### Context-Sensitive Responses
+The answer generation logic is designed to provide appropriate responses based on the query type:
+
+1. **Greetings and Simple Queries**: For simple greetings (like "hello", "hi", "hey", "sup", "yo", etc.) or very short queries, the system provides a brief, friendly, casual introduction to its capabilities rather than a formal or comprehensive response. The greeting detection has been expanded to recognize more casual terms and phrases like "sup", "yo", and "hola" to create a more approachable experience.
+
+2. **Product and Feature Categorization**: For product-related queries, the system automatically categorizes and summarizes information about different Workstream products and features (Text-to-Apply, Onboarding, etc.), presenting them in a structured format with descriptions from the knowledge base.
+
+3. **Enhanced Keyword Processing**: The system now intelligently filters out common stopwords and pronouns ("our", "my", "we", etc.) to focus on meaningful keywords, improving search relevance for queries about products and features.
+
+4. **Category-Based Searching**: When detecting product-related queries, the system automatically adds category filters to focus on product and feature documentation, significantly improving the relevance of search results.
+
+5. **Contextual Leadership Queries**: For questions about CEOs, founders, or leadership, the system extracts relevant sentences across all context that mention leadership roles, providing a synthesized response.
+
+6. **Relevant Sentence Extraction**: For general queries, the system extracts and combines the most relevant sentences from all available context that match the query keywords, creating coherent and focused responses.
+
+7. **Partial Information Handling**: When the system only has partial or indirectly related information, it clearly acknowledges these limitations while still providing whatever relevant details are available.
+
+8. **Fallback Responses**: When no relevant information is found, the system acknowledges the lack of specific information and suggests alternative topics to explore.
+
+9. **Improved Short Query Handling**: The system now better detects and responds appropriately to very short or vague user inputs like "not sure", offering helpful guidance without generating error messages.
+
+10. **Enhanced Product Query Detection**: The product keyword detection has been expanded to recognize a much wider range of product and feature terms, ensuring appropriate categorization of queries.
+
+11. **Specialized Product Response Formatting**: For product-related queries, the system uses a specialized response format that organizes information about multiple products in a structured, comprehensive way.
+
+12. **Intelligent Citation Handling**: Source citations are only included when meaningful search results are found, avoiding unhelpful citation numbers in responses with no substantive content.
+
+13. **Transparent Limitation Acknowledgment**: When search results are poor or non-existent, the system explicitly acknowledges its limitations rather than providing vague or generic responses.
+
+#### Implementation Details
+- The `generateAnswer` function in `pages/api/query.ts` handles the answer generation logic.
+- The system uses metadata filtering (primaryCategory) to improve product-related searches.
+- Common Workstream products and features are recognized by name, allowing for better categorization.
+- Search terms are pre-processed to remove stopwords and improve match relevance.
+- For product queries, the system attempts to create a structured summary of multiple products rather than focusing on a single match.
+- Source citations are included when available to provide transparency about the information's origin.
+- The system provides specialized system prompts for different query types to generate more appropriate responses.
+
+### Hybrid Search
+The system uses a hybrid search approach, combining vector similarity and keyword-based search to retrieve relevant documents.
+
+### Contextual Reranking
+Retrieved documents are reranked based on their relevance to the query, taking into account the query context and the content of the documents.
+
+## Configuration
+The system can be configured through environment variables. See the `.env` file for available configuration options.
+
+## API
+The system exposes a REST API for querying the knowledge base. See `pages/api/query.ts` for details.
+
+## Development
+To run the system locally:
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Create a `.env` file with appropriate configuration
+4. Start the development server: `npm run dev`
+
+## License
+Proprietary - All rights reserved. 
+
+## API Keys Configuration
+
+The system requires proper API key configuration to function correctly. Pay special attention to how API keys are accessed throughout the codebase:
+
+### Gemini API Key
+
+The system accepts the Gemini API key from either of these environment variables:
+- `GEMINI_API_KEY` - Primary environment variable for the Gemini API key
+- `GOOGLE_AI_API_KEY` - Alternative/fallback environment variable for the Gemini API key
+
+When initializing the Gemini client, always use both variables like this:
+```typescript
+const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY;
+const genAI = new GoogleGenerativeAI(apiKey || '');
+```
+
+Do not use only one of the environment variables, as this can cause authentication failures if the key is defined in the other variable.
+
+### OpenAI API Key
+
+For OpenAI services, the system uses:
+- `OPENAI_API_KEY` - Environment variable for the OpenAI API key
+
+### Best Practices
+
+- Always check for both `GEMINI_API_KEY` and `GOOGLE_AI_API_KEY` when initializing Gemini clients
+- Reuse existing client instances when possible instead of creating new ones
+- Consider using the utility functions in `utils/geminiClient.ts` rather than directly initializing clients
+- When adding new AI service integrations, follow the same pattern of providing fallback environment variables 

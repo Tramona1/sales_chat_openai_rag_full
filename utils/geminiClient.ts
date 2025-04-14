@@ -56,6 +56,31 @@ try {
   console.error('Error initializing Google Generative AI client:', error);
 }
 
+/**
+ * Get a properly initialized Gemini client, using the correct API key from environment variables
+ * This function ensures consistent API key handling across the codebase
+ * 
+ * @returns An initialized GoogleGenerativeAI client
+ */
+export function getGeminiClient(): GoogleGenerativeAI {
+  // Use the cached client if available
+  if (genAI) return genAI;
+  
+  // Otherwise, create a new client with the appropriate API key
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY;
+  if (!apiKey) {
+    console.warn('No Gemini API key found in environment variables (GEMINI_API_KEY or GOOGLE_AI_API_KEY)');
+  }
+  
+  try {
+    genAI = new GoogleGenerativeAI(apiKey || '');
+    return genAI;
+  } catch (error) {
+    console.error('Error initializing Google Generative AI client:', error);
+    throw new Error('Failed to initialize Gemini client: ' + (error instanceof Error ? error.message : String(error)));
+  }
+}
+
 // Available Gemini models:
 // - gemini-2.0-flash: Latest model, faster and more efficient
 // - gemini-2.0-pro: High capability model for complex tasks
