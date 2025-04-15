@@ -565,15 +565,28 @@ export async function hybridSearch(
     const cleanedQuery = query.replace(/\s+/g, ' ').trim();
     logDebug(`[hybridSearch] Original query: "${query}", Cleaned query: "${cleanedQuery}"`);
     
+    // Add validation checks before generating embedding
+    if (!cleanedQuery || typeof cleanedQuery !== 'string') {
+      logError(`[hybridSearch:${executionId}] Invalid query format. Expected string, got ${typeof cleanedQuery}`);
+      throw new Error('Hybrid search failed: Invalid query format');
+    }
+    
     const queryEmbedding = await embeddingClient.embedText(cleanedQuery);
-    logInfo(`[hybridSearch] Embedding generated with ${queryEmbedding?.length} dimensions and provider: ${embeddingClient.getProvider()}`);
+    
+    // Validate the embedding
+    if (!queryEmbedding || !Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
+      logError(`[hybridSearch:${executionId}] Failed to generate valid embedding. Result: ${JSON.stringify(queryEmbedding)}`);
+      throw new Error('Hybrid search failed: Could not generate valid embedding');
+    }
+    
+    logInfo(`[hybridSearch] Embedding generated with ${queryEmbedding.length} dimensions and provider: ${embeddingClient.getProvider()}`);
     logInfo(`[hybridSearch] EMBEDDING_MODEL set to: ${process.env.EMBEDDING_MODEL || 'not set'}`);
     
     // Output first few values of the embedding to verify it's not all zeros
     if (queryEmbedding && queryEmbedding.length > 0) {
       logInfo(`[hybridSearch] First 5 embedding values: [${queryEmbedding.slice(0, 5).join(', ')}]`);
     }
-
+    
     // Prepare options and weights with improved defaults
     const limit = options.limit || 10;
     

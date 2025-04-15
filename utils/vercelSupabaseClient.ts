@@ -1,145 +1,107 @@
 /**
- * Supabase client utilities specifically optimized for Vercel deployment
+ * Supabase client utilities for Vercel deployments
  * 
- * This module provides helper functions for working with Supabase
- * in a Vercel deployment environment, with additional fallbacks
- * and diagnostic information.
+ * This module provides specialized Supabase client creation functions
+ * that are optimized for the Vercel serverless environment.
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { logError, logInfo, logDebug } from '../lib/logging';
-
-// Environment variables for Supabase configuration
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
-
-// Placeholder for cached clients
-let serviceClient: SupabaseClient | null = null;
-let adminClient: SupabaseClient | null = null;
+import { logError, logInfo, logDebug } from './logger';
 
 /**
- * Validates that all required Supabase configuration is available
+ * Validates Supabase configuration presence
+ * @returns Boolean indicating if required configuration is present
  */
 export function validateSupabaseConfig(): boolean {
-  const missingVars = [];
+  // Check for the presence of required environment variables
+  const hasUrl = !!process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const hasAnonKey = !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const hasServiceKey = !!process.env.SUPABASE_SERVICE_KEY;
   
-  if (!SUPABASE_URL) missingVars.push('SUPABASE_URL');
-  if (!SUPABASE_ANON_KEY) missingVars.push('SUPABASE_ANON_KEY');
-  if (!SUPABASE_SERVICE_KEY) missingVars.push('SUPABASE_SERVICE_KEY');
+  // Debug output for Vercel deployments
+  logDebug('Supabase config validation:', {
+    hasUrl,
+    hasAnonKey, 
+    hasServiceKey,
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL?.substring(0, 10) + '...' || 'not set'
+  });
   
-  if (missingVars.length > 0) {
-    console.error(`[CRITICAL] Missing Supabase environment variables: ${missingVars.join(', ')}`);
-    return false;
-  }
-  
-  return true;
+  return hasUrl && (hasAnonKey || hasServiceKey);
 }
 
 /**
- * Creates a service client with fallback for Vercel
+ * Creates a Supabase client with service role permissions for Vercel
+ * @returns A Supabase client or null if configuration is missing
  */
 export function createVercelServiceClient(): SupabaseClient | null {
-  // Return cached client if available
-  if (serviceClient) return serviceClient;
-  
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-    logError('[Vercel] Missing Supabase configuration for service client');
-    return null;
-  }
-  
   try {
-    serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
     
-    logInfo('[Vercel] Service client created successfully');
-    return serviceClient;
-  } catch (error) {
-    logError('[Vercel] Error creating service client', error);
-    return null;
-  }
-}
-
-/**
- * Creates an admin client with fallback for Vercel
- */
-export function createVercelAdminClient(): SupabaseClient | null {
-  // Return cached client if available
-  if (adminClient) return adminClient;
-  
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-    logError('[Vercel] Missing Supabase configuration for admin client');
-    // Log diagnostic information for troubleshooting
-    console.error('URL Set:', !!SUPABASE_URL);
-    console.error('Service Key Set:', !!SUPABASE_SERVICE_KEY);
-    
-    // Try to get more information about what's happening
-    try {
-      console.error('URL Length:', SUPABASE_URL?.length || 0);
-      console.error('Service Key Length:', SUPABASE_SERVICE_KEY?.length || 0);
-      
-      // Try to check for common issues
-      if (SUPABASE_URL?.includes('undefined') || SUPABASE_SERVICE_KEY?.includes('undefined')) {
-        console.error('Environment variables contain "undefined" string - this indicates a configuration issue');
-      }
-    } catch (diagnosticError) {
-      console.error('Error during diagnostics:', diagnosticError);
+    if (!supabaseUrl || !supabaseKey) {
+      logError('Missing Supabase credentials for service client. Check environment variables.');
+      return null;
     }
     
-    return null;
-  }
-  
-  try {
-    adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+    return createClient(supabaseUrl, supabaseKey, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
-      },
-      db: {
-        schema: 'public',
-      },
+      }
     });
-    
-    logInfo('[Vercel] Admin client created successfully');
-    return adminClient;
   } catch (error) {
-    logError('[Vercel] Error creating admin client', error);
+    logError('Error creating Vercel service client:', error);
     return null;
   }
 }
 
 /**
- * Gets a Supabase client suitable for Vercel deployments
- * Tries to handle Vercel-specific environment issues
+ * Gets a Supabase client for use in Vercel environments
+ * @returns A Supabase client or null if configuration is missing
  */
 export function getVercelSupabase(): SupabaseClient | null {
+  try {
+    return createVercelServiceClient();
+  } catch (error) {
+    logError('Error in getVercelSupabase:', error);
+    return null;
+  }
+}
+
+/**
+ * Gets an admin Supabase client for use in Vercel environments
+ * @returns A Supabase client with admin permissions
+ */
+export function getVercelSupabaseAdmin(): SupabaseClient | null {
   return createVercelServiceClient();
 }
 
 /**
- * Gets a Supabase admin client suitable for Vercel deployments
- * Tries to handle Vercel-specific environment issues
- */
-export function getVercelSupabaseAdmin(): SupabaseClient | null {
-  return createVercelAdminClient();
-}
-
-/**
- * Tests the connection to Supabase
+ * Tests connection to Supabase in Vercel environment
+ * @returns Promise that resolves to a boolean indicating if the connection was successful
  */
 export async function testVercelSupabaseConnection(): Promise<boolean> {
   try {
-    const client = getVercelSupabase();
-    if (!client) return false;
+    const supabase = getVercelSupabase();
+    if (!supabase) {
+      logError('Failed to create Supabase client for connection test');
+      return false;
+    }
     
-    const { data, error } = await client.from('document_chunks').select('id').limit(1);
-    return !error && Array.isArray(data);
+    const { data, error } = await supabase
+      .from('document_chunks')
+      .select('id')
+      .limit(1);
+      
+    if (error) {
+      logError('Supabase connection test failed:', error);
+      return false;
+    }
+    
+    logInfo('Supabase connection test successful');
+    return true;
   } catch (error) {
-    logError('[Vercel] Error testing Supabase connection', error);
+    logError('Error testing Supabase connection:', error);
     return false;
   }
 } 

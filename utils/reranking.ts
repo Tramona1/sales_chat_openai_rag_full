@@ -255,6 +255,60 @@ function extractVisualContext(item: any): {
   }
 }
 
+// Helper function to detect low-value boilerplate content
+function isLikelyBoilerplateContent(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+
+  const boilerplateIndicators = [
+    /this (website|site) (uses|stores) cookies/i,
+    /cookie (policy|notice|preferences|settings)/i,
+    /privacy (policy|notice|statement)/i,
+    /terms (of service|of use|and conditions)/i,
+    /all rights reserved/i,
+    /copyright © \d{4}/i,
+    /by (using|continuing to use|browsing) (this|our) (site|website)/i,
+    /we (use|collect) (personal information|data|cookies)/i,
+    /login|sign in|create( an)? account|forgot password/i,
+    /contact (us|form|details|information)/i,
+    /follow us on/i,
+    /share (this|on)/i,
+    /subscribe to (our|the) newsletter/i,
+    /404 (not found|error)/i,
+  ];
+
+  // Check for multiple indicators
+  let matchCount = 0;
+  for (const indicator of boilerplateIndicators) {
+    if (indicator.test(text)) {
+      matchCount++;
+      // If we find multiple matches, it's very likely boilerplate
+      if (matchCount >= 2) return true;
+    }
+  }
+
+  // Check content length - very short content is often navigation or headers
+  if (text.length < 100 && /copyright|rights reserved|privacy|terms|cookies/i.test(text)) {
+    return true;
+  }
+
+  // Check ratio of navigation/boilerplate terms to content length
+  const boilerplateTerms = ['home', 'about', 'contact', 'privacy', 'terms', 'cookies', 
+                           'login', 'sign in', 'register', 'copyright', 'all rights'];
+  let termCount = 0;
+  for (const term of boilerplateTerms) {
+    if (text.toLowerCase().includes(term)) {
+      termCount++;
+    }
+  }
+
+  // If more than 25% of the text consists of boilerplate terms, it's likely boilerplate
+  if (termCount > 3 && text.length < termCount * 50) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Specialized reranking function for multi-modal content using Gemini
  * This reranker is designed to process both text and visual context
@@ -275,6 +329,25 @@ export async function rerankWithGemini(
   const validResults = results.filter(r => r && r.item);
   if (validResults.length === 0) { return []; }
 
+  // Pre-filter results to remove obvious junk content
+  const filteredResults = validResults.filter(result => {
+    const textContent = result.item?.text || '';
+    // Only filter out if it's clearly boilerplate
+    if (isLikelyBoilerplateContent(textContent)) {
+      logInfo(`[Reranking] Filtered out boilerplate content: "${textContent.substring(0, 100)}..."`);
+      return false;
+    }
+    return true;
+  });
+
+  // If we filtered everything out, fall back to the original results
+  if (filteredResults.length === 0) {
+    logWarning('[Reranking] All results were filtered as boilerplate, using original results');
+    // Continue with original results in this case
+  }
+  
+  const resultsToRank = filteredResults.length > 0 ? filteredResults : validResults;
+  
   // Get visual focus info (assuming this part exists or is needed)
   // Placeholder: You might need to add this back if it was removed or is elsewhere
   let queryHasVisualFocus = options.visualFocus ?? false;
@@ -288,7 +361,7 @@ export async function rerankWithGemini(
 
   try {
     // Prepare items for reranking
-    const itemsToRerank: ItemToRerank[] = validResults.map((result, index) => {
+    const itemsToRerank: ItemToRerank[] = resultsToRank.map((result, index) => {
         const item = result?.item || {};
         const metadata = item.metadata || {};
         const { visualContextInfo, visualTypesList } = extractVisualContext(item);
@@ -345,7 +418,7 @@ Assign a score from 0-10 for each result based on how well it DIRECTLY and COMPL
 - 10: Perfect match. Contains a direct, complete, and accurate answer to the query.
 - 7-9: Highly relevant. Contains most of the key information needed for a direct answer, perhaps missing minor details.
 - 4-6: Moderately relevant. Addresses the topic but provides only partial information or requires significant inference to answer the query. Contains useful related context.
-- 1-3: Slightly relevant. Mentions keywords or concepts from the query but doesn't meaningfully contribute to answering it. General background information.
+- 1-3: Very relevant. Mentions keywords or concepts from the query but doesn't meaningfully contribute to answering it. General background information.
 - 0: Completely irrelevant.
 
 **KEY EVALUATION PRINCIPLES:**
@@ -354,15 +427,18 @@ Assign a score from 0-10 for each result based on how well it DIRECTLY and COMPL
 2.  **Completeness & Specificity:** For questions asking "Who...", "What...", "List...", "How many...", or seeking specific details, documents that provide explicit lists, names, numbers, or the requested details are significantly more relevant than those offering only vague descriptions or single examples. Prefer completeness.
 3.  **Query Intent:** Consider the implied intent. A "How to..." query requires procedural steps. A "Why..." query requires explanations. A "Compare..." query needs information on both items being compared. Rank based on how well the document fulfills that specific intent.
 
-**SALES-FOCUSED CONTENT EVALUATION:**
-- For queries about pricing, ROI, or competitive comparisons, prioritize content tagged with PRICING_INFORMATION, ROI_CALCULATOR, COMPETITIVE_ANALYSIS, or PRODUCT_COMPARISON categories.
-- For queries about implementation or customer success, prioritize content tagged with IMPLEMENTATION_PROCESS, CASE_STUDIES, or CUSTOMER_SUCCESS_STORIES.
-- When the primaryCategory or secondaryCategories includes sales-focused content, give an additional boost to relevance (1-2 points) as this content is specifically designed for sales queries.
-- Pay special attention to URL path segments that indicate sales content (like "/pricing", "/compare", "/case-studies").
-
-**DOWN-RANKING / SPECIAL CASES:**
-- Job Postings: Check the 'Category'. If 'HIRING' or 'JOB_POSTING', significantly lower its score (e.g., subtract 3-5 points or cap at 3) UNLESS the query explicitly asks about jobs/hiring/careers/titles/locations in a hiring context.
-- Boilerplate/Navigation: Documents consisting primarily of navigation links, footers, or repetitive boilerplate with only keyword mentions should receive very low scores (0-2).
+**LOW-VALUE CONTENT DETECTION:**
+Automatically assign a score of 0-1 to the following types of content, regardless of keyword matching:
+- Cookie notices/cookie policy (e.g., "This website stores cookies on your computer...")
+- Privacy policies (e.g., "We collect personal information when you...")
+- Terms of service/terms of use
+- Generic website footers (copyright notices, social media links)
+- Navigation menus and site maps
+- Account login/registration information
+- Generic contact forms
+- Website loading/error messages
+- Strictly legal disclaimers
+- Content that repeatedly mentions query keywords but provides no substantive information
 
 **CONTENT QUALITY SCORE (If Provided):**
 - Each document may include a 'Quality' score (0-1). Relevance to the query is PRIMARY.
@@ -467,7 +543,7 @@ JSON Output:`;
       }
     });
 
-    const finalResults = validResults
+    const finalResults = resultsToRank
       .map((originalResult, index) => {
         const rerankInfo = rankedItemsMap.get(index);
         const rerankScore = rerankInfo ? Math.min(10, Math.max(0, rerankInfo.score)) : 5;

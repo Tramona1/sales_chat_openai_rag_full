@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { standardizeApiErrorResponse } from '../../utils/errorHandling';
-import { logInfo, logError, logDebug, logApiCall } from '../../utils/logger';
+import { logInfo, logError, logDebug, logWarning, logApiCall } from '../../utils/logger';
 import { testSupabaseConnection } from '../../utils/supabaseClient';
 import { hybridSearch } from '@/utils/hybridSearch';
 
@@ -33,6 +33,60 @@ interface SearchResult {
 // Define constants for source attribution
 const MAX_CONTEXT_DOCS = 20;
 const SIMILARITY_THRESHOLD = 0.8;
+
+// Helper function to detect low-value boilerplate content
+function isLikelyBoilerplateContent(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+
+  const boilerplateIndicators = [
+    /this (website|site) (uses|stores) cookies/i,
+    /cookie (policy|notice|preferences|settings)/i,
+    /privacy (policy|notice|statement)/i,
+    /terms (of service|of use|and conditions)/i,
+    /all rights reserved/i,
+    /copyright © \d{4}/i,
+    /by (using|continuing to use|browsing) (this|our) (site|website)/i,
+    /we (use|collect) (personal information|data|cookies)/i,
+    /login|sign in|create( an)? account|forgot password/i,
+    /contact (us|form|details|information)/i,
+    /follow us on/i,
+    /share (this|on)/i,
+    /subscribe to (our|the) newsletter/i,
+    /404 (not found|error)/i,
+  ];
+
+  // Check for multiple indicators
+  let matchCount = 0;
+  for (const indicator of boilerplateIndicators) {
+    if (indicator.test(text)) {
+      matchCount++;
+      // If we find multiple matches, it's very likely boilerplate
+      if (matchCount >= 2) return true;
+    }
+  }
+
+  // Check content length - very short content is often navigation or headers
+  if (text.length < 100 && /copyright|rights reserved|privacy|terms|cookies/i.test(text)) {
+    return true;
+  }
+
+  // Check ratio of navigation/boilerplate terms to content length
+  const boilerplateTerms = ['home', 'about', 'contact', 'privacy', 'terms', 'cookies', 
+                           'login', 'sign in', 'register', 'copyright', 'all rights'];
+  let termCount = 0;
+  for (const term of boilerplateTerms) {
+    if (text.toLowerCase().includes(term)) {
+      termCount++;
+    }
+  }
+
+  // If more than 25% of the text consists of boilerplate terms, it's likely boilerplate
+  if (termCount > 3 && text.length < termCount * 50) {
+    return true;
+  }
+
+  return false;
+}
 
 // Function to handle the API request
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -116,9 +170,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const scoreB = typeof b.score === 'number' ? b.score : 0;
         return scoreB - scoreA;
       })
+      // Filter out boilerplate content
+      .filter(doc => {
+        const isBoilerplate = isLikelyBoilerplateContent(doc.text);
+        if (isBoilerplate) {
+          logInfo(`Filtered out boilerplate content: "${doc.text.substring(0, 100)}..."`);
+        }
+        return !isBoilerplate;
+      })
       .slice(0, MAX_CONTEXT_DOCS);
 
     logInfo(`Selected ${retrievedDocuments.length} most relevant documents as context`);
+    
+    // Check if we have any quality content or if all results were filtered
+    const hasQualityContent = retrievedDocuments.length > 0;
+    
+    // If no quality content was found, prepare a fallback response
+    if (!hasQualityContent) {
+      logWarning(`No quality content found for query: "${userMessage}"`);
+      return res.status(200).json({
+        completion: "I'm sorry, but I don't have specific information about that in my knowledge base. Could you try rephrasing your question or asking about a different aspect of Workstream's products or services?",
+        sources: [],
+        model,
+        noQualityContentFound: true
+      });
+    }
 
     // Format documents for context
     const contextString = retrievedDocuments.map((doc, index) => {

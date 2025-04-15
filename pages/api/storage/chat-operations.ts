@@ -4,6 +4,9 @@
  * This endpoint provides direct access to chat storage operations without authentication.
  * It's used for essential chat functionality and should have appropriate rate limiting
  * in a production environment.
+ * 
+ * IMPORTANT: This API has no authentication by design to avoid Vercel SSO issues.
+ * In a production environment, this should be secured.
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
@@ -298,95 +301,114 @@ async function deleteChatSession(sessionId: string): Promise<boolean> {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Set CORS headers to allow access from any origin
+  // Add CORS headers - expanded for better compatibility
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   
-  // Handle preflight OPTIONS request
+  // Handle OPTIONS request for CORS preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
+  // NO AUTHENTICATION: This endpoint deliberately does not use authentication
+  // to avoid 401/404 errors in the Vercel environment
+  
   try {
-    // GET requests for retrieving sessions
-    if (req.method === 'GET') {
-      const { id, type } = req.query;
-      
-      // Get a specific session by ID
-      if (id && typeof id === 'string') {
-        const session = await getChatSession(id);
+    // Extract operation type and parameters from the request
+    const { operation } = req.query;
+    
+    switch (operation) {
+      case 'save':
+        if (req.method !== 'POST') {
+          return res.status(405).json({ error: 'Method Not Allowed' });
+        }
         
+        const sessionData = req.body;
+        const sessionId = await saveChatSession(sessionData);
+        return res.status(200).json({ id: sessionId });
+        
+      case 'get':
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method Not Allowed' });
+        }
+        
+        const { id } = req.query;
+        if (!id || typeof id !== 'string') {
+          return res.status(400).json({ error: 'Session ID is required' });
+        }
+        
+        const session = await getChatSession(id);
         if (!session) {
           return res.status(404).json({ error: 'Session not found' });
         }
         
         return res.status(200).json(session);
-      }
-      
-      // Get sessions by type
-      if (type && (type === 'company' || type === 'general')) {
-        const sessions = await getSessionsByType(type);
+        
+      case 'update':
+        if (req.method !== 'PUT') {
+          return res.status(405).json({ error: 'Method Not Allowed' });
+        }
+        
+        const updateId = req.query.id as string;
+        if (!updateId) {
+          return res.status(400).json({ error: 'Session ID is required' });
+        }
+        
+        const updates = req.body;
+        const success = await updateChatSession(updateId, updates);
+        
+        if (!success) {
+          return res.status(404).json({ error: 'Session not found or update failed' });
+        }
+        
+        return res.status(200).json({ success: true });
+        
+      case 'list':
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method Not Allowed' });
+        }
+        
+        const sessions = await listChatSessions();
         return res.status(200).json({ sessions });
-      }
-      
-      // List all sessions
-      const sessions = await listChatSessions();
-      return res.status(200).json({ sessions });
+        
+      case 'list-by-type':
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method Not Allowed' });
+        }
+        
+        const { type } = req.query;
+        if (!type || (type !== 'company' && type !== 'general')) {
+          return res.status(400).json({ error: 'Valid session type (company or general) is required' });
+        }
+        
+        const typedSessions = await getSessionsByType(type as 'company' | 'general');
+        return res.status(200).json({ sessions: typedSessions });
+        
+      case 'delete':
+        if (req.method !== 'DELETE') {
+          return res.status(405).json({ error: 'Method Not Allowed' });
+        }
+        
+        const deleteId = req.query.id as string;
+        if (!deleteId) {
+          return res.status(400).json({ error: 'Session ID is required' });
+        }
+        
+        const deleteSuccess = await deleteChatSession(deleteId);
+        
+        if (!deleteSuccess) {
+          return res.status(404).json({ error: 'Session not found or delete failed' });
+        }
+        
+        return res.status(200).json({ success: true });
+        
+      default:
+        return res.status(400).json({ error: 'Invalid operation' });
     }
-    
-    // POST request for creating new session
-    if (req.method === 'POST') {
-      const sessionData = req.body;
-      
-      // Validate required fields
-      if (!sessionData.title || !sessionData.sessionType || !sessionData.messages) {
-        return res.status(400).json({ error: 'Missing required fields: title, sessionType, or messages' });
-      }
-      
-      const id = await saveChatSession(sessionData);
-      return res.status(201).json({ id, success: true });
-    }
-    
-    // PUT request for updating session
-    if (req.method === 'PUT') {
-      const { id, ...updates } = req.body;
-      
-      if (!id) {
-        return res.status(400).json({ error: 'Missing session ID' });
-      }
-      
-      const success = await updateChatSession(id, updates);
-      
-      if (!success) {
-        return res.status(404).json({ error: 'Session not found or update failed' });
-      }
-      
-      return res.status(200).json({ success: true });
-    }
-    
-    // DELETE request for removing a session
-    if (req.method === 'DELETE') {
-      const { id } = req.query;
-      
-      if (!id || typeof id !== 'string') {
-        return res.status(400).json({ error: 'Missing session ID' });
-      }
-      
-      const success = await deleteChatSession(id);
-      
-      if (!success) {
-        return res.status(404).json({ error: 'Session not found or delete failed' });
-      }
-      
-      return res.status(200).json({ success: true });
-    }
-    
-    // Method not allowed
-    res.setHeader('Allow', ['GET', 'POST', 'PUT', 'DELETE']);
-    return res.status(405).json({ error: `Method ${req.method} not allowed` });
   } catch (error) {
-    logError('Error in chat operations API handler', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('Error in chat operations API:', error);
+    return res.status(500).json({ error: 'Internal Server Error', details: error instanceof Error ? error.message : 'Unknown error' });
   }
 } 

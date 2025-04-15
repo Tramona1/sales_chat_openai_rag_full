@@ -314,6 +314,12 @@ IMPORTANT INSTRUCTIONS:
 - For questions about specific features or capabilities, focus on information from documents with appropriate feature or technical categories.
 - Pay attention to pain points and value propositions in the context when answering sales-related questions.
 - Extract and present all relevant factual details found, especially for specific queries about people, features, or technical capabilities.
+
+FOLLOW-UP QUESTION HANDLING:
+- When responding to follow-up questions, maintain continuity with previous responses in the conversation context.
+- If the user refers to information from previous messages (using pronouns like "they", "it", "this", etc.), reference the appropriate content from the conversation history to ensure your response is coherent.
+- For incomplete or ambiguous follow-up questions, try to understand the intent based on the conversation history before answering.
+- If you cannot determine what a follow-up question refers to, politely ask for clarification rather than making assumptions.
 `;
 
     // Prepare context from search results with enhanced metadata
@@ -498,15 +504,28 @@ export async function generateAnswerWithVisualContext(
     return "Analyzing visual content is currently under development. Please ask about the text content.";
 }
 
-// +++ Ensure formatConversationHistory is correctly defined +++
+// +++ Enhance formatConversationHistory with clearer formatting and better context handling +++
 function formatConversationHistory(history: string | Array<{role: string; content: string}> | undefined): string {
   if (!history) return '';
+  
   if (typeof history === 'string') return history.trim();
+  
   if (Array.isArray(history)) {
-    return history.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n');
+    // Skip the initial greeting message if it exists (common pattern in many implementations)
+    const startIndex = history.length > 0 && 
+                       history[0].role === 'assistant' && 
+                       history[0].content.includes('Welcome') ? 1 : 0;
+    
+    // Format the conversation in a way that's clearer for the model to understand
+    return history.slice(startIndex).map((msg, index) => {
+      const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
+      // Adding message numbers helps the model understand the flow of conversation
+      return `[Message ${index + 1}] ${roleLabel}: ${msg.content}`;
+    }).join('\n\n');
   }
+  
   return '';
-} 
+}
 
 // ... (Keep other helpers like formatVisualType, etc. ONLY IF THEY ARE USED by the actual visual logic when implemented) ...
 // Otherwise, they can be removed if generateAnswerWithVisualContext remains a placeholder.

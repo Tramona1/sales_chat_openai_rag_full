@@ -53,12 +53,9 @@ export function recordMetric(
   success: boolean, 
   metadata: any = {}
 ): void {
-  // Simple console.log only implementation - no filesystem access
-  // This avoids any filesystem-related errors in serverless environments
-  console.log(`[METRIC] ${category}.${name}: ${duration}ms, success: ${success}`, metadata);
-  
-  // In a production environment, we would send metrics to an external service
-  // For now, we just log to the console and do nothing else
+  // SERVERLESS SAFE: Only use console.log - no filesystem operations
+  // This is critical for Vercel serverless functions which have read-only filesystems
+  console.log(`[METRIC] ${category}.${name}: ${duration}ms, success: ${success}`, JSON.stringify(metadata));
 }
 
 /**
