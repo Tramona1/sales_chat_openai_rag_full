@@ -53,60 +53,12 @@ export function recordMetric(
   success: boolean, 
   metadata: any = {}
 ): void {
-  // Always log the metric for development purposes
+  // Simple console.log only implementation - no filesystem access
+  // This avoids any filesystem-related errors in serverless environments
   console.log(`[METRIC] ${category}.${name}: ${duration}ms, success: ${success}`, metadata);
   
-  // Skip all filesystem operations in any production/Vercel/cloud environment
-  // This is a safety check to prevent errors in serverless environments
-  if (
-    process.env.VERCEL || 
-    process.env.VERCEL_URL || 
-    process.env.NODE_ENV === 'production' ||
-    process.env.NEXT_PUBLIC_VERCEL_ENV ||
-    process.env.AWS_LAMBDA_FUNCTION_NAME // AWS Lambda detection
-  ) {
-    return; // Exit early without attempting any filesystem operations
-  }
-  
-  // The rest of this function only runs in local development
-  // Record the metric in local filesystem for development analysis
-  try {
-    // Check if we're in a browser environment (metrics should only be recorded server-side)
-    if (typeof window !== 'undefined') {
-      return;
-    }
-    
-    // Safe dynamic imports to prevent bundling issues
-    const importFs = () => {
-      try {
-        return require('fs');
-      } catch (e) {
-        console.error('[METRICS] Unable to import fs module', e);
-        return null;
-      }
-    };
-    
-    const importPath = () => {
-      try {
-        return require('path');
-      } catch (e) {
-        console.error('[METRICS] Unable to import path module', e);
-        return null;
-      }
-    };
-    
-    const fs = importFs();
-    const path = importPath();
-    
-    if (!fs || !path) {
-      return; // Exit if we couldn't import required modules
-    }
-    
-    // Just log to console in development
-    // This is where we would persist metrics to a database in production
-  } catch (error) {
-    console.error('[ERROR] Failed to process metric:', error);
-  }
+  // In a production environment, we would send metrics to an external service
+  // For now, we just log to the console and do nothing else
 }
 
 /**

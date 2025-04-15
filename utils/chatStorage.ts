@@ -233,21 +233,47 @@ export async function updateChatSession(
   updates: Partial<Omit<StoredChatSession, 'id' | 'createdAt' | 'updatedAt'>>
 ): Promise<boolean> {
   try {
-    // If Supabase is enabled, use that
-    if (useSupabase) {
-      return await supabaseChatStorage.updateChatSession(sessionId, updates);
+    // Always try to use Supabase in production environments
+    if (useSupabase || process.env.VERCEL || process.env.VERCEL_URL) {
+      try {
+        return await supabaseChatStorage.updateChatSession(sessionId, updates);
+      } catch (supabaseError) {
+        logError('Failed to update chat session via Supabase, falling back', supabaseError);
+        // Fall through to alternative implementation
+      }
     }
     
-    // Otherwise use file-based storage via API
-    const baseUrl = getBaseUrl();
+    // Browser-based fallback using localStorage (only works client-side)
+    if (typeof window !== 'undefined') {
+      try {
+        // Get existing sessions from localStorage
+        const sessionsJson = localStorage.getItem('chatSessions');
+        const sessions = sessionsJson ? JSON.parse(sessionsJson) : {};
+        
+        // Update the session if it exists
+        if (sessions[sessionId]) {
+          const updatedSession = { ...sessions[sessionId], ...updates, updatedAt: new Date().toISOString() };
+          sessions[sessionId] = updatedSession;
+          localStorage.setItem('chatSessions', JSON.stringify(sessions));
+          return true;
+        }
+      } catch (localStorageError) {
+        logError('Failed to update chat session in localStorage', localStorageError);
+      }
+    }
     
-    // Use the chat-operations endpoint instead of admin endpoint to avoid auth issues
-    const response = await axios.put(
-      `${baseUrl}/api/storage/chat-operations`, 
-      { id: sessionId, ...updates }
-    );
+    // If we're here, both Supabase and localStorage failed or weren't available
+    // For development environment, try API
+    if (process.env.NODE_ENV === 'development') {
+      const baseUrl = getBaseUrl();
+      const response = await axios.put(
+        `${baseUrl}/api/storage/chat-operations`, 
+        { id: sessionId, ...updates }
+      );
+      return response.data.success;
+    }
     
-    return response.data.success;
+    return false;
   } catch (error) {
     logError('Failed to update chat session', error);
     
@@ -266,15 +292,43 @@ export async function updateChatSession(
  */
 export async function deleteChatSession(sessionId: string): Promise<boolean> {
   try {
-    // If Supabase is enabled, use that
-    if (useSupabase) {
-      return await supabaseChatStorage.deleteChatSession(sessionId);
+    // Always try to use Supabase in production environments
+    if (useSupabase || process.env.VERCEL || process.env.VERCEL_URL) {
+      try {
+        return await supabaseChatStorage.deleteChatSession(sessionId);
+      } catch (supabaseError) {
+        logError('Failed to delete chat session via Supabase, falling back', supabaseError);
+        // Fall through to alternative implementation
+      }
     }
     
-    // Otherwise use file-based storage via API
-    const baseUrl = getBaseUrl();
-    const response = await axios.delete(`${baseUrl}/api/storage/chat-operations?id=${sessionId}`);
-    return response.data.success;
+    // Browser-based fallback using localStorage (only works client-side)
+    if (typeof window !== 'undefined') {
+      try {
+        // Get existing sessions from localStorage
+        const sessionsJson = localStorage.getItem('chatSessions');
+        const sessions = sessionsJson ? JSON.parse(sessionsJson) : {};
+        
+        // Delete the session if it exists
+        if (sessions[sessionId]) {
+          delete sessions[sessionId];
+          localStorage.setItem('chatSessions', JSON.stringify(sessions));
+          return true;
+        }
+      } catch (localStorageError) {
+        logError('Failed to delete chat session from localStorage', localStorageError);
+      }
+    }
+    
+    // If we're here, both Supabase and localStorage failed or weren't available
+    // For development environment, try API
+    if (process.env.NODE_ENV === 'development') {
+      const baseUrl = getBaseUrl();
+      const response = await axios.delete(`${baseUrl}/api/storage/chat-operations?id=${sessionId}`);
+      return response.data.success;
+    }
+    
+    return false;
   } catch (error) {
     logError('Failed to delete chat session', error);
     return false;

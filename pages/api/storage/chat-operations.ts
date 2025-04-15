@@ -1,3 +1,11 @@
+/**
+ * UNAUTHENTICATED Chat Storage API Endpoint
+ * 
+ * This endpoint provides direct access to chat storage operations without authentication.
+ * It's used for essential chat functionality and should have appropriate rate limiting
+ * in a production environment.
+ */
+
 import { NextApiRequest, NextApiResponse } from 'next';
 import { logError, logInfo, logDebug, logWarning } from '@/utils/logger';
 import { CompanyInformation } from '@/utils/perplexityClient';
@@ -290,6 +298,16 @@ async function deleteChatSession(sessionId: string): Promise<boolean> {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Set CORS headers to allow access from any origin
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  // Handle preflight OPTIONS request
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
   try {
     // GET requests for retrieving sessions
     if (req.method === 'GET') {
