@@ -239,7 +239,7 @@ Answer:
       
       const result = await Promise.race([generationPromise, timeoutPromise]) as any;
       const duration = Date.now() - apiCallStartTime;
-      const responseText = result.response?.text() || '';
+      const responseText = result.response?.text();
 
       if (!responseText) {
         logApiCall('gemini', 'answer_generation', 'error', duration, 'Empty response from Gemini', { model: modelName, attempt });

@@ -513,6 +513,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             keywordWeight: 0.6 // Emphasize keywords even more for expanded queries
           });
           searchResults = expandedResults.results || [];
+          logDebug('[QueryAPI] Search results after expansion:', { type: typeof searchResults, length: Array.isArray(searchResults) ? searchResults.length : 'N/A' });
         }
         
         // If still no results, try fallback search
@@ -524,6 +525,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             score: item.score || 0.5 // Ensure score exists
           }));
           
+          logDebug('[QueryAPI] Search results after fallback search:', { type: typeof searchResults, length: Array.isArray(searchResults) ? searchResults.length : 'N/A' });
           // If even fallback failed, try with original query in case rewriting caused issues
           if (searchResults.length === 0 && queryWasRewritten) {
             logWarning(`No results from fallback search. Trying original query: "${originalQuery}"`);
@@ -532,37 +534,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               ...item,
               score: item.score || 0.5 // Ensure score exists
             }));
+            logDebug('[QueryAPI] Search results after original query fallback:', { type: typeof searchResults, length: Array.isArray(searchResults) ? searchResults.length : 'N/A' });
           }
         }
       } catch (fallbackError) {
-        logError('Error in fallback search:', fallbackError);
+        // logError('Error in fallback search:', fallbackError); // Temporarily commented out for debugging
+        console.error('[QueryAPI] Fallback search encountered an error (logging suppressed):', String(fallbackError)); // Use console.error as a safer fallback
       }
     }
     
     recordMetricSafely('search', 'hybrid_search', Date.now() - searchStartTime, searchResults.length > 0, {});
     
     // Convert search results to the SearchResultItem format
-    const processedResults: SearchResultItem[] = searchResults.map(result => ({
-      id: result.id,
-      document_id: result.document_id,
-      text: result.text || '',
-      metadata: result.metadata || {}, // Keep general metadata here
-      score: result.score || result.similarity || 0.5,
-      vectorScore: result.vectorScore,
-      keywordScore: result.keywordScore,
-      // Ensure the 'item' structure matches MultiModalSearchResult
-      item: {
-        id: result.id || '', // Keep fallback, but needs verification
+    const processedResults: SearchResultItem[] = searchResults.map((result, index) => {
+      return {
+        id: result.id,
+        document_id: result.document_id,
         text: result.text || '',
-        // Populate metadata strictly
-        metadata: {
-          category: result.metadata?.category,
-          technicalLevel: result.metadata?.technicalLevel,
-          // Spread remaining metadata to satisfy [key: string]: any
-          ...(result.metadata || {})
+        metadata: result.metadata || {}, // Keep general metadata here
+        score: result.score || result.similarity || 0.5,
+        vectorScore: result.vectorScore,
+        keywordScore: result.keywordScore,
+        // Ensure the 'item' structure matches MultiModalSearchResult
+        item: {
+          id: result.id || '', // Keep fallback, but needs verification
+          text: result.text || '',
+          // Populate metadata strictly
+          metadata: {
+            category: result.metadata?.category,
+            technicalLevel: result.metadata?.technicalLevel,
+            // Spread remaining metadata to satisfy [key: string]: any
+            ...(result.metadata || {})
+          }
         }
-      }
-    }));
+      };
+    });
 
     // Use processedResults instead of searchResults for further operations
     if (FEATURE_FLAGS.contextualReranking && useContextualRetrieval && processedResults.length > 0) {
@@ -772,6 +778,7 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
     // Standard error response
     return res.status(error.statusCode || 500).json({ 
       error: error.message || 'An error occurred while processing your query',
+      errorDetails: String(error),
       metadata: {
         timings: {
           total: Date.now() - startTime

@@ -156,7 +156,7 @@ export default function ChatPage() {
       };
 
       // Call the API to save the session
-      const response = await fetch('/api/storage/chat-operations', {
+      const response = await fetch('/api/storage/chat-operations?operation=save', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -462,7 +462,20 @@ export default function ChatPage() {
     }
     
     // Process message to get response
-    await processMessageForResponse(messageText, updatedMessages);
+    const botResponse = await processMessageForResponse(messageText, updatedMessages);
+
+    // Add bot's message to the state
+    if (botResponse && botResponse.content) {
+      const botMessage: Message = {
+        id: `${Date.now()}_bot`,
+        role: 'bot',
+        content: botResponse.content,
+        timestamp: new Date(),
+        // Potentially add sources/citations if needed from botResponse
+      };
+      // Update state *again* to include the bot message
+      setMessages(prevMessages => [...prevMessages, botMessage]);
+    }
   };
   
   // Handle feedback on assistant messages
