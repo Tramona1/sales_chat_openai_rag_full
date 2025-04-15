@@ -235,6 +235,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Query parameter is required' });
     }
 
+    // Special handling for basic greetings to avoid complex processing
+    const basicGreetings = ['hello', 'hi', 'hey', 'greetings', 'good morning', 'good afternoon', 'good evening'];
+    if (basicGreetings.includes(originalQuery.toLowerCase().trim())) {
+      logInfo(`Detected basic greeting "${originalQuery}", using fast path response`);
+      const greetingResponse = {
+        query: originalQuery,
+        answer: "Hello! I'm the Workstream Knowledge Assistant. I can help you with information about our HR, Payroll, and Hiring platform for hourly workers. What would you like to know?",
+        resultCount: 0,
+        metadata: {
+          processingTimeMs: 50, // Nominal processing time
+          isGreeting: true,
+          usedFastPath: true
+        }
+      };
+      
+      return res.status(200).json(greetingResponse);
+    }
+
     logInfo(`Processing query: "${originalQuery.substring(0, 100)}${originalQuery.length > 100 ? '...' : ''}"`);
     
     // Add logging about conversation history
@@ -538,8 +556,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       } catch (fallbackError) {
-        // logError('Error in fallback search:', fallbackError); // Temporarily commented out for debugging
-        console.error('[QueryAPI] Fallback search encountered an error (logging suppressed):', String(fallbackError)); // Use console.error as a safer fallback
+        logError('Error in fallback search:', fallbackError); // Uncommented for debugging
+        console.error('[QueryAPI] Fallback search encountered an error:', String(fallbackError)); 
       }
     }
     

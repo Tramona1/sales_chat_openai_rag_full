@@ -290,17 +290,27 @@ export async function generateAnswer(
   const startTime = Date.now();
   let contextText = '';
   try {
-    // Handle simple conversational queries first
-    if (isBasicConversational(query)) {
-      return handleConversationalQuery(query, options.conversationHistory);
-    }
+    // Set a default timeout if not provided (25 seconds)
+    const timeoutMs = options.timeout || 25000;
+    
+    // Create a promise that rejects after the timeout
+    const timeoutPromise = new Promise<string>((_, reject) => {
+      setTimeout(() => reject(new Error(`Answer generation timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+    
+    // Create the actual answer generation promise
+    const answerPromise = (async () => {
+      // Handle simple conversational queries first
+      if (isBasicConversational(query)) {
+        return handleConversationalQuery(query, options.conversationHistory);
+      }
 
-    // Prepare the context
-    const includedSources: string[] = [];
-    let totalContextTokens = 0;
+      // Prepare the context
+      const includedSources: string[] = [];
+      let totalContextTokens = 0;
 
-    // Default system prompt with stronger directives added
-    const baseSystemPrompt = options.systemPrompt || `
+      // Default system prompt with stronger directives added
+      const baseSystemPrompt = options.systemPrompt || `
 You are a helpful, professional AI assistant supporting the sales team at Workstream, a company providing HR, Payroll, and Hiring solutions for the hourly workforce.
 Your job is to assist with any sales-related questions—ranging from product features, pricing, onboarding, customer types, or processes—based on our internal knowledge.
 Stay concise, helpful, and accurate. Use a tone that reflects Workstream's brand: confident, supportive, and human.
@@ -322,112 +332,126 @@ FOLLOW-UP QUESTION HANDLING:
 - If you cannot determine what a follow-up question refers to, politely ask for clarification rather than making assumptions.
 `;
 
-    // Prepare context from search results with enhanced metadata
-    const maxSources = options.maxSourcesInAnswer || 5;
-    searchResults.slice(0, maxSources).forEach((result, index) => {
-      // Basic context text
-      contextText += `Source [${index + 1}]: ${result.source || 'Unknown'}\n`;
-      
-      // Add enhanced metadata if available
-      const metadata = result.metadata || {};
-      if (metadata) {
-        contextText += 'Metadata: ';
+      // Prepare context from search results with enhanced metadata
+      const maxSources = options.maxSourcesInAnswer || 5;
+      searchResults.slice(0, maxSources).forEach((result, index) => {
+        // Basic context text
+        contextText += `Source [${index + 1}]: ${result.source || 'Unknown'}\n`;
         
-        // Add primary and secondary categories
-        if (metadata.primaryCategory) {
-          contextText += `[Primary Category: ${metadata.primaryCategory}] `;
-        }
-        
-        if (metadata.secondaryCategories && metadata.secondaryCategories.length > 0) {
-          contextText += `[Secondary Categories: ${Array.isArray(metadata.secondaryCategories) ? metadata.secondaryCategories.join(', ') : metadata.secondaryCategories}] `;
-        }
-        
-        // Add industry categories if available
-        if (metadata.industryCategories && metadata.industryCategories.length > 0) {
-          contextText += `[Industry: ${Array.isArray(metadata.industryCategories) ? metadata.industryCategories.join(', ') : metadata.industryCategories}] `;
-        }
-        
-        // Add technical features if available
-        if (metadata.technicalFeatureCategories && metadata.technicalFeatureCategories.length > 0) {
-          contextText += `[Technical Features: ${Array.isArray(metadata.technicalFeatureCategories) ? metadata.technicalFeatureCategories.join(', ') : metadata.technicalFeatureCategories}] `;
-        }
-        
-        // Add pain points if available
-        if (metadata.painPointCategories && metadata.painPointCategories.length > 0) {
-          contextText += `[Pain Points: ${Array.isArray(metadata.painPointCategories) ? metadata.painPointCategories.join(', ') : metadata.painPointCategories}] `;
-        }
-        
-        // Add value propositions if available
-        if (metadata.valuePropositionCategories && metadata.valuePropositionCategories.length > 0) {
-          contextText += `[Value Propositions: ${Array.isArray(metadata.valuePropositionCategories) ? metadata.valuePropositionCategories.join(', ') : metadata.valuePropositionCategories}] `;
-        }
-        
-        // Add document-level entities if available for leadership questions
-        if (metadata.docEntities && metadata.docEntities.length > 0) {
-          const peopleEntities = metadata.docEntities.filter((e: {type?: string; text?: string}) => 
-            e.type?.toLowerCase() === 'person' || 
-            e.type?.toLowerCase() === 'people'
-          );
+        // Add enhanced metadata if available
+        const metadata = result.metadata || {};
+        if (metadata) {
+          contextText += 'Metadata: ';
           
-          if (peopleEntities.length > 0) {
-            contextText += `[People Mentioned: ${peopleEntities.map((p: {text?: string}) => p.text || '').join(', ')}] `;
+          // Add primary and secondary categories
+          if (metadata.primaryCategory) {
+            contextText += `[Primary Category: ${metadata.primaryCategory}] `;
           }
+          
+          if (metadata.secondaryCategories && metadata.secondaryCategories.length > 0) {
+            contextText += `[Secondary Categories: ${Array.isArray(metadata.secondaryCategories) ? metadata.secondaryCategories.join(', ') : metadata.secondaryCategories}] `;
+          }
+          
+          // Add industry categories if available
+          if (metadata.industryCategories && metadata.industryCategories.length > 0) {
+            contextText += `[Industry: ${Array.isArray(metadata.industryCategories) ? metadata.industryCategories.join(', ') : metadata.industryCategories}] `;
+          }
+          
+          // Add technical features if available
+          if (metadata.technicalFeatureCategories && metadata.technicalFeatureCategories.length > 0) {
+            contextText += `[Technical Features: ${Array.isArray(metadata.technicalFeatureCategories) ? metadata.technicalFeatureCategories.join(', ') : metadata.technicalFeatureCategories}] `;
+          }
+          
+          // Add pain points if available
+          if (metadata.painPointCategories && metadata.painPointCategories.length > 0) {
+            contextText += `[Pain Points: ${Array.isArray(metadata.painPointCategories) ? metadata.painPointCategories.join(', ') : metadata.painPointCategories}] `;
+          }
+          
+          // Add value propositions if available
+          if (metadata.valuePropositionCategories && metadata.valuePropositionCategories.length > 0) {
+            contextText += `[Value Propositions: ${Array.isArray(metadata.valuePropositionCategories) ? metadata.valuePropositionCategories.join(', ') : metadata.valuePropositionCategories}] `;
+          }
+          
+          // Add document-level entities if available for leadership questions
+          if (metadata.docEntities && metadata.docEntities.length > 0) {
+            const peopleEntities = metadata.docEntities.filter((e: {type?: string; text?: string}) => 
+              e.type?.toLowerCase() === 'person' || 
+              e.type?.toLowerCase() === 'people'
+            );
+            
+            if (peopleEntities.length > 0) {
+              contextText += `[People Mentioned: ${peopleEntities.map((p: {text?: string}) => p.text || '').join(', ')}] `;
+            }
+          }
+          
+          contextText += '\n';
         }
         
-        contextText += '\n';
+        // Add content text
+        contextText += `Content: ${result.text}\n\n`;
+        
+        if (result.source) {
+          includedSources.push(result.source);
+        }
+      });
+      contextText = contextText.trim();
+
+      // Estimate token count for the combined query + context
+      const promptEstimate = estimateTokenCount(query + contextText);
+      logInfo(`Estimated prompt tokens (query + context): ${promptEstimate}`);
+
+      // Check if context needs summarization (Using Gemini 2.0 Flash's expanded context window of 1M tokens)
+      // We use a conservative limit of 70000 tokens to leave space for query, prompt, and response
+      const MAX_GEMINI_CONTEXT_TOKENS = 70000; 
+      if (promptEstimate > MAX_GEMINI_CONTEXT_TOKENS) {
+        logWarning(`Context estimate (${promptEstimate} tokens) exceeds limit (${MAX_GEMINI_CONTEXT_TOKENS}). Summarizing...`);
+        contextText = await summarizeContext(query, contextText);
+        logInfo(`Summarized context token estimate: ${estimateTokenCount(contextText)}`);
       }
+
+      // *** Generate the final answer using the prepared context ***
+      const finalAnswer = await generateGeminiAnswer(
+        query,
+        contextText,
+        {
+          systemPrompt: baseSystemPrompt, // Use the enhanced prompt
+          includeSourceCitations: options.includeSourceCitations,
+          conversationHistory: options.conversationHistory,
+          model: options.model,
+          timeout: options.timeout
+        }
+      );
+
+      const duration = Date.now() - startTime;
       
-      // Add content text
-      contextText += `Content: ${result.text}\n\n`;
-      
-      if (result.source) {
-        includedSources.push(result.source);
-      }
-    });
-    contextText = contextText.trim();
-
-    // Estimate token count for the combined query + context
-    const promptEstimate = estimateTokenCount(query + contextText);
-    logInfo(`Estimated prompt tokens (query + context): ${promptEstimate}`);
-
-    // Check if context needs summarization (Using Gemini 2.0 Flash's expanded context window of 1M tokens)
-    // We use a conservative limit of 70000 tokens to leave space for query, prompt, and response
-    const MAX_GEMINI_CONTEXT_TOKENS = 70000; 
-    if (promptEstimate > MAX_GEMINI_CONTEXT_TOKENS) {
-      logWarning(`Context estimate (${promptEstimate} tokens) exceeds limit (${MAX_GEMINI_CONTEXT_TOKENS}). Summarizing...`);
-      contextText = await summarizeContext(query, contextText);
-      logInfo(`Summarized context token estimate: ${estimateTokenCount(contextText)}`);
-    }
-
-    // *** Generate the final answer using the prepared context ***
-    const finalAnswer = await generateGeminiAnswer(
-      query,
-      contextText,
-      {
-        systemPrompt: baseSystemPrompt, // Use the enhanced prompt
-        includeSourceCitations: options.includeSourceCitations,
-        conversationHistory: options.conversationHistory,
-        model: options.model,
-        timeout: options.timeout
-      }
-    );
-
-    const duration = Date.now() - startTime;
+      // Record metric on success (Restore metadata argument despite linter warning)
+      recordMetric('answerGeneration', 'gemini', duration, true, {
+          contextLength: contextText.length,
+          resultCount: searchResults.length,
+          // Add other relevant metadata if needed from options or answer
+      });
+      return finalAnswer;
+    })();
     
-    // Record metric on success (Restore metadata argument despite linter warning)
-    recordMetric('answerGeneration', 'gemini', duration, true, {
-        contextLength: contextText.length,
-        resultCount: searchResults.length,
-        // Add other relevant metadata if needed from options or answer
-    });
-    return finalAnswer;
+    // Race the answer generation against the timeout
+    return await Promise.race([answerPromise, timeoutPromise]);
+    
   } catch (error) {
     logError('Error in generateAnswer function', error);
-    // Record metric on failure (Restore metadata argument despite linter warning)
+    
+    // Special handling for timeout errors
+    if (error instanceof Error && error.message.includes('timed out')) {
+      logError('Answer generation timed out', { 
+        query: query.substring(0, 100), 
+        elapsedTime: Date.now() - startTime 
+      });
+      return "I'm sorry, but it's taking longer than expected to generate a response. Please try asking a more specific question or try again later.";
+    }
+    
+    // Record metric on failure
     recordMetric('answerGeneration', 'gemini', Date.now() - startTime, false, {
         error: error instanceof Error ? error.message : 'Unknown error',
-        contextLength: contextText.length, // contextText might be empty if error happened early
-        // Add other relevant metadata if needed
+        contextLength: contextText.length,
     });
     return "An unexpected error occurred while processing your request.";
   }

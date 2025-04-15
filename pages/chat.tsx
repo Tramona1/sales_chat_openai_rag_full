@@ -333,13 +333,24 @@ export default function ChatPage() {
         sessionId: sessionId
       });
 
-      const response = await fetch('/api/query', {
+      // Create a promise that rejects after timeout
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Request timed out after 30 seconds')), 30000);
+      });
+
+      // Create the actual fetch promise
+      const fetchPromise = fetch('/api/query', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
       });
+
+      // Race the fetch against the timeout
+      const response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+
+      console.log("API response status:", response.status, response.statusText);
 
       if (response.status === 404) {
         console.error("API endpoint not found");
@@ -351,6 +362,29 @@ export default function ChatPage() {
       }
 
       const data = await response.json();
+      console.log("API response data:", data);
+
+      // More robust response handling - check all possible response formats
+      let answer = '';
+      if (data.answer) {
+        // Standard format
+        answer = data.answer;
+      } else if (data.response) {
+        // Alternative format sometimes used
+        answer = data.response;
+      } else if (data.completion) {
+        // Format used by some API endpoints
+        answer = data.completion;
+      } else if (data.text || data.content) {
+        // Other possible formats
+        answer = data.text || data.content;
+      } else if (typeof data === 'string') {
+        // Direct string response
+        answer = data;
+      } else {
+        console.warn("Unexpected API response format:", data);
+        answer = "I received a response but couldn't interpret it correctly. Please try again.";
+      }
 
       // Check if this was identified as a follow-up question
       const isFollowUp = data.metadata?.followUpDetected;
@@ -368,19 +402,53 @@ export default function ChatPage() {
       trackEvent('message_processed', {
         messageLength: messageText.length,
         responseTime: Date.now() - startTime,
-        hasAnswer: !!data.answer,
+        hasAnswer: !!answer,
         resultCount: data.results?.length || 0,
         isFollowUp,
         contextUsed
       });
 
       return {
-        content: data.answer || "I couldn't find an answer to your question.",
+        content: answer,
         citations: data.citations || [],
         sources: data.sources || []
       };
     } catch (error) {
       console.error('Error in processMessageForResponse:', error);
+      
+      // Log more detailed error information
+      if (error instanceof Error) {
+        console.error('Error details:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        });
+      }
+      
+      if (error instanceof TypeError && error.message.includes('json')) {
+        console.error('JSON parsing error - the API might be returning invalid JSON or HTML instead of JSON');
+      }
+      
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        console.error('Network error - the API endpoint might be unavailable');
+      }
+      
+      // Check if this is a timeout error
+      const isTimeout = error instanceof Error && error.message.includes('timed out');
+      if (isTimeout) {
+        console.error('Request timed out');
+      }
+
+      // Special handling for basic greetings
+      const basicGreetings = ['hello', 'hi', 'hey', 'greetings', 'good morning', 'good afternoon', 'good evening'];
+      if (basicGreetings.includes(messageText.toLowerCase().trim())) {
+        console.log('Using fallback greeting response');
+        return {
+          content: "Hello! I'm the Workstream Knowledge Assistant. I can help you with information about our HR, Payroll, and Hiring platform for hourly workers. What would you like to know?",
+          citations: [],
+          sources: []
+        };
+      }
       
       // Determine if this is likely a follow-up question based on multiple signals
       // 1. Check conversation length (not the first message)
@@ -404,8 +472,14 @@ export default function ChatPage() {
         console.log("Likely follow-up detected:", { messageText, isNotFirstMessage, hasFollowUpIndicators, isShortQuery });
       }
       
-      // Use the same friendly error message for all errors, encouraging training
-      const errorMessage = "It looks like I don't have that information. Please train me so I can answer better next time.";
+      // Use a more helpful error message based on error type
+      let errorMessage = "I'm sorry, but I encountered an issue while processing your request.";
+      
+      if (isTimeout) {
+        errorMessage = "I'm sorry, but it's taking longer than expected to generate a response. Please try asking a more specific question.";
+      } else {
+        errorMessage = "It looks like I don't have that information. Please try asking a different question about Workstream's HR, Payroll, or Hiring solutions.";
+      }
       
       return {
         content: errorMessage,
@@ -461,6 +535,7 @@ export default function ChatPage() {
     
     // Process message to get response
     const botResponse = await processMessageForResponse(messageText, updatedMessages);
+    console.log("Received bot response:", botResponse);
 
     // Add bot's message to the state
     if (botResponse && botResponse.content) {
@@ -471,8 +546,11 @@ export default function ChatPage() {
         timestamp: new Date(),
         // Potentially add sources/citations if needed from botResponse
       };
+      console.log("Adding bot message to state:", botMessage);
       // Update state *again* to include the bot message
       setMessages(prevMessages => [...prevMessages, botMessage]);
+    } else {
+      console.error("No content in bot response:", botResponse);
     }
   };
   
@@ -541,6 +619,20 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages]);
 
+  // Add debug logging for message state changes
+  useEffect(() => {
+    console.log("Messages state updated:", messages.length, "messages");
+    // Log the last message if there is one
+    if (messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      console.log("Last message:", {
+        role: lastMsg.role, 
+        contentLength: lastMsg.content.length,
+        contentPreview: lastMsg.content.substring(0, 50) + (lastMsg.content.length > 50 ? '...' : '')
+      });
+    }
+  }, [messages]);
+  
   const scrollToBottom = () => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -566,14 +658,21 @@ export default function ChatPage() {
 
   // Reset the chat function
   const resetChat = () => {
-    // Save the current session before resetting
+    // Save the current session before resetting (only if we have more than just welcome message)
     if (messages.length > 1) {
-      if (sessionId) {
-        updateChatSession();
-      } else {
-        saveChatSession();
+      try {
+        if (sessionId) {
+          updateChatSession();
+        } else {
+          saveChatSession();
+        }
+      } catch (error) {
+        console.error("Error saving session during reset:", error);
+        // Continue with reset even if saving fails
       }
     }
+    
+    console.log("Resetting chat session");
     
     // Reset state
     setMessages([{
@@ -583,6 +682,11 @@ export default function ChatPage() {
       timestamp: new Date()
     }]);
     setSessionId(null);
+    
+    // Force a reload if requested (added for debugging)
+    if (process.env.NODE_ENV === 'development') {
+      console.log("Development mode: You can reload the page if the chat gets stuck");
+    }
   };
 
   return (
