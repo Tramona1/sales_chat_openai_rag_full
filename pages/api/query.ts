@@ -207,9 +207,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Generate a request ID for tracking this request through logs
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  console.log(`[${requestId}] API REQUEST START: /api/query`);
+
   // Define a local safe version of the recordMetric function to avoid filesystem issues
   const recordMetricSafely = (category: string, name: string, duration: number, success: boolean, metadata: any = {}) => {
-    console.log(`[METRIC] ${category}.${name}: ${duration}ms, success: ${success}`, JSON.stringify(metadata));
+    console.log(`[${requestId}] [METRIC] ${category}.${name}: ${duration}ms, success: ${success}`, JSON.stringify(metadata));
   };
 
   // Make sure any logging/metrics functions don't try to access the filesystem
@@ -231,13 +235,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       conversationHistory = [] 
     } = req.body;
 
+    console.log(`[${requestId}] Query parameters received:`, {
+      queryLength: originalQuery?.length || 0,
+      sessionId: sessionId || 'none',
+      historyLength: Array.isArray(conversationHistory) ? conversationHistory.length : 0
+    });
+
     if (!originalQuery) {
+      console.log(`[${requestId}] Error: Missing query parameter`);
       return res.status(400).json({ error: 'Query parameter is required' });
     }
 
     // Special handling for basic greetings to avoid complex processing
     const basicGreetings = ['hello', 'hi', 'hey', 'greetings', 'good morning', 'good afternoon', 'good evening'];
     if (basicGreetings.includes(originalQuery.toLowerCase().trim())) {
+      console.log(`[${requestId}] Detected basic greeting "${originalQuery}", using fast path response`);
       logInfo(`Detected basic greeting "${originalQuery}", using fast path response`);
       const greetingResponse = {
         query: originalQuery,
@@ -250,6 +262,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       };
       
+      console.log(`[${requestId}] API REQUEST COMPLETE: Fast path greeting response`);
       return res.status(200).json(greetingResponse);
     }
 
@@ -702,6 +715,9 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
       }
     }
     
+    // At the end of the try block, before the final response:
+    console.log(`[${requestId}] Answer generation complete. Answer length: ${answer?.length || 0}`);
+    
     // Prepare and return the response
     success = true;
     const responseData = {
@@ -732,9 +748,11 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
       };
     }
 
+    console.log(`[${requestId}] API REQUEST COMPLETE: Success - Returning ${processedResults.length} results`);
+    
     // Log metrics without filesystem operations
     const duration = metricsTimer();
-    console.log(`[METRICS] Query processing completed in ${duration}ms`, {
+    console.log(`[${requestId}] [METRICS] Query processing completed in ${duration}ms`, {
       query: originalQuery,
       resultCount: processedResults.length,
       searchMode,
@@ -745,10 +763,16 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
     return res.status(200).json(responseData);
   } catch (error: any) {
     const duration = metricsTimer();
-    console.error('[ERROR] Query processing failed:', error);
+    console.error(`[${requestId}] [ERROR] Query processing failed:`, error);
     
     // Get query and conversationHistory from req.body to ensure they're in scope
     const { query: originalQuery = "", conversationHistory = [] } = req.body || {};
+    
+    console.log(`[${requestId}] API REQUEST FAILED after ${Date.now() - startTime}ms`, {
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      errorType: error.constructor ? error.constructor.name : typeof error,
+      statusCode: error.statusCode || 500
+    });
     
     // Check if this is likely a follow-up from the error context
     // We need to recompute this since the previous isLikelyFollowUp variable is out of scope
@@ -757,7 +781,7 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
                               (originalQuery.length < 20 || /^(who|what|when|where|why|how|which|they|them|it|this|that)/i.test(originalQuery));
     
     // Log error metrics without filesystem operations
-    console.log(`[METRICS] Query processing failed in ${duration}ms`, {
+    console.log(`[${requestId}] [METRICS] Query processing failed in ${duration}ms`, {
       error: error instanceof Error ? error.message : 'Unknown error'
     });
     
@@ -792,6 +816,9 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
         // Continue to the standard error response if fallback fails
       }
     }
+    
+    // Add this at the end of the catch block:
+    console.log(`[${requestId}] API REQUEST COMPLETE: Error response sent`);
     
     // Standard error response
     return res.status(error.statusCode || 500).json({ 

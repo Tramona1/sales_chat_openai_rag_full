@@ -304,6 +304,8 @@ export default function ChatPage() {
   // Helper function to process a message and get AI response
   const processMessageForResponse = async (messageText: string, currentMessages: Message[]) => {
     const startTime = Date.now();
+    const clientRequestId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    console.log(`[${clientRequestId}] BEGIN processMessageForResponse for: "${messageText.substring(0, 30)}${messageText.length > 30 ? '...' : ''}"`);
     
     try {
       setIsLoading(true);
@@ -326,7 +328,7 @@ export default function ChatPage() {
       };
 
       // Log the request for debugging
-      console.log("Sending request with history:", {
+      console.log(`[${clientRequestId}] Sending request with history:`, {
         messageCount: conversationHistory.length,
         lastUserMessage: conversationHistory.length > 0 ? 
           conversationHistory[conversationHistory.length - 1]?.content?.substring(0, 50) + "..." : "none",
@@ -335,7 +337,10 @@ export default function ChatPage() {
 
       // Create a promise that rejects after timeout
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Request timed out after 30 seconds')), 30000);
+        setTimeout(() => {
+          console.log(`[${clientRequestId}] Request timed out after 30 seconds`);
+          reject(new Error('Request timed out after 30 seconds'));
+        }, 30000);
       });
 
       // Create the actual fetch promise
@@ -347,13 +352,15 @@ export default function ChatPage() {
         body: JSON.stringify(requestBody),
       });
 
+      console.log(`[${clientRequestId}] Fetch request sent to /api/query at ${new Date().toISOString()}`);
+
       // Race the fetch against the timeout
       const response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
 
-      console.log("API response status:", response.status, response.statusText);
+      console.log(`[${clientRequestId}] API response received after ${Date.now() - startTime}ms - Status:`, response.status, response.statusText);
 
       if (response.status === 404) {
-        console.error("API endpoint not found");
+        console.error(`[${clientRequestId}] API endpoint not found`);
         return {
           content: "I'm having trouble connecting to the knowledge base. Please try again in a moment.",
           citations: [],
@@ -362,28 +369,69 @@ export default function ChatPage() {
       }
 
       const data = await response.json();
-      console.log("API response data:", data);
+      console.log(`[${clientRequestId}] API response parsed:`, {
+        hasAnswer: !!data.answer,
+        answerLength: data.answer?.length || 0,
+        resultCount: data.resultCount || 0,
+        metadataKeys: data.metadata ? Object.keys(data.metadata) : []
+      });
 
       // More robust response handling - check all possible response formats
       let answer = '';
       if (data.answer) {
-        // Standard format
+        // Standard format from query.ts API
         answer = data.answer;
+        console.log(`[${clientRequestId}] Using standard 'answer' response format`);
       } else if (data.response) {
         // Alternative format sometimes used
         answer = data.response;
+        console.log(`[${clientRequestId}] Using alternative 'response' format`);
       } else if (data.completion) {
-        // Format used by some API endpoints
+        // Format used by chat.ts API endpoint
         answer = data.completion;
+        console.log(`[${clientRequestId}] Using 'completion' format from /api/chat endpoint`);
       } else if (data.text || data.content) {
         // Other possible formats
         answer = data.text || data.content;
+        console.log(`[${clientRequestId}] Using fallback text/content format`);
       } else if (typeof data === 'string') {
         // Direct string response
         answer = data;
+        console.log(`[${clientRequestId}] Using direct string response format`);
       } else {
-        console.warn("Unexpected API response format:", data);
-        answer = "I received a response but couldn't interpret it correctly. Please try again.";
+        console.warn(`[${clientRequestId}] Unexpected API response format:`, data);
+        
+        // Last resort: Try to use the chat.ts API endpoint as a fallback
+        try {
+          console.log(`[${clientRequestId}] Attempting fallback to /api/chat endpoint`);
+          
+          const chatResponse = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [
+                ...conversationHistory,
+                { role: 'user', content: messageText }
+              ],
+              model: 'gemini'
+            })
+          });
+          
+          if (chatResponse.ok) {
+            const chatData = await chatResponse.json();
+            if (chatData.completion) {
+              answer = chatData.completion;
+              console.log(`[${clientRequestId}] Successfully received response from fallback /api/chat endpoint`);
+            } else {
+              throw new Error('No completion in chat API response');
+            }
+          } else {
+            throw new Error(`Chat API returned status ${chatResponse.status}`);
+          }
+        } catch (fallbackError) {
+          console.error(`[${clientRequestId}] Fallback to /api/chat failed:`, fallbackError);
+          answer = "I received a response but couldn't interpret it correctly. Please try again.";
+        }
       }
 
       // Check if this was identified as a follow-up question
@@ -391,7 +439,7 @@ export default function ChatPage() {
       const contextUsed = data.metadata?.usedConversationContext;
       
       if (isFollowUp) {
-        console.log("Follow-up question detected", {
+        console.log(`[${clientRequestId}] Follow-up question detected`, {
           contextUsed,
           queryExpanded: data.metadata?.queryWasExpanded,
           searchFailed: data.metadata?.searchFailed
@@ -408,17 +456,19 @@ export default function ChatPage() {
         contextUsed
       });
 
+      console.log(`[${clientRequestId}] COMPLETE processMessageForResponse - Success after ${Date.now() - startTime}ms`);
+      
       return {
         content: answer,
         citations: data.citations || [],
         sources: data.sources || []
       };
     } catch (error) {
-      console.error('Error in processMessageForResponse:', error);
+      console.error(`[${clientRequestId}] Error in processMessageForResponse after ${Date.now() - startTime}ms:`, error);
       
       // Log more detailed error information
       if (error instanceof Error) {
-        console.error('Error details:', {
+        console.error(`[${clientRequestId}] Error details:`, {
           name: error.name,
           message: error.message,
           stack: error.stack
@@ -426,50 +476,28 @@ export default function ChatPage() {
       }
       
       if (error instanceof TypeError && error.message.includes('json')) {
-        console.error('JSON parsing error - the API might be returning invalid JSON or HTML instead of JSON');
+        console.error(`[${clientRequestId}] JSON parsing error - the API might be returning invalid JSON or HTML instead of JSON`);
       }
       
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        console.error('Network error - the API endpoint might be unavailable');
+        console.error(`[${clientRequestId}] Network error - the API endpoint might be unavailable`);
       }
       
       // Check if this is a timeout error
       const isTimeout = error instanceof Error && error.message.includes('timed out');
       if (isTimeout) {
-        console.error('Request timed out');
+        console.error(`[${clientRequestId}] Request timed out`);
       }
 
       // Special handling for basic greetings
       const basicGreetings = ['hello', 'hi', 'hey', 'greetings', 'good morning', 'good afternoon', 'good evening'];
       if (basicGreetings.includes(messageText.toLowerCase().trim())) {
-        console.log('Using fallback greeting response');
+        console.log(`[${clientRequestId}] Using fallback greeting response`);
         return {
           content: "Hello! I'm the Workstream Knowledge Assistant. I can help you with information about our HR, Payroll, and Hiring platform for hourly workers. What would you like to know?",
           citations: [],
           sources: []
         };
-      }
-      
-      // Determine if this is likely a follow-up question based on multiple signals
-      // 1. Check conversation length (not the first message)
-      const isNotFirstMessage = currentMessages.length > 1;
-      
-      // 2. Check for pronouns or contextual words that indicate a follow-up
-      const followUpKeywords = ['who', 'where', 'when', 'why', 'how', 'which', 'they', 'them', 'those', 'that', 'it', 'this', 'he', 'she', 'his', 'her', 'its', 'their', 'what'];
-      const hasFollowUpIndicators = followUpKeywords.some(keyword => 
-        messageText.toLowerCase().startsWith(keyword) || 
-        messageText.toLowerCase().split(' ').slice(0, 3).includes(keyword)
-      );
-      
-      // 3. Short queries in a conversation are often follow-ups
-      const isShortQuery = messageText.length < 20;
-      
-      // Combine signals to determine if this is a follow-up
-      const isLikelyFollowUp = isNotFirstMessage && (hasFollowUpIndicators || isShortQuery);
-      
-      // Log the follow-up detection for debugging
-      if (isLikelyFollowUp) {
-        console.log("Likely follow-up detected:", { messageText, isNotFirstMessage, hasFollowUpIndicators, isShortQuery });
       }
       
       // Use a more helpful error message based on error type
@@ -480,6 +508,8 @@ export default function ChatPage() {
       } else {
         errorMessage = "It looks like I don't have that information. Please try asking a different question about Workstream's HR, Payroll, or Hiring solutions.";
       }
+      
+      console.log(`[${clientRequestId}] COMPLETE processMessageForResponse - Error after ${Date.now() - startTime}ms`);
       
       return {
         content: errorMessage,
@@ -495,6 +525,9 @@ export default function ChatPage() {
   const handleSendMessage = async (overrideInput?: string) => {
     const messageText = overrideInput || input;
     if (!messageText.trim() || isLoading) return;
+
+    const clientMsgId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    console.log(`[${clientMsgId}] BEGIN handleSendMessage for: "${messageText.substring(0, 30)}${messageText.length > 30 ? '...' : ''}"`);
 
     // Check if this message is already in the list (to avoid duplication)
     const messageExists = messages.some(msg => 
@@ -514,6 +547,7 @@ export default function ChatPage() {
       
       updatedMessages = [...messages, userMessage];
       setMessages(updatedMessages);
+      console.log(`[${clientMsgId}] Added user message to state, new message count: ${updatedMessages.length}`);
     }
     
     setInput('');
@@ -534,8 +568,14 @@ export default function ChatPage() {
     }
     
     // Process message to get response
+    console.log(`[${clientMsgId}] Calling processMessageForResponse`);
     const botResponse = await processMessageForResponse(messageText, updatedMessages);
-    console.log("Received bot response:", botResponse);
+    console.log(`[${clientMsgId}] Received bot response:`, {
+      hasContent: !!botResponse.content,
+      contentLength: botResponse.content?.length || 0,
+      hasCitations: Array.isArray(botResponse.citations) && botResponse.citations.length > 0,
+      hasSources: Array.isArray(botResponse.sources) && botResponse.sources.length > 0
+    });
 
     // Add bot's message to the state
     if (botResponse && botResponse.content) {
@@ -546,11 +586,19 @@ export default function ChatPage() {
         timestamp: new Date(),
         // Potentially add sources/citations if needed from botResponse
       };
-      console.log("Adding bot message to state:", botMessage);
+      console.log(`[${clientMsgId}] Adding bot message to state:`, {
+        id: botMessage.id,
+        role: botMessage.role,
+        contentPreview: botMessage.content.substring(0, 50) + (botMessage.content.length > 50 ? '...' : ''),
+        timestamp: botMessage.timestamp
+      });
+      
       // Update state *again* to include the bot message
       setMessages(prevMessages => [...prevMessages, botMessage]);
+      console.log(`[${clientMsgId}] COMPLETE handleSendMessage - Success`);
     } else {
-      console.error("No content in bot response:", botResponse);
+      console.error(`[${clientMsgId}] No content in bot response:`, botResponse);
+      console.log(`[${clientMsgId}] COMPLETE handleSendMessage - Failed (no content in response)`);
     }
   };
   

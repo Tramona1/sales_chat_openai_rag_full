@@ -288,23 +288,34 @@ export async function generateAnswer(
   } = {}
 ): Promise<string> {
   const startTime = Date.now();
+  const answerId = `answer-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  console.log(`[${answerId}] ANSWER GENERATION STARTED for query: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`);
+  console.log(`[${answerId}] SearchResults: ${searchResults.length} items, History items: ${Array.isArray(options.conversationHistory) ? options.conversationHistory.length : (options.conversationHistory ? 'string-format' : 'none')}`);
+  
   let contextText = '';
   try {
     // Set a default timeout if not provided (25 seconds)
     const timeoutMs = options.timeout || 25000;
+    console.log(`[${answerId}] Using timeout: ${timeoutMs}ms`);
     
     // Create a promise that rejects after the timeout
     const timeoutPromise = new Promise<string>((_, reject) => {
-      setTimeout(() => reject(new Error(`Answer generation timed out after ${timeoutMs}ms`)), timeoutMs);
+      setTimeout(() => {
+        console.log(`[${answerId}] TIMEOUT REACHED after ${timeoutMs}ms`);
+        reject(new Error(`Answer generation timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
     });
     
     // Create the actual answer generation promise
     const answerPromise = (async () => {
       // Handle simple conversational queries first
       if (isBasicConversational(query)) {
+        console.log(`[${answerId}] Detected basic conversational query, using simpler response path`);
         return handleConversationalQuery(query, options.conversationHistory);
       }
 
+      console.log(`[${answerId}] Preparing context from ${searchResults.length} search results`);
+      
       // Prepare the context
       const includedSources: string[] = [];
       let totalContextTokens = 0;
@@ -399,16 +410,21 @@ FOLLOW-UP QUESTION HANDLING:
       // Estimate token count for the combined query + context
       const promptEstimate = estimateTokenCount(query + contextText);
       logInfo(`Estimated prompt tokens (query + context): ${promptEstimate}`);
+      console.log(`[${answerId}] Estimated prompt tokens (query + context): ${promptEstimate}`);
 
       // Check if context needs summarization (Using Gemini 2.0 Flash's expanded context window of 1M tokens)
       // We use a conservative limit of 70000 tokens to leave space for query, prompt, and response
       const MAX_GEMINI_CONTEXT_TOKENS = 70000; 
       if (promptEstimate > MAX_GEMINI_CONTEXT_TOKENS) {
+        console.log(`[${answerId}] Context too large (${promptEstimate} tokens), will summarize`);
         logWarning(`Context estimate (${promptEstimate} tokens) exceeds limit (${MAX_GEMINI_CONTEXT_TOKENS}). Summarizing...`);
         contextText = await summarizeContext(query, contextText);
         logInfo(`Summarized context token estimate: ${estimateTokenCount(contextText)}`);
+        console.log(`[${answerId}] Context summarized to ${estimateTokenCount(contextText)} tokens`);
       }
 
+      console.log(`[${answerId}] Calling Gemini for answer generation with ${estimateTokenCount(contextText)} tokens of context`);
+      
       // *** Generate the final answer using the prepared context ***
       const finalAnswer = await generateGeminiAnswer(
         query,
@@ -423,6 +439,7 @@ FOLLOW-UP QUESTION HANDLING:
       );
 
       const duration = Date.now() - startTime;
+      console.log(`[${answerId}] Gemini answer generation successful in ${duration}ms, answer length: ${finalAnswer.length}`);
       
       // Record metric on success (Restore metadata argument despite linter warning)
       recordMetric('answerGeneration', 'gemini', duration, true, {
@@ -434,13 +451,17 @@ FOLLOW-UP QUESTION HANDLING:
     })();
     
     // Race the answer generation against the timeout
+    console.log(`[${answerId}] Starting race between answer generation and timeout`);
     return await Promise.race([answerPromise, timeoutPromise]);
     
   } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`[${answerId}] Error in generateAnswer function after ${duration}ms:`, error);
     logError('Error in generateAnswer function', error);
     
     // Special handling for timeout errors
     if (error instanceof Error && error.message.includes('timed out')) {
+      console.error(`[${answerId}] TIMEOUT ERROR: Answer generation timed out`);
       logError('Answer generation timed out', { 
         query: query.substring(0, 100), 
         elapsedTime: Date.now() - startTime 
