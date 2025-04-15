@@ -28,6 +28,7 @@ This project implements a Retrieval-Augmented Generation (RAG) system tailored f
 - [Authentication](#authentication)
 - [Utilities Overview](#utilities-overview)
 - [Supabase Integration](#supabase-integration)
+- [Dependencies](#dependencies)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
@@ -239,6 +240,24 @@ The `utils/` directory contains core helper modules for various tasks like inter
 Describes how Supabase services (Database, `pgvector`, Auth, Storage, RPC) are utilized.
 
 [Detailed Documentation on Supabase Integration](./docs/supabase_integration.md)
+
+## Dependencies
+
+The application relies on several key libraries:
+
+- **Next.js**: For server-side rendering and API routes
+- **React**: Frontend UI library
+- **Tailwind CSS**: Utility-first CSS framework for styling
+- **Supabase JS Client**: For interacting with Supabase services
+- **date-fns**: For date formatting and manipulation in analytics
+- **react-markdown**: For rendering markdown content in chat messages
+- **lodash**: For utility functions like debouncing and data manipulation
+- **Recharts**: For data visualization in analytics dashboards
+- **axios**: For making HTTP requests
+- **zod**: For schema validation
+- **lucide-react**: For UI icons
+
+All dependencies are specified in `package.json` and must be installed using `npm install` before building the application.
 
 ## Getting Started
 
