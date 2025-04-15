@@ -59,8 +59,31 @@ export function recordMetric(
   // In a production environment, this would send metrics to a service like
   // Prometheus, CloudWatch, DataDog, etc.
   
+  // Skip writing to disk in Vercel environment to avoid errors
+  if (process.env.VERCEL || process.env.VERCEL_URL) {
+    return;
+  }
+  
   // Record the metric in the database for analysis
   try {
+    // Create directory if it doesn't exist
+    const fs = require('fs');
+    const path = require('path');
+    const metricsDir = path.join(process.cwd(), 'data', 'performance_metrics');
+    
+    try {
+      if (!fs.existsSync(path.join(process.cwd(), 'data'))) {
+        fs.mkdirSync(path.join(process.cwd(), 'data'), { recursive: true });
+      }
+      
+      if (!fs.existsSync(metricsDir)) {
+        fs.mkdirSync(metricsDir, { recursive: true });
+      }
+    } catch (dirError) {
+      console.error('[ERROR] Failed to create metrics directory:', dirError);
+      return; // Exit without attempting to write file
+    }
+    
     // This is where we would persist the metric to a database or send to a metrics service
     // For now, we'll just log it to the console
   } catch (error) {

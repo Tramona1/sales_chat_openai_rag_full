@@ -193,38 +193,108 @@ function shouldRewriteQuery(originalQuery: string, analysis: QueryAnalysisResult
 
 // API handler
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Start timing the API call
+  // Extract request parameters
+  const { 
+    query: originalQuery, 
+    limit = 20, 
+    searchMode = 'hybrid', 
+    sessionId, 
+    includeCitations = false,
+    includeMetadata = true,
+    useContextualRetrieval = true,
+    conversationHistory = [] 
+  } = req.body;
+
+  if (!originalQuery) {
+    return res.status(400).json({ error: 'Query parameter is required' });
+  }
+
+  // Start timing
   const startTime = Date.now();
-  let success = false;
+  let success = false;  // Track whether we successfully processed the query
+  logInfo(`Processing query: "${originalQuery.substring(0, 100)}${originalQuery.length > 100 ? '...' : ''}"`);
+  
+  // Add logging about conversation history
+  const hasConversationHistory = Array.isArray(conversationHistory) && conversationHistory.length > 0;
+  if (hasConversationHistory) {
+    logInfo(`Query includes conversation history with ${conversationHistory.length} messages`);
+    // Log the last message in the conversation history for context
+    if (conversationHistory.length > 0) {
+      const lastMessage = conversationHistory[conversationHistory.length - 1];
+      logInfo(`Last message in history: ${lastMessage.role} - "${lastMessage.content.substring(0, 100)}${lastMessage.content.length > 100 ? '...' : ''}"`);
+    }
+  }
+
+  // Determine if this is a follow-up question based on context rather than just keywords
+  // Multiple methods to detect follow-ups:
+  // 1. Position in conversation (not the first message)
+  // 2. Message contains references to previous content
+  // 3. Message contains pronouns or contextual keywords
+  const isNotFirstMessage = hasConversationHistory && conversationHistory.filter(msg => msg.role === 'user').length > 0;
+  
+  // Secondary signal: Check if the message contains pronouns or contextual words that indicate a follow-up
+  const followUpKeywords = ['who', 'where', 'when', 'why', 'how', 'which', 'they', 'them', 'those', 'that', 'it', 'this', 'he', 'she', 'his', 'her', 'its', 'their', 'what'];
+  const hasFollowUpKeywords = followUpKeywords.some(keyword => 
+    originalQuery.toLowerCase().startsWith(keyword) || 
+    originalQuery.toLowerCase().split(' ').slice(0, 3).includes(keyword)
+  );
+  
+  // Combine signals to determine if this is a follow-up
+  const isLikelyFollowUp = isNotFirstMessage && (
+    hasFollowUpKeywords || 
+    originalQuery.length < 20 // Short queries in a conversation are often follow-ups
+  );
+
+  if (isLikelyFollowUp) {
+    logInfo(`Detected follow-up question (position: ${isNotFirstMessage}, keywords: ${hasFollowUpKeywords}): "${originalQuery}"`);
+  }
+
+  // Extract any document references from previous conversation history
+  const previousDocumentReferences = extractPreviousDocumentReferences(conversationHistory);
+  if (previousDocumentReferences.length > 0) {
+    logInfo(`Found ${previousDocumentReferences.length} document references in conversation history`);
+  }
 
   try {
-    // Check for required parameters
-    if (!req.body || !req.body.query) {
-      res.status(400).json({ error: 'Missing required parameters: query' });
-      return;
-    }
+    // Enhance the query with conversation context for follow-up questions
+    let enhancedQuery = originalQuery;
+    let queryWasExpanded = false;
     
-    // Extract parameters from request
-    const {
-      query: originalQuery,
-      limit = 10,
-      useContextualRetrieval = true,
-      searchMode = 'hybrid'
-    } = req.body;
-
-    logInfo(`Processing query: "${originalQuery}"`);
+    if (isLikelyFollowUp && hasConversationHistory) {
+      try {
+        // Get more complete conversation context
+        const maxContextMessages = 6; // Use up to 3 exchanges (6 messages) for context
+        const relevantHistory = conversationHistory.slice(-Math.min(maxContextMessages, conversationHistory.length));
+        let contextualInfo = '';
+        
+        // Extract topic information from the conversation
+        for (let i = 0; i < relevantHistory.length; i++) {
+          const msg = relevantHistory[i];
+          const role = msg.role === 'user' ? 'User' : 'Assistant';
+          contextualInfo += `${role}: "${msg.content.substring(0, 300)}${msg.content.length > 300 ? '...' : ''}"\n\n`;
+        }
+        
+        // Expand the query with conversation context
+        enhancedQuery = `Given this conversation context:\n${contextualInfo}\nAnswer this follow-up question: ${originalQuery}`;
+        queryWasExpanded = true;
+        logInfo(`Enhanced follow-up question with ${relevantHistory.length} messages of conversation context. New query length: ${enhancedQuery.length} characters`);
+      } catch (expansionError) {
+        logError('Error expanding follow-up question with context:', expansionError);
+        // Continue with original query if expansion fails
+      }
+    }
     
     // Analyze the query to understand intent, entities, etc.
     const analysisStartTime = Date.now();
-    const queryAnalysis = await analyzeQueryWithGemini(originalQuery);
+    const queryAnalysis = await analyzeQueryWithGemini(queryWasExpanded ? originalQuery : enhancedQuery);
     recordMetric('query', metrics.QUERY_ANALYSIS, Date.now() - analysisStartTime, true);
     
     // Check if we should rewrite the query to include "Workstream" context
-    let queryToUse = originalQuery;
+    let queryToUse = queryWasExpanded ? enhancedQuery : originalQuery;
     let queryWasRewritten = false;
     
     // Only attempt query rewriting if the feature flag is enabled
-    if (FEATURE_FLAGS.queryRewriting) {
+    if (FEATURE_FLAGS.queryRewriting && !queryWasExpanded) {
       const rewriteStartTime = Date.now();
       const { rewrite, rewrittenQuery } = shouldRewriteQuery(originalQuery, queryAnalysis);
       
@@ -508,81 +578,91 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     
+    // Extract unique document IDs from search results for reference tracking
+    const currentDocumentIds = processedResults.map(result => 
+      result.id || result.document_id || result.item?.id
+    ).filter(Boolean);
+    
     // Prepare context for answer generation
-    const context = processedResults.map(result => ({
-      text: result.text,
-      source: result.metadata?.source || result.metadata?.url || 'Unknown source',
-      relevance: result.score || 0,
-      metadata: result.metadata || {} // Include full metadata for better context
+    let context = processedResults.map(result => ({
+      text: typeof result.text === 'string' ? result.text : JSON.stringify(result),
+      source: result.metadata?.source || result.item?.metadata?.source || 'Unknown Source',
+      metadata: result.metadata || result.item?.metadata || {}
     }));
     
-    // Log some debug info about the search results
-    if (processedResults.length > 0) {
-      logInfo(`Found ${processedResults.length} results for query: "${queryToUse}"`);
-      processedResults.slice(0, 3).forEach((result, idx) => {
-        logInfo(`Result ${idx+1}: ${result.text.substring(0, 100)}...`);
-      });
-    } else {
-      logWarning(`No results found for query: "${queryToUse}"`);
+    // If we have previous document references, prioritize them in the context
+    // But DON'T include them in the hybrid search (which was causing structure issues)
+    if (previousDocumentReferences.length > 0) {
+      // Ensure we're not duplicating documents already in the current results
+      const uniquePreviousRefs = previousDocumentReferences.filter(ref => 
+        !currentDocumentIds.includes(ref.id)
+      );
+      
+      if (uniquePreviousRefs.length > 0) {
+        logInfo(`Adding ${uniquePreviousRefs.length} previously referenced documents to context`);
+        
+        // Add these documents at the beginning of the context for priority in answer generation only
+        context = [
+          ...uniquePreviousRefs.map(ref => ({
+            text: ref.text,
+            source: ref.source,
+            metadata: { ...ref.metadata, isPreviouslyReferenced: true }
+          })),
+          ...context
+        ];
+      }
     }
     
-    // Determine if we should include source citations based on result quality
-    const includeCitations = FEATURE_FLAGS.sourceCitations && 
-                            processedResults.length > 0 &&
-                            processedResults.some(result => result.score > 0.4); // Only cite if we have decent results
-    
-    // Generate answer from search results using the real LLM-based implementation
+    // Generate answer
     const answerStartTime = Date.now();
+    let systemPrompt = `
+You are a helpful AI assistant providing information based on the context provided.
+Follow these important guidelines:
 
-    // Create a customized system prompt for product queries
-    let systemPrompt = modelConfig.getSystemPromptForQuery(originalQuery);
-    
-    // Add special instructions for product-related queries
-    if (isProductQuery) {
-      systemPrompt = `
-You are a knowledgeable Sales Assistant for Workstream, a company providing HR, Payroll, and Hiring solutions for the hourly workforce.
-
-When answering questions about Workstream's products and features, provide a comprehensive and structured response that:
-1. Clearly lists and describes the relevant products/features mentioned in the context
-2. Highlights key benefits and value propositions for each product
-3. Organizes information in a logical way (e.g., by product category)
-4. Includes specific capabilities and differentiators from the context
-5. Maintains a helpful, informative tone appropriate for sales conversations
-
-IMPORTANT INSTRUCTIONS:
-- Answer based ONLY on the provided context
-- For product-related questions, try to provide a comprehensive overview of multiple products when available
-- If information about specific products is not in the context, be transparent about what IS available
-- Avoid repeating the user's question in your response
-- Do not make up information that isn't present in the context
-- Focus on factual information about products, their features, and benefits
+1. Base your answers strictly on the provided context.
+2. If the context doesn't contain the information needed, acknowledge this limitation.
+3. Maintain a professional, friendly tone.
+4. Be concise but thorough.
+5. If you reference specific documents, include their source numbers like [1], [2], etc.
 `;
-      logInfo(`Using specialized product query system prompt`);
-    }
-    
-    // If we have no results or poor results, add instructions to be honest about limitations
-    if (processedResults.length === 0 || !processedResults.some(result => result.score > 0.3)) {
+
+    if (isLikelyFollowUp && conversationHistory && conversationHistory.length > 0) {
       systemPrompt += `
 
-SPECIAL INSTRUCTION FOR LIMITED INFORMATION:
-- The context provided does not contain sufficient information to answer this question in detail
-- Please be HONEST and CLEAR that you don't have enough information in the provided context
-- Avoid making up information or providing generic responses that imply you have knowledge you don't
-- Suggest that the user ask about something you might be able to help with, such as Workstream's products or features
+SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
+- Look at the conversation history carefully to understand the context
+- Pay special attention to previously referenced documents that have been included in the context (marked with isPreviouslyReferenced)
+- Maintain continuity with previous responses by referencing the same sources when appropriate
+- If answering requires information not in the provided context, acknowledge this limitation
+- When referencing information from previous exchanges, explicitly mention this to maintain conversational flow
 `;
-      logInfo(`Adding limited information instruction to system prompt`);
+      logInfo(`Adding follow-up question handling instruction to system prompt`);
     }
     
+    // IMPORTANT: Pass the conversation history to the generateAnswer function
+    // This is critical for handling follow-up questions
     const answer = await generateAnswer(originalQuery, context, {
       systemPrompt: systemPrompt,
       includeSourceCitations: includeCitations,
       maxSourcesInAnswer: 5,
+      conversationHistory: conversationHistory, // Pass conversation history to answer generator
     });
     recordMetric('query', metrics.ANSWER_GENERATION, Date.now() - answerStartTime, true);
     
+    // Track successful queries if session ID is provided
+    if (sessionId) {
+      try {
+        // Optional: Track successfully answered queries by session for analytics
+        // This could be implemented separately
+      } catch (logError) {
+        // Non-blocking error handling for logging
+        console.error("Failed to log query analytics:", logError);
+      }
+    }
+    
     // Prepare and return the response
     success = true;
-    res.status(200).json({
+    const responseData = {
       query: originalQuery,
       answer,
       resultCount: processedResults.length,
@@ -592,15 +672,68 @@ SPECIAL INSTRUCTION FOR LIMITED INFORMATION:
         rewrittenQuery: queryWasRewritten ? queryToUse : undefined,
         isProductQuery,
         isVisualQuery: visualAnalysis.isVisualQuery,
-        processingTimeMs: Date.now() - startTime
+        hasConversationHistory: conversationHistory && conversationHistory.length > 0,
+        processingTimeMs: Date.now() - startTime,
+        queryWasExpanded: queryWasExpanded,
+        usedConversationContext: isLikelyFollowUp,
+        followUpDetected: isLikelyFollowUp
       }
-    });
-    
-  } catch (error) {
+    };
+
+    // After processing search results, update the response to include info about enhanced follow-up handling
+    if (queryWasExpanded) {
+      responseData.metadata = {
+        ...responseData.metadata,
+        queryWasExpanded: true,
+        usedConversationContext: true,
+        followUpDetected: isLikelyFollowUp
+      };
+    }
+
+    return res.status(200).json(responseData);
+  } catch (error: any) {
     logError('Error processing query:', error);
-    res.status(500).json({ 
-      error: 'An error occurred while processing your query',
-      details: process.env.NODE_ENV === 'development' ? String(error) : undefined
+    
+    // Provide more helpful error message for follow-up questions
+    if (isLikelyFollowUp) {
+      // Try to generate a meaningful response even when search fails for follow-up questions
+      try {
+        const contextualAnswer = await generateAnswer(
+          originalQuery, 
+          [],  // No search results available
+          {
+            systemPrompt: "You are a helpful assistant for Workstream. The user has asked a follow-up question, but we couldn't retrieve specific information from our knowledge base. Please provide a general answer based on the conversation history, or politely acknowledge that you don't have enough context to answer specifically.",
+            conversationHistory,
+            timeout: 15000
+          }
+        );
+        
+        return res.status(200).json({
+          answer: contextualAnswer,
+          results: [],
+          metadata: {
+            followUpDetected: true,
+            searchFailed: true,
+            usedConversationHistoryFallback: true,
+            timings: {
+              total: Date.now() - startTime
+            }
+          }
+        });
+      } catch (fallbackError) {
+        logError('Error generating fallback answer for follow-up question:', fallbackError);
+        // Continue to the standard error response if fallback fails
+      }
+    }
+    
+    // Standard error response
+    return res.status(error.statusCode || 500).json({ 
+      error: error.message || 'An error occurred while processing your query',
+      metadata: {
+        timings: {
+          total: Date.now() - startTime
+        }
+      }
     });
   } finally {
     // Record overall API metrics
@@ -764,7 +897,7 @@ function extractCategoriesFromQuery(query: string): {
     }
   });
   
-  return {
+          return {
     primaryCategory,
     secondaryCategories,
     keywords
@@ -815,4 +948,70 @@ function mapProductKeywordsToCategories(productKeywords: string[]): DocumentCate
   });
   
   return Array.from(categories);
+}
+
+/**
+ * Extracts document references from previous conversation history
+ * @param conversationHistory Array of previous messages
+ * @returns Array of document references
+ */
+function extractPreviousDocumentReferences(conversationHistory: Array<{role: string; content: string}> = []): Array<{
+  id: string;
+  text: string;
+  source: string;
+  metadata: Record<string, any>;
+}> {
+  if (!conversationHistory || conversationHistory.length === 0) {
+    return [];
+  }
+
+  const documentReferences: Array<{
+    id: string;
+    text: string;
+    source: string;
+    metadata: Record<string, any>;
+  }> = [];
+
+  // Only look at assistant messages as they would contain references to documents
+  const assistantMessages = conversationHistory.filter(msg => 
+    msg.role === 'assistant' || msg.role === 'bot'
+  );
+
+  // For each assistant message, try to extract source references
+  // This is a simplistic approach - in production you would want to use 
+  // a more sophisticated method to extract and match document references
+  for (const message of assistantMessages) {
+    // Look for explicit source citations in the format [n] or source {n}
+    const sourceMatches = message.content.match(/\[([\d]+)\]|\{source: ?([\d]+)\}/g);
+    
+    if (sourceMatches && sourceMatches.length > 0) {
+      // We found source references, but we need the actual document content
+      // In a real system, you would look these up in your database
+      // Here we're creating placeholder entries that would be populated from your database
+      
+      for (const match of sourceMatches) {
+        const sourceId = match.match(/\[([\d]+)\]/) || match.match(/\{source: ?([\d]+)\}/);
+        if (sourceId && sourceId[1]) {
+          // Create a unique ID for this reference - make sure it's a string to avoid type issues
+          const referenceId = `prev_doc_${sourceId[1]}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+          
+          // In a real implementation, you would look up the actual document
+          // For now, we're creating a reference with the information we have
+          // Note: We need to ensure these document references adhere to the expected structure
+          documentReferences.push({
+            id: referenceId,
+            text: `This is a previously referenced document from the conversation.`,
+            source: `Previous source [${sourceId[1]}]`,
+            metadata: {
+              isPreviouslyReferenced: true,
+              sourceNumber: sourceId[1],
+              fromMessage: message.content.substring(0, 100) + '...'
+            }
+    });
+  }
+}
+    }
+  }
+
+  return documentReferences;
 }

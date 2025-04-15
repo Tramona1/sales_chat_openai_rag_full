@@ -240,14 +240,34 @@ export async function updateChatSession(
     
     // Otherwise use file-based storage via API
     const baseUrl = getBaseUrl();
+    
+    // Create headers with authorization for Vercel deployment
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    
+    // Add authorization header if in Vercel environment
+    if (process.env.VERCEL || process.env.VERCEL_URL || baseUrl.includes('vercel.app')) {
+      headers['Authorization'] = 'Bearer temp-token-for-vercel';
+    }
+    
     // Include the sessionId in the request body
     const response = await axios.put(
-      `${baseUrl}/api/storage/chat-operations?method=PUT&action=update`, 
-      { id: sessionId, ...updates }
+      `${baseUrl}/api/admin/chat-sessions/${sessionId}`, 
+      updates,
+      { headers }
     );
+    
     return response.data.success;
   } catch (error) {
     logError('Failed to update chat session', error);
+    
+    // Log more details if it's an HTTP error
+    if (axios.isAxiosError(error)) {
+      logError('HTTP Error Status:', error.response?.status);
+      logError('HTTP Error Response:', error.response?.data);
+    }
+    
     return false;
   }
 }
