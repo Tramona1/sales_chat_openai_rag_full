@@ -1,10 +1,19 @@
 {
   "framework": "nextjs",
-  "buildCommand": "npm run build",
-  "installCommand": "npm install",
+  "buildCommand": "npm install --force && npm run build",
+  "installCommand": "npm install --force",
   "outputDirectory": ".next",
   "regions": ["iad1"],
   "github": {
     "silent": true
+  },
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "env": {
+    "NODE_VERSION": "18.x"
   }
 } 
