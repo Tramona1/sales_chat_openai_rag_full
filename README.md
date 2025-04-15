@@ -39,9 +39,15 @@ This project implements a Retrieval-Augmented Generation (RAG) system tailored f
 - [License](#license)
 - [API Keys Configuration](#api-keys-configuration)
 - [Recent Improvements](#recent-improvements)
+  - [Enhanced Follow-up Question Handling](#enhanced-follow-up-question-handling)
   - [Enhanced Admin Authentication](#enhanced-admin-authentication)
   - [Improved Error Handling](#improved-error-handling)
   - [Enhanced Chat Experience](#enhanced-chat-experience)
+- [Documentation](#documentation)
+  - [Component Documentation](#component-documentation)
+  - [Process Documentation](#process-documentation)
+  - [Feature Documentation](#feature-documentation)
+  - [Follow-up Question Handling](./docs/follow_up_questions.md)
 
 ## Core Features
 
@@ -560,6 +566,35 @@ For OpenAI services, the system uses:
 - When adding new AI service integrations, follow the same pattern of providing fallback environment variables 
 
 ## Recent Improvements
+
+### Enhanced Follow-up Question Handling
+
+The system now features significantly improved handling of follow-up questions:
+
+- **Context-Aware Detection**: Follow-up questions are now identified using multiple signals:
+  - Message position in the conversation (not the first message)
+  - Presence of pronouns and contextual references
+  - Message length and complexity
+  
+- **Smarter Context Integration**: The system now:
+  - Uses up to 6 previous messages to provide comprehensive context
+  - Properly formats role labels and message sequence for better understanding
+  - Skips initial greeting messages to focus on substantive content
+  
+- **Better System Instructions**: LLM prompts now include specific instructions for follow-up handling:
+  - Maintaining continuity with previous responses
+  - Properly resolving pronoun references from conversation history
+  - Understanding user intent for incomplete questions
+  - Asking for clarification when needed rather than making assumptions
+  
+- **Improved Error Handling**: When follow-up questions fail, the system:
+  - Provides more helpful and specific error messages
+  - Suggests adding more context to questions
+  - Logs detailed information for debugging purposes
+
+These improvements significantly enhance the chat system's ability to maintain context across multiple turns of conversation, providing a more natural and effective user experience.
+
+For detailed technical implementation and design decisions, see [Follow-up Question Handling](./docs/follow_up_questions.md).
 
 ### Enhanced Admin Authentication
 The system has been updated with more robust admin authentication for API routes, including:

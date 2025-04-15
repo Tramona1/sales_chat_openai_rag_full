@@ -10,6 +10,8 @@ The Sales Chat RAG system uses a fully LLM-driven architecture to provide sophis
 
 3. **Context-Aware Response Generation**: The system dynamically adapts responses based on query type, available context, and conversation history.
 
+4. **Continuous Conversational Context**: The system maintains document references across multiple exchanges, ensuring that follow-up questions leverage previously retrieved knowledge.
+
 ## Key Components
 
 ### Query Analysis (`utils/geminiProcessor.ts`)
@@ -73,6 +75,26 @@ This function:
 - Handles large context windows with automatic summarization
 - Provides fallback mechanisms when information is incomplete
 - Generates coherent, contextually relevant answers using Gemini
+- Utilizes conversation history to maintain context across exchanges
+
+### Document Reference Tracking
+
+The system now implements document reference tracking across conversation turns:
+
+```typescript
+function extractPreviousDocumentReferences(
+  conversationHistory: Array<{role: string; content: string}>
+): Array<DocumentReference> {
+  // Extract document references from previous assistant responses
+}
+```
+
+This functionality:
+- Identifies documents referenced in previous responses
+- Maintains these references for follow-up questions
+- Prioritizes previously referenced documents in the context
+- Ensures continuity and coherence in multi-turn conversations
+- Enhances the system's ability to handle complex follow-up questions
 
 ## API Handler Implementation
 
@@ -82,16 +104,24 @@ The API handler in `pages/api/query.ts` now directly uses these LLM-powered comp
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Implementation directly uses LLM-powered components
   
+  // Extract conversation history and document references
+  const { conversationHistory } = req.body;
+  const previousDocumentReferences = extractPreviousDocumentReferences(conversationHistory);
+  
   // Query analysis with Gemini
   const queryAnalysis = await analyzeQueryWithGemini(originalQuery);
   
   // Hybrid search using Supabase pgvector
   const hybridResults = await hybridSearch(queryToUse, searchOptions);
   
+  // Combine previous document references with new search results
+  const combinedContext = [...previousDocumentReferences, ...processedResults];
+  
   // Answer generation with Gemini
-  const answer = await generateAnswer(queryToUse, searchResults, {
-    includeSourceCitations: false,
-    maxSourcesInAnswer: 5
+  const answer = await generateAnswer(queryToUse, combinedContext, {
+    includeSourceCitations: true,
+    maxSourcesInAnswer: 5,
+    conversationHistory: conversationHistory
   });
 }
 ```
@@ -108,6 +138,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 5. **Quality**: The system leverages state-of-the-art LLM capabilities for all aspects of query processing, ensuring high-quality responses.
 
+6. **Conversational Coherence**: The document reference tracking ensures that conversations maintain context and coherence across multiple exchanges.
+
 ## Development Guidelines
 
 When extending the system:
@@ -122,12 +154,15 @@ When extending the system:
 
 5. Use the system prompt effectively to guide the LLM toward providing accurate, contextually relevant responses.
 
+6. Prioritize conversation context maintenance to ensure smooth multi-turn interactions.
+
 ## Future Improvements
 
 Future improvements to the architecture may include:
 
 1. Enhancing query analysis with multi-stage reasoning
-2. Implementing more sophisticated search strategies based on query type
-3. Adding support for interactive follow-up questions
-4. Improving citation and source attribution
-5. Optimizing context preparation for more efficient token usage 
+2. Implementing more sophisticated document reference storage and retrieval
+3. Adding support for interactive topic exploration through guided follow-up questions
+4. Improving citation and source attribution with more precise document linking
+5. Optimizing context preparation for more efficient token usage
+6. Developing a more robust mechanism for retrieving the actual content of previously referenced documents 

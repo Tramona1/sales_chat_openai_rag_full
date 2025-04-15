@@ -16,7 +16,11 @@ const ENABLE_PERFORMANCE_MONITORING = true;
 const LOG_PERFORMANCE_METRICS = true;
 
 // Constants
-const METRICS_DIR = path.join(process.cwd(), 'data', 'performance_metrics');
+// Use /tmp directory on Vercel and local data directory in development
+const METRICS_DIR = process.env.VERCEL 
+  ? path.join('/tmp', 'performance_metrics')
+  : path.join(process.cwd(), 'data', 'performance_metrics');
+
 const DAILY_METRICS_FILE = () => {
   const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
   return path.join(METRICS_DIR, `metrics_${date}.json`);

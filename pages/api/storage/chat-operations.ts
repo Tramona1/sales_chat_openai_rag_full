@@ -326,6 +326,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         
         const sessionData = req.body;
+        logInfo('[ChatOps API] Received save request. Body:', sessionData); // Log the received body
         const sessionId = await saveChatSession(sessionData);
         return res.status(200).json({ id: sessionId });
         
