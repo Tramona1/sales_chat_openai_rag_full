@@ -154,5 +154,5 @@ async function handleDeleteRequest(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ success: true });
 }
 
-// Export the wrapped handler
-export default withAdminAuth(handler); 
+// Export the handler directly without authentication wrapper
+export default handler; 

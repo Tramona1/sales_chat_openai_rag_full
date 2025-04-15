@@ -59,12 +59,12 @@ export function recordMetric(
   // In a production environment, this would send metrics to a service like
   // Prometheus, CloudWatch, DataDog, etc.
   
-  // Skip writing to disk in Vercel environment to avoid errors
-  if (process.env.VERCEL || process.env.VERCEL_URL) {
+  // Skip all filesystem operations in Vercel environment to avoid errors
+  if (process.env.VERCEL || process.env.VERCEL_URL || process.env.NODE_ENV === 'production') {
     return;
   }
   
-  // Record the metric in the database for analysis
+  // Only attempt to write to filesystem in development environment
   try {
     // Create directory if it doesn't exist
     const fs = require('fs');
