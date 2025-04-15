@@ -215,11 +215,10 @@ export default function ChatPage() {
         Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
       localStorage.setItem('anonymousToken', anonymousToken);
 
-      const updateResponse = await fetch(`/api/admin/chat-sessions/${sessionId}`, {
+      const updateResponse = await fetch(`/api/storage/chat-operations?operation=update&id=${sessionId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${anonymousToken}`
         },
         body: JSON.stringify({
           messages: messages,
@@ -227,14 +226,13 @@ export default function ChatPage() {
           companyName: companyName,
           companyInfo: companyInfo,
           salesNotes: salesNotes,
-          lastUpdated: new Date().toISOString()
         })
       });
 
       if (!updateResponse.ok) {
-        // If we got a 401, it's likely a permission issue
-        if (updateResponse.status === 401) {
-          console.warn('Authentication failed when updating chat session. Falling back to local storage only.');
+        // If we got a 404, it's likely a permission issue
+        if (updateResponse.status === 404) {
+          console.warn('Session not found when updating chat session. Falling back to local storage only.');
           return;
         }
         
