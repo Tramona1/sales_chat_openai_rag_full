@@ -533,7 +533,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     // Generate answer from search results using the real LLM-based implementation
     const answerStartTime = Date.now();
-    
+
     // Create a customized system prompt for product queries
     let systemPrompt = modelConfig.getSystemPromptForQuery(originalQuery);
     

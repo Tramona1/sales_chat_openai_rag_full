@@ -9,217 +9,150 @@ import {
   updateChatSession
 } from '@/utils/chatStorage';
 import { logError, logDebug } from '@/utils/logger';
+import { withAdminAuth } from '@/utils/auth';
 
-// Simple authorization check for admin routes
-// In a production app, this would use proper authentication
-function isAuthorized(req: NextApiRequest): boolean {
-  // For now, we'll just check for an admin key in the header
-  // In a real app, this would use a proper auth system
-  const adminKey = req.headers['x-admin-key'] as string;
-  return adminKey === process.env.ADMIN_API_KEY || process.env.NODE_ENV === 'development';
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Handle different HTTP methods
-  switch (req.method) {
-    case 'GET':
-      return handleGetRequest(req, res);
-    case 'POST':
-      return handlePostRequest(req, res);
-    case 'PUT':
-      return handlePutRequest(req, res);
-    case 'DELETE':
-      return handleDeleteRequest(req, res);
-    default:
-      return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-}
-
-async function handleGetRequest(req: NextApiRequest, res: NextApiResponse) {
+// Define the handler function
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // Check authorization
-    if (!isAuthorized(req)) {
-      return res.status(401).json({ error: 'Unauthorized' });
+    // Handle different HTTP methods
+    switch (req.method) {
+      case 'GET':
+        return await handleGetRequest(req, res);
+      case 'POST':
+        return await handlePostRequest(req, res);
+      case 'PUT':
+        return await handlePutRequest(req, res);
+      case 'DELETE':
+        return await handleDeleteRequest(req, res);
+      default:
+        return res.status(405).json({ error: 'Method Not Allowed' });
     }
-    
-    const { id, search, type, content } = req.query;
-    
-    // If session ID is provided, get that specific session
-    if (id) {
-      const session = await getChatSession(id as string);
-      if (!session) {
-        return res.status(404).json({ error: 'Session not found' });
-      }
-      return res.status(200).json(session);
-    }
-    
-    // If content search is provided, search sessions by content
-    if (content) {
-      const sessions = await searchChatSessionsByContent(content as string);
-      return res.status(200).json({ sessions });
-    }
-    
-    // If search query is provided, search sessions
-    if (search) {
-      const sessions = await searchChatSessions(search as string);
-      
-      // Filter by session type if provided
-      if (type) {
-        const filteredSessions = sessions.filter(s => s.sessionType === type);
-        return res.status(200).json({ sessions: filteredSessions });
-      }
-      
-      return res.status(200).json({ sessions });
-    }
-    
-    // Otherwise, list all sessions, possibly filtered by type
-    let sessions = await listChatSessions();
-    
-    // <<< ADD DEBUG LOGGING HERE >>>
-    logDebug(`[Chat Sessions API] Value of 'sessions' before filtering: ${JSON.stringify(sessions)} (Type: ${typeof sessions}, IsArray: ${Array.isArray(sessions)})`);
-
-    // Make sure sessions is an array before filtering
-    if (!Array.isArray(sessions)) {
-      logError('listChatSessions did not return an array, sessions =', sessions);
-      sessions = [];
-    }
-
-    // Filter by session type if provided
-    if (type) {
-      sessions = sessions.filter(s => s.sessionType === type);
-    }
-    
-    return res.status(200).json({ sessions });
   } catch (error) {
     logError('Error in chat sessions API', error);
     return res.status(500).json({ error: 'Failed to process request' });
   }
 }
 
+// Handle GET requests (list sessions, search, etc.)
+async function handleGetRequest(req: NextApiRequest, res: NextApiResponse) {
+  const { action, query, type, id } = req.query;
+  
+  // Get a specific session by ID
+  if (action === 'get' && id && typeof id === 'string') {
+    const session = await getChatSession(id);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    return res.status(200).json(session);
+  }
+  
+  // Search sessions by title or company name
+  if (action === 'search' && query && typeof query === 'string') {
+    const results = await searchChatSessions(query);
+    return res.status(200).json(results);
+  }
+  
+  // Search sessions by message content
+  if (action === 'searchContent' && query && typeof query === 'string') {
+    const results = await searchChatSessionsByContent(query);
+    return res.status(200).json(results);
+  }
+  
+  // List sessions by type (company or general)
+  if (type === 'company' || type === 'general') {
+    const sessions = await listChatSessions();
+    const filteredSessions = sessions.filter(
+      session => session.sessionType === type
+    );
+    return res.status(200).json(filteredSessions);
+  }
+  
+  // Default: List all sessions
+  const sessions = await listChatSessions();
+  return res.status(200).json(sessions);
+}
+
+// Handle POST requests (create new session)
 async function handlePostRequest(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    // Check authorization
-    if (!isAuthorized(req)) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    
-    const body = req.body;
-    
-    // Validate required fields
-    if (!body.messages || !Array.isArray(body.messages)) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: messages' 
-      });
-    }
-
-    // Ensure sessionType is always set to a valid value
-    const sessionType = body.sessionType || (body.companyName ? 'company' : 'general');
-    
-    // In company mode, companyName and companyInfo are required
-    if (sessionType === 'company' && (!body.companyName || !body.companyInfo)) {
-      return res.status(400).json({ 
-        error: 'For company sessions, companyName and companyInfo are required' 
-      });
-    }
-    
-    // For general sessions, title is required
-    if (sessionType === 'general' && !body.title) {
-      return res.status(400).json({ 
-        error: 'For general sessions, title is required' 
-      });
-    }
-    
-    // Save the session
-    const sessionId = await saveChatSession({
-      sessionType: sessionType,
-      title: body.title || body.companyName || 'Untitled Session',
-      companyName: body.companyName,
-      companyInfo: body.companyInfo,
-      salesNotes: body.salesNotes || '',
-      messages: body.messages,
-      salesRepId: body.salesRepId,
-      salesRepName: body.salesRepName,
-      tags: body.tags,
-      keywords: body.keywords
+  const body = req.body;
+  
+  if (!body) {
+    return res.status(400).json({ error: 'Request body is required' });
+  }
+  
+  // Check for required fields
+  if (!body.title || !body.sessionType) {
+    return res.status(400).json({ 
+      error: 'Missing required fields', 
+      required: ['title', 'sessionType'] 
     });
-    
-    return res.status(200).json({ success: true, sessionId });
+  }
+  
+  // Validate session type
+  if (body.sessionType !== 'company' && body.sessionType !== 'general') {
+    return res.status(400).json({ 
+      error: 'Invalid session type', 
+      allowed: ['company', 'general'] 
+    });
+  }
+  
+  // For company sessions, validate company name
+  if (body.sessionType === 'company' && !body.companyName) {
+    return res.status(400).json({ 
+      error: 'Company name is required for company sessions' 
+    });
+  }
+  
+  try {
+    // Create the new session
+    const sessionId = await saveChatSession(body);
+    return res.status(201).json({ id: sessionId });
   } catch (error) {
-    logError('Error in chat sessions API', error);
-    return res.status(500).json({ error: 'Failed to save chat session' });
+    logError('Error creating chat session', error);
+    return res.status(500).json({ error: 'Failed to create chat session' });
   }
 }
 
-/**
- * Handle PUT requests to update chat sessions
- */
+// Handle PUT requests (update existing session)
 async function handlePutRequest(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    // Check authorization
-    if (!isAuthorized(req)) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    
-    // Extract the session ID from the URL path
-    const { id } = req.query;
-    
-    if (!id) {
-      return res.status(400).json({ error: 'Session ID is required' });
-    }
-    
-    const body = req.body;
-    
-    // Validate required fields
-    if (!body.companyName || !body.companyInfo || !Array.isArray(body.messages)) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: companyName, companyInfo, messages' 
-      });
-    }
-    
-    // Update the session
-    const success = await updateChatSession(id as string, {
-      companyName: body.companyName,
-      companyInfo: body.companyInfo,
-      salesNotes: body.salesNotes || '',
-      messages: body.messages,
-      salesRepId: body.salesRepId,
-      salesRepName: body.salesRepName,
-      tags: body.tags
-    });
-    
-    if (!success) {
-      return res.status(404).json({ error: 'Session not found or update failed' });
-    }
-    
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    logError('Error updating chat session', error);
-    return res.status(500).json({ error: 'Failed to update chat session' });
+  const { id } = req.query;
+  const body = req.body;
+  
+  if (!id || typeof id !== 'string') {
+    return res.status(400).json({ error: 'Valid session ID is required' });
   }
+  
+  if (!body) {
+    return res.status(400).json({ error: 'Request body is required' });
+  }
+  
+  // Update the session
+  const success = await updateChatSession(id, body);
+  
+  if (!success) {
+    return res.status(404).json({ error: 'Session not found or update failed' });
+  }
+  
+  return res.status(200).json({ success: true });
 }
 
+// Handle DELETE requests
 async function handleDeleteRequest(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    // Check authorization
-    if (!isAuthorized(req)) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    
-    const { id } = req.query;
-    
-    if (!id) {
-      return res.status(400).json({ error: 'Session ID is required' });
-    }
-    
-    const success = await deleteChatSession(id as string);
-    
-    if (!success) {
-      return res.status(404).json({ error: 'Failed to delete session' });
-    }
-    
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    logError('Error in chat sessions API', error);
-    return res.status(500).json({ error: 'Failed to delete chat session' });
+  const { id } = req.query;
+  
+  if (!id || typeof id !== 'string') {
+    return res.status(400).json({ error: 'Valid session ID is required' });
   }
-} 
+  
+  // Delete the session
+  const success = await deleteChatSession(id);
+  
+  if (!success) {
+    return res.status(404).json({ error: 'Session not found or delete failed' });
+  }
+  
+  return res.status(200).json({ success: true });
+}
+
+// Export the wrapped handler
+export default withAdminAuth(handler); 

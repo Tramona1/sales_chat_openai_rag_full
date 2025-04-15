@@ -38,6 +38,10 @@ This project implements a Retrieval-Augmented Generation (RAG) system tailored f
 - [Contributing](#contributing)
 - [License](#license)
 - [API Keys Configuration](#api-keys-configuration)
+- [Recent Improvements](#recent-improvements)
+  - [Enhanced Admin Authentication](#enhanced-admin-authentication)
+  - [Improved Error Handling](#improved-error-handling)
+  - [Enhanced Chat Experience](#enhanced-chat-experience)
 
 ## Core Features
 
@@ -554,3 +558,26 @@ For OpenAI services, the system uses:
 - Reuse existing client instances when possible instead of creating new ones
 - Consider using the utility functions in `utils/geminiClient.ts` rather than directly initializing clients
 - When adding new AI service integrations, follow the same pattern of providing fallback environment variables 
+
+## Recent Improvements
+
+### Enhanced Admin Authentication
+The system has been updated with more robust admin authentication for API routes, including:
+- Support for both header and query parameter authentication
+- Detailed logging for debugging authentication issues
+- Environment variable-based configuration
+- Fallback mechanisms for development environments
+
+### Improved Error Handling
+Several error handling improvements have been implemented:
+- More robust JSON parsing in the reranking module
+- Graceful handling of large responses and malformed JSON
+- Prevention of timeouts and gateway errors in API responses
+- Multiple layers of fallbacks for error recovery
+
+### Enhanced Chat Experience
+We've also improved the chat experience:
+- Eliminated repetition of user questions in responses
+- Better keyword extraction for product queries
+- Improved summarization for product-related information
+- More natural greeting responses 

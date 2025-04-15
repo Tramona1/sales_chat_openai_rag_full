@@ -331,8 +331,10 @@ export async function rerankWithGemini(
       `Initial Score: ${item.initialScore.toFixed(4)}\n` +
       (item.primaryCategory ? `Category: ${item.primaryCategory}\n` : '') +
       (item.matchType !== 'unknown' ? `Match Type: ${item.matchType}\n` : '') +
-      (item.visualContext ? `Visual Context: ${item.visualContext}\n` : '') +
-      `Text: ${item.text.substring(0, 1000)}...`
+      // Limit visual context to avoid excessively large prompts
+      (item.visualContext ? `Visual Context: ${item.visualContext.substring(0, 500)}${item.visualContext.length > 500 ? '...' : ''}\n` : '') +
+      // Limit text content to avoid excessively large prompts
+      `Text: ${item.text.substring(0, 800)}...`
     )).join('\n---\n');
 
     // *** NEW GENERALIZED SYSTEM PROMPT ***
@@ -432,9 +434,28 @@ JSON Output:`;
     let rankedItems: RankerResponseItem[] = [];
     if (rerankerResponse && rerankerResponse.ranked_items && Array.isArray(rerankerResponse.ranked_items)) {
        rankedItems = rerankerResponse.ranked_items;
+    } else if (typeof rerankerResponse === 'string') {
+       // Try to parse JSON from string response
+       try {
+         // Look for JSON pattern in the response
+         const jsonMatch = rerankerResponse.match(/\{[\s\S]*"ranked_items"[\s\S]*\}/);
+         if (jsonMatch) {
+           const parsedJson = JSON.parse(jsonMatch[0]);
+           if (parsedJson.ranked_items && Array.isArray(parsedJson.ranked_items)) {
+             rankedItems = parsedJson.ranked_items;
+             logWarning('[Reranking] Had to extract JSON from string response');
+           }
+         } else {
+           logError('[Reranking] Could not extract JSON from string response', { responsePreview: rerankerResponse.substring(0, 100) });
+           throw new Error('Invalid reranker response format');
+         }
+       } catch (jsonError) {
+         logError('[Reranking] Failed to parse JSON from string response', jsonError);
+         throw new Error('JSON parsing error');
+       }
     } else {
-        logError('[Reranking] Invalid or unexpected response structure from Gemini reranker (missing ranked_items array)', rerankerResponse);
-        throw new Error('Invalid reranker response structure');
+       logError('[Reranking] Invalid or unexpected response structure from Gemini reranker (missing ranked_items array)', rerankerResponse);
+       throw new Error('Invalid reranker response structure');
     }
 
     const rankedItemsMap = new Map<number, { score: number; reason: string }>();

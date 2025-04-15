@@ -5,22 +5,11 @@ import {
   deleteChatSession
 } from '@/utils/chatStorage';
 import { logError } from '@/utils/logger';
+import { withAdminAuth } from '@/utils/auth';
 
-// Simple authorization check for admin routes
-function isAuthorized(req: NextApiRequest): boolean {
-  // For now, we'll just check for an admin key in the header
-  // In a real app, this would use a proper auth system
-  const adminKey = req.headers['x-admin-key'] as string;
-  return adminKey === process.env.ADMIN_API_KEY || process.env.NODE_ENV === 'development';
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+// Define the handler function
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // Check authorization
-    if (!isAuthorized(req)) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    
     // Extract the session ID from the URL path
     const { id } = req.query;
     
@@ -92,4 +81,7 @@ async function handleDeleteSession(req: NextApiRequest, res: NextApiResponse, id
   }
   
   return res.status(200).json({ success: true });
-} 
+}
+
+// Export the wrapped handler
+export default withAdminAuth(handler); 

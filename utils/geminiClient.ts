@@ -6,7 +6,7 @@
  */
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import { logError, logDebug } from './logger';
+import { logError, logDebug, logWarning } from './logger';
 import dotenv from 'dotenv';
 import { parseAndRepairJson } from './jsonRepairUtils.js';
 
@@ -87,108 +87,60 @@ export function getGeminiClient(): GoogleGenerativeAI {
 // - gemini-1.0-pro: Earlier generation model
 
 /**
- * Robustly extract a JSON object from text that may contain markdown, code blocks, or other formatting
- * @returns parsed JSON object or a Promise that will resolve to the parsed JSON if LLM repair is needed
+ * Function to extract and parse JSON from a mixed text response
+ * This handles cases where the model includes text outside of the JSON structure
+ * @param text The text potentially containing JSON
+ * @returns Parsed JSON object or null if invalid
  */
 function extractJsonFromText(text: string): any {
-  // Try direct parsing first
   try {
-    return JSON.parse(text);
+    // Case 1: Text is already valid JSON
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      // Not direct JSON, continue to extraction
+    }
+    
+    // Case 2: Text has JSON with markdown code blocks
+    const codeBlockRegex = /```(?:json)?([\s\S]*?)```/;
+    const codeBlockMatch = text.match(codeBlockRegex);
+    if (codeBlockMatch && codeBlockMatch[1]) {
+      try {
+        return JSON.parse(codeBlockMatch[1].trim());
+      } catch (e) {
+        // Not valid JSON in code block, continue
+      }
+    }
+    
+    // Case 3: Text has JSON without markdown but with text before/after
+    // Look for patterns like { ... } or [ ... ]
+    const jsonObjectRegex = /(\{[\s\S]*\})/;
+    const jsonArrayRegex = /(\[[\s\S]*\])/;
+    
+    const objectMatch = text.match(jsonObjectRegex);
+    if (objectMatch && objectMatch[1]) {
+      try {
+        return JSON.parse(objectMatch[1]);
+      } catch (e) {
+        // Not valid JSON object, continue
+      }
+    }
+    
+    const arrayMatch = text.match(jsonArrayRegex);
+    if (arrayMatch && arrayMatch[1]) {
+      try {
+        return JSON.parse(arrayMatch[1]);
+      } catch (e) {
+        // Not valid JSON array, continue
+      }
+    }
+    
+    // No valid JSON found
+    logWarning('No valid JSON structure found in the response');
+    return null;
   } catch (e) {
-    // Check for JSON in code blocks (```json {...} ``` or ```json [...] ```)
-    const codeBlockMatch = text.match(/```(?:json)?\s*([\[\{][\s\S]*?[\]\}])\s*```/);
-    if (codeBlockMatch) {
-      try {
-        return JSON.parse(codeBlockMatch[1]);
-      } catch (innerError) {
-        // Try to fix common JSON syntax errors in the matched code block
-        try {
-          const cleanedText = codeBlockMatch[1]
-            .replace(/(\w+):/g, '"$1":')  // Convert unquoted keys to quoted keys
-            .replace(/'/g, '"')           // Replace single quotes with double quotes
-            .replace(/,\s*}/g, '}')       // Remove trailing commas in objects
-            .replace(/,\s*]/g, ']');      // Remove trailing commas in arrays
-          return JSON.parse(cleanedText);
-        } catch (cleanError) {
-          // Continue to other approaches
-        }
-      }
-    }
-    
-    // Try to extract any JSON object or array with balanced braces/brackets
-    const jsonMatch = text.match(/([\[\{][\s\S]*?[\]\}])/);
-    if (jsonMatch) {
-      try {
-        return JSON.parse(jsonMatch[0]);
-      } catch (innerError) {
-        // If still failing, try cleaning the text more aggressively
-        try {
-          let cleanedText = jsonMatch[0]
-            .replace(/(\w+):/g, '"$1":')  // Convert unquoted keys to quoted keys
-            .replace(/'/g, '"')           // Replace single quotes with double quotes
-            .replace(/,\s*}/g, '}')       // Remove trailing commas in objects
-            .replace(/,\s*]/g, ']')       // Remove trailing commas in arrays
-            .replace(/\n/g, '')           // Remove newlines
-            .replace(/\t/g, '')           // Remove tabs
-            .replace(/\\/g, '\\\\')       // Escape backslashes
-            .replace(/"\s*:\s*([^"[\]{},\s][^,\s}]*)/g, '":"$1"'); // Quote unquoted string values
-            
-          // Fix common patterns with missing quotes around values
-          cleanedText = cleanedText.replace(/":\s*(\w+)/g, (match, p1) => {
-            // Don't add quotes to true, false, null, or numbers
-            if (p1 === 'true' || p1 === 'false' || p1 === 'null' || !isNaN(Number(p1))) {
-              return match;
-            }
-            return '":"' + p1 + '"';
-          });
-          
-          return JSON.parse(cleanedText);
-        } catch (finalError) {
-          // Last resort: try to parse with a custom JSON-like structure repair
-          try {
-            // Replace consecutive commas with a single comma
-            let repairText = jsonMatch[0].replace(/,\s*,+/g, ',');
-            
-            // Ensure object keys are properly quoted
-            repairText = repairText.replace(/(\w+)\s*:/g, '"$1":');
-            
-            // Replace any comma followed by a closing bracket with just the bracket
-            repairText = repairText.replace(/,(\s*[\]}])/g, '$1');
-            
-            // Quote unquoted values that aren't numbers, booleans or null
-            repairText = repairText.replace(/":\s*([^",\{\}\[\]\s]+)([,\}\]])/g, (match, value, delimiter) => {
-              if (value === 'true' || value === 'false' || value === 'null' || !isNaN(Number(value))) {
-                return '":' + value + delimiter;
-              }
-              return '":"' + value + '"' + delimiter;
-            });
-            
-            return JSON.parse(repairText);
-          } catch (lastError) {
-            // All traditional repair methods failed
-            // Log the text that we couldn't parse
-            console.error('Failed to extract valid JSON. Text sample:', text.substring(0, 200));
-            console.log('All traditional JSON parsing methods failed, will try LLM repair');
-            
-            // Return a rejection object that the calling function can handle
-            return {
-              needsLLMRepair: true,
-              text: text
-            };
-          }
-        }
-      }
-    }
-    
-    // Log the text that we couldn't parse
-    console.error('Failed to extract valid JSON. Text sample:', text.substring(0, 200));
-    console.log('No JSON structure detected, will try LLM repair');
-    
-    // Return a rejection object that the calling function can handle
-    return {
-      needsLLMRepair: true,
-      text: text
-    };
+    logError('Error extracting JSON from text', e);
+    return null;
   }
 }
 
@@ -283,11 +235,14 @@ You MUST return a JSON object that matches the following schema:
 
 ${JSON.stringify(responseSchema, null, 2)}
 
-IMPORTANT: Return ONLY the raw JSON data with NO markdown formatting, no code blocks, and no extra text.
-DO NOT wrap the JSON in \`\`\`json or any other formatting.
-The response should begin with either { or [ and end with } or ], with no text before or after.
-Ensure all JSON keys and string values are in double quotes.
-Do not use trailing commas in objects or arrays.`;
+IMPORTANT: 
+1. Return ONLY the raw JSON data with NO markdown formatting, no code blocks, and no extra text.
+2. DO NOT wrap the JSON in \`\`\`json or any other formatting.
+3. The response should begin with either { or [ and end with } or ], with no text before or after.
+4. Ensure all JSON keys and string values are in double quotes.
+5. Do not use trailing commas in objects or arrays.
+6. Keep the output as concise as possible while preserving meaning.
+7. Keep the 'reason' fields brief - no more than 2 sentences.`;
 
     // Get model configuration from the central config
     const modelConfig = await getModelForTask(undefined, 'context');
@@ -322,22 +277,41 @@ Do not use trailing commas in objects or arrays.`;
 
     const response = result.response;
     const text = response.text();
+    
+    logDebug('Raw response text preview: ' + text.substring(0, 200) + '...');
 
-    // Use the robust JSON parser and repair function instead of the previous implementation
-    try {
-      return await parseAndRepairJson(text, { genAI });
-    } catch (error) {
-      // If even our robust parsing/repair failed, return an error object
-      logError('Failed to parse Gemini response as JSON even with repair', error);
-      return {
-        error: true,
-        message: "Failed to parse Gemini response as JSON",
-        rawResponse: text.substring(0, 500) // Include a sample of the raw response for debugging
-      };
+    // First try our robust extraction
+    const parsedJson = extractJsonFromText(text);
+    if (parsedJson) {
+      return parsedJson;
     }
+    
+    // If that fails, try the more intensive repair approach
+    try {
+      const repairedJson = await tryLLMJsonRepair(text);
+      if (repairedJson) {
+        logWarning('Had to use LLM repair on malformed JSON response');
+        return repairedJson;
+      }
+    } catch (repairError) {
+      logError('LLM JSON repair failed', repairError);
+      // Continue to fallback
+    }
+    
+    // Last resort: return an error object with diagnostic information
+    return {
+      error: true,
+      message: "Failed to parse response as JSON",
+      rawTextPreview: text.substring(0, 500) + (text.length > 500 ? '...' : '')
+    };
   } catch (error) {
     logError('Error in generateStructuredGeminiResponse', error);
-    throw error;
+    
+    // Return an error object rather than throwing
+    return {
+      error: true,
+      message: error instanceof Error ? error.message : String(error)
+    };
   }
 }
 
