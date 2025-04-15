@@ -184,37 +184,67 @@ export default function ChatPage() {
   
   // Update existing session
   const updateChatSession = async () => {
-    if (!sessionId || messages.length <= 1) return;
-    
+    if (!sessionId) return;
+
+    // If we're using a local session storage mechanism, don't try to update via API
+    if (sessionId.startsWith('local-')) {
+      saveToLocalStorage(sessionId, messages, { 
+        title: chatTitle || 'Chat Session', 
+        companyName: companyName || '',
+        companyInfo: companyInfo || '',
+        salesNotes: salesNotes || ''
+      });
+      return;
+    }
+
     try {
-      // Convert our messages to the format expected by the API
-      const storedMessages: StoredChatMessage[] = messages.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content,
-        timestamp: msg.timestamp.toISOString()
-      }));
+      // Create local backup first in case the API call fails
+      saveToLocalStorage(`backup-${sessionId}`, messages, { 
+        title: chatTitle || 'Chat Session', 
+        companyName: companyName || '',
+        companyInfo: companyInfo || '',
+        salesNotes: salesNotes || ''
+      });
       
-      // Get keywords and generate a title
-      const keywords = extractKeywords(storedMessages);
-      const title = generateSessionTitle(storedMessages);
+      // Only proceed with API call if we actually have messages to save
+      if (messages.length === 0) return;
       
-      await fetch(`/api/admin/chat-sessions/${sessionId}`, {
+      // Use a random token for anonymous authentication - only for demo purposes
+      // In production, you would use proper authentication
+      const anonymousToken = localStorage.getItem('anonymousToken') || 
+        Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('anonymousToken', anonymousToken);
+
+      const updateResponse = await fetch(`/api/admin/chat-sessions/${sessionId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${anonymousToken}`
         },
         body: JSON.stringify({
-          sessionType: isCompanyChat ? 'company' : 'general',
-          title,
-          messages: storedMessages,
-          keywords,
-          companyName: isCompanyChat ? companyName : undefined,
-          companyInfo: isCompanyChat ? companyInfo : undefined,
-          salesNotes
-        }),
+          messages: messages,
+          title: chatTitle || 'Chat Session',
+          companyName: companyName,
+          companyInfo: companyInfo,
+          salesNotes: salesNotes,
+          lastUpdated: new Date().toISOString()
+        })
       });
+
+      if (!updateResponse.ok) {
+        // If we got a 401, it's likely a permission issue
+        if (updateResponse.status === 401) {
+          console.warn('Authentication failed when updating chat session. Falling back to local storage only.');
+          return;
+        }
+        
+        throw new Error(`Failed to update chat session: ${updateResponse.status} ${updateResponse.statusText}`);
+      }
+
+      console.log('Chat session updated successfully');
     } catch (error) {
-      console.error('Failed to update chat session:', error);
+      console.error('Error updating chat session:', error);
+      // We already saved a backup to local storage, so no need to do anything else
     }
   };
   
@@ -248,31 +278,63 @@ export default function ChatPage() {
     return companyTerms.some(term => lowerQuery.includes(term));
   };
   
+  // Helper function to save chat data to local storage
+  const saveToLocalStorage = (id: string, messages: Message[], metadata: any) => {
+    try {
+      localStorage.setItem(`chat_${id}`, JSON.stringify({
+        messages,
+        metadata,
+        lastUpdated: new Date().toISOString()
+      }));
+      console.log(`Chat session saved to local storage with ID: ${id}`);
+    } catch (error) {
+      console.error('Error saving to local storage:', error);
+    }
+  };
+  
+  // Helper function to track events for analytics
+  const trackEvent = (eventName: string, eventData: any) => {
+    try {
+      console.log(`[Analytics] Tracking event: ${eventName}`, eventData);
+      // In a real implementation, you would send this to your analytics provider
+      // Example: analytics.track(eventName, eventData);
+    } catch (error) {
+      console.error('Error tracking event:', error);
+    }
+  };
+  
   // Helper function to process a message and get AI response
   const processMessageForResponse = async (messageText: string, currentMessages: Message[]) => {
+    const startTime = Date.now();
+    
     try {
       setIsLoading(true);
-      // Log start of processing
-      console.log("Processing message for response:", messageText.substring(0, 50) + "...");
-      
-      // Determine if this is company-specific
-      const isCompanyQuery = isCompanySpecificQuery(messageText);
-      
-      // Prepare the request body
+
+      // Create conversationHistory from current messages (excluding the newly added message)
+      const conversationHistory = currentMessages.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.content
+      }));
+
       const requestBody = {
         query: messageText,
+        limit: 10,
+        searchMode: 'hybrid',
         sessionId: sessionId,
-        conversationHistory: currentMessages.map(msg => ({
-          role: msg.role === 'user' ? 'user' : 'assistant',
-          content: msg.content
-        })),
-        options: {
-          includeSourceCitations: true,
-          useGemini: true
-        }
+        includeCitations: true,
+        includeMetadata: true,
+        useContextualRetrieval: true,
+        conversationHistory  // Include conversation history in the request
       };
-      
-      // Call the actual query API
+
+      // Log the request for debugging
+      console.log("Sending request with history:", {
+        messageCount: conversationHistory.length,
+        lastUserMessage: conversationHistory.length > 0 ? 
+          conversationHistory[conversationHistory.length - 1]?.content?.substring(0, 50) + "..." : "none",
+        sessionId: sessionId
+      });
+
       const response = await fetch('/api/query', {
         method: 'POST',
         headers: {
@@ -281,84 +343,77 @@ export default function ChatPage() {
         body: JSON.stringify(requestBody),
       });
 
-      // --- FIX: Handle 404 specifically --- 
-      if (!response.ok) {
-        if (response.status === 404) {
-          // Handle "Not Found" specifically
-          console.log('API returned 404 - No results found');
-          setMessages([
-            ...currentMessages,
-            {
-              id: Date.now().toString(),
-              role: 'bot',
-              content: "I couldn't find specific information related to your query in my knowledge base.", // User-friendly 404 message
-              timestamp: new Date()
-            }
-          ]);
-        } else {
-          // Throw a generic error for other non-2xx responses (e.g., 500)
-          throw new Error(`API error: ${response.status}`);
-        }
-        // Need to return here to stop processing after handling the error
-        return; 
-      } // --- End FIX ---
-
-      // Only proceed to parse JSON if response.ok is true
-      const result = await response.json();
-      const queryLogId = result.queryLogId;
-
-      // Create a unique ID for the bot message
-      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
-      // Add bot response to messages
-      const botMessage: Message = {
-        id: messageId,
-        role: 'bot',
-        content: result.answer || "I'm sorry, I couldn't generate a response. Please try again.",
-        timestamp: new Date(),
-        queryLogId: queryLogId || undefined
-      };
-      
-      // Update messages with bot response
-      setMessages([...currentMessages, botMessage]);
-      
-      // Log the conversation for admin review if enabled
-      try {
-        if (sessionId) {
-          await fetch('/api/log-conversation', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              sessionId,
-              message: messageText,
-              response: result.answer,
-              metadata: {
-                sessionType: isCompanyQuery ? 'company' : 'general',
-                timestamp: new Date().toISOString()
-              }
-            }),
-          });
-        }
-      } catch (logError) {
-        console.error("Failed to log conversation:", logError);
-        // Non-blocking, continue despite log failure
+      if (response.status === 404) {
+        console.error("API endpoint not found");
+        return {
+          content: "I'm having trouble connecting to the knowledge base. Please try again in a moment.",
+          citations: [],
+          sources: []
+        };
       }
-    } catch (error) {
-      // This catch block now only handles network errors or explicitly thrown errors (like 500)
-      console.error("Error processing message:", error);
+
+      const data = await response.json();
+
+      // Check if this was identified as a follow-up question
+      const isFollowUp = data.metadata?.followUpDetected;
+      const contextUsed = data.metadata?.usedConversationContext;
       
-      // Add generic error message to chat
-      setMessages([
-        ...currentMessages,
-        {
-          id: Date.now().toString(),
-          role: 'bot',
-          content: "Sorry, I encountered an error processing your request. Please try again.",
-          timestamp: new Date()
-        }
-      ]);
+      if (isFollowUp) {
+        console.log("Follow-up question detected", {
+          contextUsed,
+          queryExpanded: data.metadata?.queryWasExpanded,
+          searchFailed: data.metadata?.searchFailed
+        });
+      }
+
+      // Track the event for analytics
+      trackEvent('message_processed', {
+        messageLength: messageText.length,
+        responseTime: Date.now() - startTime,
+        hasAnswer: !!data.answer,
+        resultCount: data.results?.length || 0,
+        isFollowUp,
+        contextUsed
+      });
+
+      return {
+        content: data.answer || "I couldn't find an answer to your question.",
+        citations: data.citations || [],
+        sources: data.sources || []
+      };
+    } catch (error) {
+      console.error('Error in processMessageForResponse:', error);
+      
+      // Determine if this is likely a follow-up question based on multiple signals
+      // 1. Check conversation length (not the first message)
+      const isNotFirstMessage = currentMessages.length > 1;
+      
+      // 2. Check for pronouns or contextual words that indicate a follow-up
+      const followUpKeywords = ['who', 'where', 'when', 'why', 'how', 'which', 'they', 'them', 'those', 'that', 'it', 'this', 'he', 'she', 'his', 'her', 'its', 'their', 'what'];
+      const hasFollowUpIndicators = followUpKeywords.some(keyword => 
+        messageText.toLowerCase().startsWith(keyword) || 
+        messageText.toLowerCase().split(' ').slice(0, 3).includes(keyword)
+      );
+      
+      // 3. Short queries in a conversation are often follow-ups
+      const isShortQuery = messageText.length < 20;
+      
+      // Combine signals to determine if this is a follow-up
+      const isLikelyFollowUp = isNotFirstMessage && (hasFollowUpIndicators || isShortQuery);
+      
+      // Log the follow-up detection for debugging
+      if (isLikelyFollowUp) {
+        console.log("Likely follow-up detected:", { messageText, isNotFirstMessage, hasFollowUpIndicators, isShortQuery });
+      }
+      
+      // Use the same friendly error message for all errors, encouraging training
+      const errorMessage = "It looks like I don't have that information. Please train me so I can answer better next time.";
+      
+      return {
+        content: errorMessage,
+        citations: [],
+        sources: []
+      };
     } finally {
       setIsLoading(false);
     }
@@ -392,8 +447,7 @@ export default function ChatPage() {
     setInput('');
     
     // Track message sent event
-    trackEvent({
-      event_type: 'chat_message_sent',
+    trackEvent('chat_message_sent', {
       session_id: sessionId || undefined,
       event_data: {
         message_type: 'text',

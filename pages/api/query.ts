@@ -3,7 +3,7 @@ import { getSupabase } from '../../utils/supabaseClient';
 import { logInfo, logWarning, logError, logDebug } from '../../lib/logging';
 import { testSupabaseConnection } from '../../lib/supabase';
 import { FEATURE_FLAGS } from '../../lib/featureFlags';
-import { recordMetric, metrics } from '../../lib/metrics';
+import { createTimer } from '../../lib/metrics';
 import { generateAnswer } from '../../utils/answerGenerator';
 import { analyzeQueryWithGemini } from '../../utils/geminiProcessor';
 import { hybridSearch, fallbackSearch, HybridSearchResponse } from '../../utils/hybridSearch';
@@ -193,74 +193,92 @@ function shouldRewriteQuery(originalQuery: string, analysis: QueryAnalysisResult
 
 // API handler
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Extract request parameters
-  const { 
-    query: originalQuery, 
-    limit = 20, 
-    searchMode = 'hybrid', 
-    sessionId, 
-    includeCitations = false,
-    includeMetadata = true,
-    useContextualRetrieval = true,
-    conversationHistory = [] 
-  } = req.body;
-
-  if (!originalQuery) {
-    return res.status(400).json({ error: 'Query parameter is required' });
+  // Add CORS headers for cross-origin requests
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Start timing
+  // Define a local safe version of the recordMetric function to avoid filesystem issues
+  const recordMetricSafely = (category: string, name: string, duration: number, success: boolean, metadata: any = {}) => {
+    console.log(`[METRIC] ${category}.${name}: ${duration}ms, success: ${success}`, JSON.stringify(metadata));
+  };
+
+  // Make sure any logging/metrics functions don't try to access the filesystem
+  const metricsTimer = createTimer();
+  
+  // Start timing and define success flag at the handler level
   const startTime = Date.now();
   let success = false;  // Track whether we successfully processed the query
-  logInfo(`Processing query: "${originalQuery.substring(0, 100)}${originalQuery.length > 100 ? '...' : ''}"`);
   
-  // Add logging about conversation history
-  const hasConversationHistory = Array.isArray(conversationHistory) && conversationHistory.length > 0;
-  if (hasConversationHistory) {
-    logInfo(`Query includes conversation history with ${conversationHistory.length} messages`);
-    // Log the last message in the conversation history for context
-    if (conversationHistory.length > 0) {
-      const lastMessage = conversationHistory[conversationHistory.length - 1];
-      logInfo(`Last message in history: ${lastMessage.role} - "${lastMessage.content.substring(0, 100)}${lastMessage.content.length > 100 ? '...' : ''}"`);
-    }
-  }
-
-  // Determine if this is a follow-up question based on context rather than just keywords
-  // Multiple methods to detect follow-ups:
-  // 1. Position in conversation (not the first message)
-  // 2. Message contains references to previous content
-  // 3. Message contains pronouns or contextual keywords
-  const isNotFirstMessage = hasConversationHistory && conversationHistory.filter(msg => msg.role === 'user').length > 0;
-  
-  // Secondary signal: Check if the message contains pronouns or contextual words that indicate a follow-up
-  const followUpKeywords = ['who', 'where', 'when', 'why', 'how', 'which', 'they', 'them', 'those', 'that', 'it', 'this', 'he', 'she', 'his', 'her', 'its', 'their', 'what'];
-  const hasFollowUpKeywords = followUpKeywords.some(keyword => 
-    originalQuery.toLowerCase().startsWith(keyword) || 
-    originalQuery.toLowerCase().split(' ').slice(0, 3).includes(keyword)
-  );
-  
-  // Combine signals to determine if this is a follow-up
-  const isLikelyFollowUp = isNotFirstMessage && (
-    hasFollowUpKeywords || 
-    originalQuery.length < 20 // Short queries in a conversation are often follow-ups
-  );
-
-  if (isLikelyFollowUp) {
-    logInfo(`Detected follow-up question (position: ${isNotFirstMessage}, keywords: ${hasFollowUpKeywords}): "${originalQuery}"`);
-  }
-
-  // Extract any document references from previous conversation history
-  const previousDocumentReferences = extractPreviousDocumentReferences(conversationHistory);
-  if (previousDocumentReferences.length > 0) {
-    logInfo(`Found ${previousDocumentReferences.length} document references in conversation history`);
-  }
-
   try {
+    const {
+      query: originalQuery, 
+      limit = 20, 
+      searchMode = 'hybrid', 
+      sessionId, // Capture sessionId from request
+      includeCitations = false,
+      includeMetadata = true,
+      useContextualRetrieval = true,
+      conversationHistory = [] 
+    } = req.body;
+
+    if (!originalQuery) {
+      return res.status(400).json({ error: 'Query parameter is required' });
+    }
+
+    logInfo(`Processing query: "${originalQuery.substring(0, 100)}${originalQuery.length > 100 ? '...' : ''}"`);
+    
+    // Add logging about conversation history
+    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      logInfo(`Query has conversation history with ${conversationHistory.length} messages`);
+      if (conversationHistory.length > 0) {
+        const lastMessage = conversationHistory[conversationHistory.length - 1];
+        logInfo(`Last message in history: ${lastMessage?.role || 'unknown'}: "${lastMessage?.content?.substring(0, 50) || ''}..."`);
+      }
+    } else {
+      logInfo('Query has no conversation history');
+    }
+
+    // Check if this is likely a follow-up question
+    const isNotFirstMessage = Array.isArray(conversationHistory) && conversationHistory.length > 0;
+    
+    // Check for common follow-up question patterns
+    const followUpKeywords = ['who', 'where', 'when', 'why', 'how', 'which', 'they', 'them', 'those', 'that', 'it', 'this', 'he', 'she', 'his', 'her', 'its', 'their', 'what'];
+    const hasFollowUpKeywords = followUpKeywords.some(keyword => 
+      originalQuery.toLowerCase().startsWith(keyword) || 
+      originalQuery.toLowerCase().split(' ').slice(0, 3).includes(keyword)
+    );
+    
+    // Combine signals to determine if this is a follow-up
+    const isLikelyFollowUp = isNotFirstMessage && (
+      hasFollowUpKeywords || 
+      originalQuery.length < 20 // Short queries in a conversation are often follow-ups
+    );
+
+    if (isLikelyFollowUp) {
+      logInfo(`Detected follow-up question (position: ${isNotFirstMessage}, keywords: ${hasFollowUpKeywords}): "${originalQuery}"`);
+    }
+
+    // Extract any document references from previous conversation history
+    const previousDocumentReferences = extractPreviousDocumentReferences(conversationHistory);
+    if (previousDocumentReferences.length > 0) {
+      logInfo(`Found ${previousDocumentReferences.length} document references in conversation history`);
+    }
+
     // Enhance the query with conversation context for follow-up questions
     let enhancedQuery = originalQuery;
     let queryWasExpanded = false;
     
-    if (isLikelyFollowUp && hasConversationHistory) {
+    if (isLikelyFollowUp && conversationHistory && conversationHistory.length > 0) {
       try {
         // Get more complete conversation context
         const maxContextMessages = 6; // Use up to 3 exchanges (6 messages) for context
@@ -286,8 +304,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     // Analyze the query to understand intent, entities, etc.
     const analysisStartTime = Date.now();
-    const queryAnalysis = await analyzeQueryWithGemini(queryWasExpanded ? originalQuery : enhancedQuery);
-    recordMetric('query', metrics.QUERY_ANALYSIS, Date.now() - analysisStartTime, true);
+    const queryAnalysis = await analyzeQueryWithGemini(queryWasExpanded ? enhancedQuery : originalQuery);
+    recordMetricSafely('query', 'analysis', Date.now() - analysisStartTime, true, {});
     
     // Check if we should rewrite the query to include "Workstream" context
     let queryToUse = queryWasExpanded ? enhancedQuery : originalQuery;
@@ -310,7 +328,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
       
-      recordMetric('query', metrics.QUERY_REWRITE, Date.now() - rewriteStartTime, true);
+      recordMetricSafely('query', 'rewrite', Date.now() - rewriteStartTime, true, {});
     }
     
     // Check for visual query (image-focused)
@@ -521,7 +539,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     
-    recordMetric('search', metrics.HYBRID_SEARCH, Date.now() - searchStartTime, searchResults.length > 0);
+    recordMetricSafely('search', 'hybrid_search', Date.now() - searchStartTime, searchResults.length > 0, {});
     
     // Convert search results to the SearchResultItem format
     const processedResults: SearchResultItem[] = searchResults.map(result => ({
@@ -570,10 +588,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Type assertion to ensure compatibility
         processedResults.splice(0, processedResults.length, ...rerankedResults as unknown as SearchResultItem[]);
         
-        recordMetric('search', metrics.RERANKING, Date.now() - rerankStartTime, true);
+        recordMetricSafely('search', 'reranking', Date.now() - rerankStartTime, true, {});
       } catch (rerankError) {
         logError('Error during reranking:', rerankError);
-        recordMetric('search', metrics.RERANKING, Date.now() - rerankStartTime, false);
+        recordMetricSafely('search', 'reranking', Date.now() - rerankStartTime, false, {});
         // Continue with un-reranked results
       }
     }
@@ -647,7 +665,7 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
       maxSourcesInAnswer: 5,
       conversationHistory: conversationHistory, // Pass conversation history to answer generator
     });
-    recordMetric('query', metrics.ANSWER_GENERATION, Date.now() - answerStartTime, true);
+    recordMetricSafely('query', 'answer_generation', Date.now() - answerStartTime, true, {});
     
     // Track successful queries if session ID is provided
     if (sessionId) {
@@ -690,12 +708,37 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
       };
     }
 
+    // Log metrics without filesystem operations
+    const duration = metricsTimer();
+    console.log(`[METRICS] Query processing completed in ${duration}ms`, {
+      query: originalQuery,
+      resultCount: processedResults.length,
+      searchMode,
+      hasAnswer: !!answer,
+      length: answer?.length || 0
+    });
+
     return res.status(200).json(responseData);
   } catch (error: any) {
-    logError('Error processing query:', error);
+    const duration = metricsTimer();
+    console.error('[ERROR] Query processing failed:', error);
+    
+    // Get query and conversationHistory from req.body to ensure they're in scope
+    const { query: originalQuery = "", conversationHistory = [] } = req.body || {};
+    
+    // Check if this is likely a follow-up from the error context
+    // We need to recompute this since the previous isLikelyFollowUp variable is out of scope
+    const isFollowUpQuestion = Array.isArray(conversationHistory) && 
+                              conversationHistory.length > 0 && 
+                              (originalQuery.length < 20 || /^(who|what|when|where|why|how|which|they|them|it|this|that)/i.test(originalQuery));
+    
+    // Log error metrics without filesystem operations
+    console.log(`[METRICS] Query processing failed in ${duration}ms`, {
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
     
     // Provide more helpful error message for follow-up questions
-    if (isLikelyFollowUp) {
+    if (isFollowUpQuestion) {
       // Try to generate a meaningful response even when search fails for follow-up questions
       try {
         const contextualAnswer = await generateAnswer(
@@ -737,7 +780,7 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
     });
   } finally {
     // Record overall API metrics
-    recordMetric('api', metrics.API_QUERY, Date.now() - startTime, success);
+    recordMetricSafely('api', 'query', Date.now() - startTime, success, {});
   }
 }
 
