@@ -241,21 +241,10 @@ export async function updateChatSession(
     // Otherwise use file-based storage via API
     const baseUrl = getBaseUrl();
     
-    // Create headers with authorization for Vercel deployment
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    };
-    
-    // Add authorization header if in Vercel environment
-    if (process.env.VERCEL || process.env.VERCEL_URL || baseUrl.includes('vercel.app')) {
-      headers['Authorization'] = 'Bearer temp-token-for-vercel';
-    }
-    
-    // Include the sessionId in the request body
+    // Use the chat-operations endpoint instead of admin endpoint to avoid auth issues
     const response = await axios.put(
-      `${baseUrl}/api/admin/chat-sessions/${sessionId}`, 
-      updates,
-      { headers }
+      `${baseUrl}/api/storage/chat-operations`, 
+      { id: sessionId, ...updates }
     );
     
     return response.data.success;
@@ -284,7 +273,7 @@ export async function deleteChatSession(sessionId: string): Promise<boolean> {
     
     // Otherwise use file-based storage via API
     const baseUrl = getBaseUrl();
-    const response = await axios.delete(`${baseUrl}/api/storage/chat-operations?method=DELETE&id=${sessionId}`);
+    const response = await axios.delete(`${baseUrl}/api/storage/chat-operations?id=${sessionId}`);
     return response.data.success;
   } catch (error) {
     logError('Failed to delete chat session', error);

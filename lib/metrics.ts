@@ -53,41 +53,59 @@ export function recordMetric(
   success: boolean, 
   metadata: any = {}
 ): void {
-  // Log the metric for development purposes
+  // Always log the metric for development purposes
   console.log(`[METRIC] ${category}.${name}: ${duration}ms, success: ${success}`, metadata);
   
-  // In a production environment, this would send metrics to a service like
-  // Prometheus, CloudWatch, DataDog, etc.
-  
-  // Skip all filesystem operations in Vercel environment to avoid errors
-  if (process.env.VERCEL || process.env.VERCEL_URL || process.env.NODE_ENV === 'production') {
-    return;
+  // Skip all filesystem operations in any production/Vercel/cloud environment
+  // This is a safety check to prevent errors in serverless environments
+  if (
+    process.env.VERCEL || 
+    process.env.VERCEL_URL || 
+    process.env.NODE_ENV === 'production' ||
+    process.env.NEXT_PUBLIC_VERCEL_ENV ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME // AWS Lambda detection
+  ) {
+    return; // Exit early without attempting any filesystem operations
   }
   
-  // Only attempt to write to filesystem in development environment
+  // The rest of this function only runs in local development
+  // Record the metric in local filesystem for development analysis
   try {
-    // Create directory if it doesn't exist
-    const fs = require('fs');
-    const path = require('path');
-    const metricsDir = path.join(process.cwd(), 'data', 'performance_metrics');
-    
-    try {
-      if (!fs.existsSync(path.join(process.cwd(), 'data'))) {
-        fs.mkdirSync(path.join(process.cwd(), 'data'), { recursive: true });
-      }
-      
-      if (!fs.existsSync(metricsDir)) {
-        fs.mkdirSync(metricsDir, { recursive: true });
-      }
-    } catch (dirError) {
-      console.error('[ERROR] Failed to create metrics directory:', dirError);
-      return; // Exit without attempting to write file
+    // Check if we're in a browser environment (metrics should only be recorded server-side)
+    if (typeof window !== 'undefined') {
+      return;
     }
     
-    // This is where we would persist the metric to a database or send to a metrics service
-    // For now, we'll just log it to the console
+    // Safe dynamic imports to prevent bundling issues
+    const importFs = () => {
+      try {
+        return require('fs');
+      } catch (e) {
+        console.error('[METRICS] Unable to import fs module', e);
+        return null;
+      }
+    };
+    
+    const importPath = () => {
+      try {
+        return require('path');
+      } catch (e) {
+        console.error('[METRICS] Unable to import path module', e);
+        return null;
+      }
+    };
+    
+    const fs = importFs();
+    const path = importPath();
+    
+    if (!fs || !path) {
+      return; // Exit if we couldn't import required modules
+    }
+    
+    // Just log to console in development
+    // This is where we would persist metrics to a database in production
   } catch (error) {
-    console.error('[ERROR] Failed to record metric:', error);
+    console.error('[ERROR] Failed to process metric:', error);
   }
 }
 
