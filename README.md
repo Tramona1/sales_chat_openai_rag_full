@@ -302,6 +302,40 @@ All dependencies are specified in `package.json` and must be installed using `np
 
 5.  Access the application at `http://localhost:3000`
 
+### Local Development
+
+```bash
+npm run dev
+# or
+yarn dev
+```
+
+## Deployment
+
+The application is configured for easy deployment on Vercel. A `vercel.json` configuration file is included in the project root with the following settings:
+
+```json
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "outputDirectory": ".next",
+  "regions": ["iad1"],
+  "github": {
+    "silent": true
+  }
+}
+```
+
+### Deployment Steps
+
+1. Connect your GitHub repository to Vercel
+2. Vercel will automatically detect the Next.js project
+3. Configure environment variables in the Vercel dashboard
+4. Deploy the application
+
+For other deployment platforms, ensure that the necessary environment variables are configured and that the build process is set up correctly.
+
 ## API Documentation
 
 *(Note: Refer to individual files in `pages/api/` for detailed request/response structures. See also [DMS Details](./docs/dms_details.md) for Admin API specifics.)*
