@@ -191,6 +191,31 @@ function shouldRewriteQuery(originalQuery: string, analysis: QueryAnalysisResult
   return { rewrite: false };
 }
 
+// ---> Recommendation A: Centralized Prompt Constants <---
+const BASE_ANSWER_SYSTEM_PROMPT = `
+You are a helpful AI assistant providing information based on the context provided.
+Follow these important guidelines:
+
+1. Base your answers strictly on the provided context.
+2. If the context doesn't contain the information needed, acknowledge this limitation explicitly (e.g., "Based on the provided documents, I don't have specific information on..."). Do not make assumptions or use external knowledge.
+3. Maintain a professional, friendly tone.
+4. Be concise but thorough.
+5. If you reference specific documents, include their source numbers like [1], [2], etc.
+6. If the user's question is vague or general, and the provided context is too broad or lacks specificity, acknowledge this politely. Offer guidance on how they can ask a more specific question, or provide a broad summary using the most relevant parts of the context.
+`;
+
+const FOLLOW_UP_APPEND_PROMPT = `
+
+SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
+- Look at the conversation history carefully to understand the context
+- Pay special attention to previously referenced documents that have been included in the context (marked with isPreviouslyReferenced)
+- Maintain continuity with previous responses by referencing the same sources when appropriate
+- If answering requires information not in the provided context, acknowledge this limitation
+- When referencing information from previous exchanges, explicitly mention this to maintain conversational flow
+`;
+
+const FALLBACK_FOLLOW_UP_SYSTEM_PROMPT = "You are a helpful assistant for Workstream. The user has asked a follow-up question, but we couldn't retrieve specific information from our knowledge base. Please provide a general answer based on the conversation history, or politely acknowledge that you don't have enough context to answer specifically.";
+
 // API handler
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Add CORS headers for cross-origin requests
@@ -480,18 +505,74 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     
+    // ---> **FIX 2 REVISED: General Override for ALL Follow-ups** <---
+    if (isLikelyFollowUp && originalQuery) {
+        logInfo('[Follow-up Filter Override] Follow-up detected. Overriding filters using original query only.');
+
+        // Re-extract categories and keywords based *only* on the original query
+        const { 
+            primaryCategory: originalPrimary, 
+            secondaryCategories: originalSecondary, 
+            keywords: originalKeywords 
+        } = extractCategoriesFromQuery(originalQuery);
+
+        // Override the filter settings derived from potentially skewed analysis
+        if (originalPrimary) {
+            searchOptions.filter.primaryCategory = originalPrimary;
+            logInfo(`[Follow-up Filter Override] Overriding primary category from original query: ${originalPrimary}`);
+        } else {
+            searchOptions.filter.primaryCategory = DocumentCategoryType.GENERAL;
+            logInfo(`[Follow-up Filter Override] No primary category from original query, defaulting to GENERAL.`);
+        }
+
+        if (originalSecondary.length > 0) {
+            searchOptions.filter.secondaryCategories = originalSecondary;
+            logInfo(`[Follow-up Filter Override] Overriding secondary categories from original query: ${originalSecondary.join(', ')}`);
+        } else {
+            searchOptions.filter.secondaryCategories = []; // Clear secondary if none extracted
+        }
+
+        // ---> Suggestion 2: Sanitize Required Entities <---
+        const STOPWORDS = new Set(['check', 'again', 'tell', 'about', 'list', 'show', 'get', 'me', 'us', 'our', 'is', 'the', 'a', 'an']);
+        const cleanedRequiredEntities = originalKeywords.filter(
+            kw => !STOPWORDS.has(kw.toLowerCase()) && kw.length > 2
+        );
+
+        if (cleanedRequiredEntities.length > 0) {
+            searchOptions.filter.requiredEntities = cleanedRequiredEntities;
+            searchOptions.filter.keywords = []; // Clear any keywords from broader analysis
+            logInfo(`[Follow-up Filter Override] Overriding required entities from original query (cleaned): ${cleanedRequiredEntities.join(', ')}`);
+        } else {
+            searchOptions.filter.requiredEntities = [];
+            searchOptions.filter.keywords = [];
+            logInfo(`[Follow-up Filter Override] No suitable required entities extracted from original query.`);
+        }
+        
+        // ---> Suggestion 3: Log entities from queryAnalysis for comparison <---
+        const analysisEntities = (queryAnalysis.entities || [])
+            .map(e => e.name?.toLowerCase())
+            .filter(Boolean) as string[];
+        logInfo(`[Follow-up Filter Override] Entities from LLM analysis (for comparison): ${analysisEntities.join(', ')}`);
+        // --- End Suggestion 3 Logging ---
+
+        logInfo(`[Follow-up Filter Override] Overridden Filters Applied - Primary: ${searchOptions.filter.primaryCategory}, Secondary: ${searchOptions.filter.secondaryCategories?.join(',')}, Required Entities: ${searchOptions.filter.requiredEntities?.join(',')}`);
+    }
+    // ---> ** END FIX 2 REVISED ** <---
+    
     // Perform search based on selected mode, using the real implementations
     if (searchMode === 'hybrid' || searchMode === 'default') {
       try {
         // Use the real hybrid search implementation
-        const hybridResults = await hybridSearch(queryToUse, searchOptions);
+        const queryForSearch = queryWasRewritten ? queryToUse : originalQuery;
+        const hybridResults = await hybridSearch(queryForSearch, searchOptions);
         searchResults = hybridResults.results || [];
       } catch (searchError) {
         logError('Error in hybrid search:', searchError);
         // Fall back to text search if hybrid search fails
         try {
           // For now, just do another hybrid search with different parameters
-          const keywordResults = await hybridSearch(queryToUse, {
+          const queryForSearch = queryWasRewritten ? queryToUse : originalQuery;
+          const keywordResults = await hybridSearch(queryForSearch, {
             ...searchOptions,
             vectorWeight: 0.1,  // Almost all keyword weight
             keywordWeight: 0.9
@@ -505,7 +586,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } else if (searchMode === 'keyword') {
       // Use hybrid search with keyword emphasis
       try {
-        const keywordResults = await hybridSearch(queryToUse, {
+        const queryForSearch = queryWasRewritten ? queryToUse : originalQuery;
+        const keywordResults = await hybridSearch(queryForSearch, {
           ...searchOptions,
           vectorWeight: 0.1,  // Almost all keyword weight
           keywordWeight: 0.9
@@ -518,7 +600,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } else if (searchMode === 'multimodal' && FEATURE_FLAGS.multiModalSearch && visualAnalysis.isVisualQuery) {
       // For now, just use the hybrid search and we'll enhance this later for multimodal
       try {
-        const hybridResults = await hybridSearch(queryToUse, {
+        const queryForSearch = queryWasRewritten ? queryToUse : originalQuery;
+        const hybridResults = await hybridSearch(queryForSearch, {
           ...searchOptions,
           // Add visual search parameters when implementing multimodal search
         });
@@ -529,15 +612,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     
+    // ---> Suggestion 1: Fallback Filter Recovery (on 0 results for follow-up) <---
+    if (isLikelyFollowUp && searchResults.length === 0) {
+        logWarning('[Follow-up Recovery] Initial search yielded 0 results. Retrying with relaxed filters.');
+        try {
+            const relaxedSearchStartTime = Date.now();
+            const queryForRelaxedSearch = queryWasRewritten ? queryToUse : originalQuery;
+            const relaxedResults = await hybridSearch(queryForRelaxedSearch, {
+                ...searchOptions, // Keep limit, weights etc.
+                filter: { // Only relax the filter part
+                    // primaryCategory: DocumentCategoryType.GENERAL, // Default to general
+                    // secondaryCategories: [],
+                    technicalLevelMin: 1, // Broaden technical level too
+                    technicalLevelMax: 5,
+                    requiredEntities: [], // Remove entity requirement
+                    keywords: [] // Remove keyword requirement
+                }
+            });
+            searchResults = relaxedResults.results || [];
+            recordMetricSafely('search', 'followup_relaxed_fallback', Date.now() - relaxedSearchStartTime, searchResults.length > 0, {});
+            logInfo(`[Follow-up Recovery] Relaxed search completed. Found ${searchResults.length} results.`);
+        } catch (relaxedSearchError) {
+            logError('[Follow-up Recovery] Error during relaxed search:', relaxedSearchError);
+            // Keep searchResults as empty array if relaxed search also fails
+        }
+    }
+    // ---> End Suggestion 1 <---
+    
     // Fallback search if no results - try query expansion
     if (searchResults.length === 0) {
       logWarning(`No results found for "${queryToUse}". Attempting expanded search.`);
       
       try {
         // Use the directly imported query expansion function
-        const expandedQueryResult = await expandQuery(queryToUse);
-        if (expandedQueryResult && expandedQueryResult.expandedQuery !== queryToUse) {
-          logInfo(`Expanded query: "${queryToUse}" -> "${expandedQueryResult.expandedQuery}"`);
+        const queryForExpansion = queryWasRewritten ? queryToUse : originalQuery;
+        const expandedQueryResult = await expandQuery(queryForExpansion);
+        if (expandedQueryResult && expandedQueryResult.expandedQuery !== queryForExpansion) {
+          logInfo(`Expanded query: "${queryForExpansion}" -> "${expandedQueryResult.expandedQuery}"`);
           const expandedResults = await hybridSearch(expandedQueryResult.expandedQuery, {
             ...searchOptions,
             vectorWeight: 0.4,
@@ -550,7 +661,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // If still no results, try fallback search
         if (searchResults.length === 0) {
           logWarning(`No results from expanded search. Attempting fallback search.`);
-          const fallbackResults = await fallbackSearch(queryToUse);
+          const queryForFallback = queryWasRewritten ? queryToUse : originalQuery;
+          const fallbackResults = await fallbackSearch(queryForFallback);
           searchResults = fallbackResults.map(item => ({
             ...item,
             score: item.score || 0.5 // Ensure score exists
@@ -628,10 +740,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         recordMetricSafely('search', 'reranking', Date.now() - rerankStartTime, true, {});
       } catch (rerankError) {
         logError('Error during reranking:', rerankError);
+        console.warn(`Fallback reranker applied due to: ${rerankError instanceof Error ? rerankError.message : String(rerankError)}. Reverted to original ranking.`); 
         recordMetricSafely('search', 'reranking', Date.now() - rerankStartTime, false, {});
         // Continue with un-reranked results
       }
     }
+    
+    // ---> Suggestion 4: Instrument Source Match Failures <---
+    try {
+        const finalRequiredEntities = searchOptions.filter.requiredEntities || [];
+        if (processedResults.length > 0 && finalRequiredEntities.length > 0) {
+            const hitsWithEntities = processedResults.filter(result =>
+                finalRequiredEntities.some(ent => {
+                    const entityLower = ent?.toLowerCase();
+                    // Check both text and potentially metadata source for entity presence
+                    return entityLower && (
+                        result.text?.toLowerCase().includes(entityLower) || 
+                        result.metadata?.source?.toLowerCase().includes(entityLower)
+                    );
+                })
+            );
+            logInfo(`[Retrieval Quality] ${hitsWithEntities.length}/${processedResults.length} results match required entities (${finalRequiredEntities.join(', ')})`);
+        } else if (processedResults.length > 0) {
+            logInfo(`[Retrieval Quality] No required entities were specified for this search.`);
+        }
+    } catch (loggingError) {
+        logWarning('[Retrieval Quality] Error during entity match logging:', loggingError);
+    }
+    // ---> End Suggestion 4 <---
     
     // Extract unique document IDs from search results for reference tracking
     const currentDocumentIds = processedResults.map(result => 
@@ -670,34 +806,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     // Generate answer
     const answerStartTime = Date.now();
-    let systemPrompt = `
-You are a helpful AI assistant providing information based on the context provided.
-Follow these important guidelines:
+    
+    // ---> Recommendation C: Metadata Prompting (Tailoring) <---
+    let systemPromptForGeneration = BASE_ANSWER_SYSTEM_PROMPT; // Start with base prompt
 
-1. Base your answers strictly on the provided context.
-2. If the context doesn't contain the information needed, acknowledge this limitation.
-3. Maintain a professional, friendly tone.
-4. Be concise but thorough.
-5. If you reference specific documents, include their source numbers like [1], [2], etc.
-`;
-
+    // Add follow-up instructions if needed
     if (isLikelyFollowUp && conversationHistory && conversationHistory.length > 0) {
-      systemPrompt += `
-
-SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
-- Look at the conversation history carefully to understand the context
-- Pay special attention to previously referenced documents that have been included in the context (marked with isPreviouslyReferenced)
-- Maintain continuity with previous responses by referencing the same sources when appropriate
-- If answering requires information not in the provided context, acknowledge this limitation
-- When referencing information from previous exchanges, explicitly mention this to maintain conversational flow
-`;
+      systemPromptForGeneration += FOLLOW_UP_APPEND_PROMPT;
       logInfo(`Adding follow-up question handling instruction to system prompt`);
     }
+
+    // Add product-specific instructions if needed
+    if (isProductQuery) {
+        systemPromptForGeneration += "\n\nPRODUCT QUERY FOCUS: Focus on product features, capabilities, integrations, use cases, and pricing if available in the context.";
+        logInfo(`Adding product query focus instruction to system prompt`);
+    }
     
-    // IMPORTANT: Pass the conversation history to the generateAnswer function
-    // This is critical for handling follow-up questions
+    // Add other potential tailoring based on queryAnalysis results
+    if (queryAnalysis.intent === 'comparison') {
+        systemPromptForGeneration += "\n\nCOMPARISON QUERY FOCUS: Ensure you address all items being compared based on the context.";
+        logInfo(`Adding comparison query focus instruction to system prompt`);
+    } else if (queryAnalysis.intent === 'technical' && queryAnalysis.technicalLevel && queryAnalysis.technicalLevel >= 3) {
+        systemPromptForGeneration += "\n\nTECHNICAL QUERY FOCUS: Provide detailed technical explanations and include specifics if available in the context.";
+        logInfo(`Adding technical query focus instruction to system prompt`);
+    }
+    // ---> End Recommendation C <---
+
     const answer = await generateAnswer(originalQuery, context, {
-      systemPrompt: systemPrompt,
+      systemPrompt: systemPromptForGeneration, // Pass the tailored prompt
       includeSourceCitations: includeCitations,
       maxSourcesInAnswer: 5,
       conversationHistory: conversationHistory, // Pass conversation history to answer generator
@@ -785,15 +921,14 @@ SPECIAL INSTRUCTION FOR FOLLOW-UP QUESTION:
       error: error instanceof Error ? error.message : 'Unknown error'
     });
     
-    // Provide more helpful error message for follow-up questions
+    // Handle follow-up error fallback
     if (isFollowUpQuestion) {
-      // Try to generate a meaningful response even when search fails for follow-up questions
       try {
         const contextualAnswer = await generateAnswer(
           originalQuery, 
           [],  // No search results available
           {
-            systemPrompt: "You are a helpful assistant for Workstream. The user has asked a follow-up question, but we couldn't retrieve specific information from our knowledge base. Please provide a general answer based on the conversation history, or politely acknowledge that you don't have enough context to answer specifically.",
+            systemPrompt: FALLBACK_FOLLOW_UP_SYSTEM_PROMPT, // Use constant for fallback
             conversationHistory,
             timeout: 15000
           }
@@ -1110,3 +1245,4 @@ function extractPreviousDocumentReferences(conversationHistory: Array<{role: str
 
   return documentReferences;
 }
+

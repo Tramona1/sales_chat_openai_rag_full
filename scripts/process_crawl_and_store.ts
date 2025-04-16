@@ -109,6 +109,123 @@ interface DocumentLevelContext {
   sales_relevance_score: number;
 }
 
+// Define the new function to generate the analysis prompt
+function generateDocumentAnalysisPrompt(text: string): string {
+  const categoryValues = Object.values(DocumentCategoryType).join(', ');
+  return `
+You are an expert AI assistant for internal document classification and summarization. Your task is to extract structured metadata from company documents for use in a Retrieval-Augmented Generation (RAG) knowledge system.
+
+DOCUMENT:
+${text}
+
+Return a JSON object with the following fields:
+{
+  "summary": "Short summary (max 150 words) capturing the core of the document",
+  "contentType": "Choose from: leadership, product, pricing, technical, company_info, feature, support, competitors, sales, other",
+  "primaryCategory": "One category from: [${categoryValues}]",
+  "secondaryCategories": ["Up to 3 additional categories from the same list"],
+  "technicalLevel": "1 (basic) to 10 (expert)",
+  "entities": {
+    "people": [{"name": "...", "role": "...", "importance": "high|medium|low"}],
+    "companies": [{"name": "...", "relationship": "..."}],
+    "products": ["..."],
+    "features": ["..."]
+  },
+  "keywords": ["5-10 key terms from the document"],
+  "topics": ["3-5 topics covered"],
+  "confidenceScore": 0.0 - 1.0
+}
+
+Rules:
+- Use ONLY categories from the provided list.
+- Never hallucinate. If information is missing, return null or empty arrays.
+- Pay extra attention to categories related to sales enablement, pricing, product benefits, and comparisons.
+`;
+}
+
+// Interface representing the expected JSON structure from the LLM
+interface LLMAnalysisResponse {
+  summary?: string;
+  contentType?: string;
+  primaryCategory?: DocumentCategoryType;
+  secondaryCategories?: DocumentCategoryType[];
+  technicalLevel?: string; // LLM might return as string
+  entities?: {
+    people?: Array<{ name: string; role?: string; importance?: string }>;
+    companies?: Array<{ name: string; relationship?: string }>;
+    products?: string[];
+    features?: string[];
+  };
+  keywords?: string[];
+  topics?: string[];
+  confidenceScore?: number;
+}
+
+// Modify the getDocumentLevelContextFromLLM function
+export async function getDocumentLevelContextFromLLM(
+  text: string,
+  source: string
+): Promise<DocumentLevelContext> { // Return type remains DocumentLevelContext
+  const startTime = Date.now();
+  let success = false;
+  try {
+    logger.info(`[DocAnalysis] Starting LLM analysis for source: ${source}`);
+    
+    const prompt = generateDocumentAnalysisPrompt(text);
+    const { generateGeminiChatCompletion } = await import('../utils/geminiClient.js');
+    
+    // Call Gemini - assuming it expects only the prompt
+    const rawResponse = await generateGeminiChatCompletion(prompt, ""); // Pass only the prompt
+
+    let llmResponse: LLMAnalysisResponse = {}; // Use the new interface for parsing
+    try {
+      llmResponse = JSON.parse(rawResponse);
+      success = true;
+    } catch (parseError) {
+      logger.error(`[DocAnalysis] Failed to parse JSON response from LLM for ${source}: ${rawResponse}`, parseError);
+      throw new Error(`Failed to parse LLM response for ${source}`);
+    }
+
+    // Map the LLM response (LLMAnalysisResponse) to the required DocumentLevelContext format
+    const context: DocumentLevelContext = {
+      summary: llmResponse.summary || "Summary not generated",
+      // Map nested entities to flat named_entities array
+      named_entities: [
+        ...(llmResponse.entities?.people?.map(p => ({ text: p.name, type: 'person', relevance: 0.8 })) || []),
+        ...(llmResponse.entities?.companies?.map(c => ({ text: c.name, type: 'organization', relevance: 0.7 })) || []),
+        ...(llmResponse.entities?.products?.map(pr => ({ text: pr, type: 'product', relevance: 0.9 })) || []),
+        ...(llmResponse.entities?.features?.map(f => ({ text: f, type: 'feature', relevance: 0.85 })) || [])
+      ],
+      keywords: llmResponse.keywords || [],
+      // Combine primary and secondary categories
+      categories: [
+        ...(llmResponse.primaryCategory ? [llmResponse.primaryCategory] : []),
+        ...(llmResponse.secondaryCategories || [])
+      ].filter((value, index, self) => self.indexOf(value) === index), // Ensure unique
+      // Fields not directly in the new prompt need defaults or extraction from elsewhere if possible
+      target_audience: [], // Not in the new prompt, set default
+      sales_relevance_score: llmResponse.confidenceScore || 0.5 // Use confidenceScore as a proxy?
+    };
+    
+    logger.info(`[DocAnalysis] Successfully analyzed document: ${source}`);
+    return context;
+
+  } catch (error) {
+    logger.error(`[DocAnalysis] Error analyzing document context for ${source}:`, error);
+    return { 
+      summary: "Error during analysis", 
+      named_entities: [], 
+      keywords: [], 
+      categories: [], 
+      target_audience: [],
+      sales_relevance_score: 0
+    };
+  } finally {
+    const duration = Date.now() - startTime;
+    logger.info(`[DocAnalysis] LLM analysis finished for ${source} in ${duration}ms. Success: ${success}`);
+  }
+}
+
 // --- Helper: Read Source Data (from JSON files in a directory) ---
 function getCrawlData(loggerInstance: typeof logger, inputDir: string, startIndex: number = 0, endIndex: number = Infinity): TransformedCrawlData[] {
     const resolvedInputDir = path.resolve(process.cwd(), inputDir);
@@ -811,171 +928,6 @@ async function rebuildVectorStore() {
     } catch (error: any) {
         logger.error('--- FATAL ERROR during vector store rebuild ---', error);
         process.exit(1);
-    }
-}
-
-// --- Helper: Get Document-level context from LLM ---
-export async function getDocumentLevelContextFromLLM(
-  text: string,
-  source: string
-): Promise<DocumentLevelContext> {
-  let truncatedText = text;
-  if (text.length > 18000) {
-    console.log("Text is too long, truncating to 18000 chars for LLM analysis");
-    truncatedText = text.substring(0, 18000); // For performance and cost reasons
-  }
-
-  // Enhanced prompt with clearer category definitions and improved structure
-  const prompt = `You are an AI assistant specializing in sales content analysis for a company called Workstream that offers hiring, HR, payroll, and workforce management solutions for hourly workers.
-
-Review the following document carefully and extract key information for categorization. This document comes from the source: ${source}
-
-${truncatedText}
-
-Based on the document above, provide the following information in a structured JSON format:
-
-1. A concise, informative summary (100-150 words maximum) that captures the main points.
-
-2. Named entities with their types, categorized as follows:
-   - person: Names of individuals mentioned (e.g., "Desmond Lim", "John Smith")
-   - organization: Company names or organizational entities (e.g., "Workstream", "Burger King")
-   - product: Specific products (e.g., "Workstream Platform", "Text-to-Apply")
-   - feature: Product features (e.g., "Shift Scheduling", "Candidate Screening")
-   - price: Any pricing information or cost-related details (e.g., "$50 per month", "20% discount")
-   - industry: Industry sectors (e.g., "Restaurant", "Retail", "Healthcare") 
-   - competitor: Competitive products or companies (e.g., "ADP", "Gusto")
-   - technology: Technologies mentioned (e.g., "AI", "SMS", "API")
-
-3. The 5-8 most relevant keywords for search and categorization.
-
-4. Document categorization using these specific categories:
-   PRIMARY CATEGORIES (choose exactly ONE):
-   - HIRING: Content primarily about recruitment, applicant tracking, candidate sourcing
-   - ONBOARDING: Content about employee onboarding, paperwork, training new hires
-   - HR_MANAGEMENT: General HR functions, employee records, HR administration
-   - PAYROLL: Content about payroll processing, taxes, wages, payment methods
-   - COMPLIANCE: Content about legal requirements, regulations, policy compliance
-   - SCHEDULING: Content about shift scheduling, time management, workforce scheduling
-   - PRODUCT_OVERVIEW: General product information and platform descriptions
-   - BLOG: Blog posts, articles, thought leadership content
-   - PRICING_INFORMATION: Content specifically discussing prices, plans, costs
-   - CUSTOMER_TESTIMONIALS: Customer success stories, testimonials, case studies
-   - LEGAL: Terms of service, privacy policies, legal documents
-   - COMPANY_INFO: Information about the company, team, mission, values
-
-   SECONDARY CATEGORIES (select 2-3 most relevant):
-   - TEXT_TO_APPLY: Content about text-based job applications
-   - BACKGROUND_CHECKS: Content about background screening, verification
-   - SHIFT_MANAGEMENT: Content about managing shifts, shift swapping
-   - DIGITAL_SIGNATURES: Content about electronic document signing
-   - MOBILE_SOLUTIONS: Content about mobile apps, mobile-first approaches
-   - REPORTING: Content about analytics, reporting, data insights
-   - TIME_TRACKING: Content about time clocks, attendance tracking
-   - TAX_COMPLIANCE: Content about tax regulations, compliance
-   - EMPLOYEE_RETENTION: Content about reducing turnover, keeping employees
-   - EMPLOYEE_ENGAGEMENT: Content about improving employee satisfaction
-   - COMPETITIVE_ANALYSIS: Comparisons with competitors or alternatives
-
-5. Target audience: Identify exactly who this content is meant for (e.g., "HR managers", "franchise owners", "small business operators")
-
-6. Sales relevance: Rate this document on a scale of 1-10 for its relevance in sales conversations, with 10 being extremely valuable.
-
-IMPORTANT: Return ONLY valid JSON with NO explanation text. The JSON must include ALL the fields described above.`;
-
-  // Define the expected schema with more detailed requirements
-  const responseSchema = {
-    summary: "string",
-    named_entities: [{
-      text: "string",
-      type: "string",
-      relevance: "number"
-    }],
-    keywords: ["string"],
-    categories: ["string"],
-    target_audience: ["string"],
-    sales_relevance_score: "number"
-  };
-
-  try {
-    // Import the generateStructuredGeminiResponse function
-    const { generateStructuredGeminiResponse } = await import('../utils/geminiClient.js');
-    
-    // Use a more specific system prompt to get better structured data
-    const systemPrompt = "You are a document analysis specialist for a workforce management company called Workstream. Analyze the document and extract structured information following the requested JSON format exactly. Be precise in your categorization based on the detailed category definitions provided.";
-    
-    // Add retry logic for better error handling
-    let retryCount = 0;
-    const maxRetries = 2;
-    let result = null;
-    
-    while (retryCount <= maxRetries && !result) {
-      try {
-        result = await generateStructuredGeminiResponse(
-          systemPrompt,
-          prompt,
-          responseSchema
-        );
-        
-        // Validate the response has the required fields
-        if (!result || !result.summary || !Array.isArray(result.categories) || result.categories.length === 0) {
-          console.warn(`Incomplete response from LLM on attempt ${retryCount + 1}, retrying...`);
-          result = null;
-          retryCount++;
-        }
-      } catch (retryError) {
-        console.error(`Error on LLM attempt ${retryCount + 1}:`, retryError);
-        retryCount++;
-        if (retryCount > maxRetries) throw retryError;
-      }
-    }
-    
-    if (!result) {
-      console.warn("Empty or invalid response from Gemini after retries");
-      return {
-        summary: "",
-        named_entities: [],
-        keywords: [],
-        categories: [],
-        target_audience: [],
-        sales_relevance_score: 0
-      };
-    }
-
-    // --- Enhanced validation and normalization of results
-    const normalizedCategories = Array.isArray(result.categories) 
-      ? result.categories.map((c: any) => typeof c === 'string' ? c.trim().toUpperCase() : '')
-          .filter((c: string) => c.length > 0)
-      : [];
-      
-    if (normalizedCategories.length === 0) {
-      console.warn("No valid categories returned by LLM");
-    }
-    
-    // Ensure named entities are properly formatted
-    const validatedEntities = Array.isArray(result.named_entities)
-      ? result.named_entities.filter((e: any) => e && e.text && e.type)
-      : [];
-      
-    // Ensure the object has all expected fields with proper validation
-    return {
-      summary: typeof result.summary === 'string' ? result.summary : "",
-      named_entities: validatedEntities,
-      keywords: Array.isArray(result.keywords) ? result.keywords.filter((k: any) => k) : [],
-      categories: normalizedCategories,
-      target_audience: Array.isArray(result.target_audience) ? result.target_audience.filter((t: any) => t) : [],
-      sales_relevance_score: typeof result.sales_relevance_score === 'number' ? result.sales_relevance_score : 0
-    };
-    
-  } catch (error) {
-    console.error("Error calling Gemini for document analysis:", error);
-    return {
-      summary: "",
-      named_entities: [],
-      keywords: [],
-      categories: [],
-      target_audience: [],
-      sales_relevance_score: 0
-    };
     }
 }
 

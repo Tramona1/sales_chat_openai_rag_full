@@ -130,6 +130,7 @@ export interface QueryAnalysisResult {
   expectedContentTypes: string[];
   confidence: number;
   technicalLevel?: number;
+  querySpecificity?: "specific" | "general" | "vague";
 }
 
 /**
@@ -482,38 +483,66 @@ export async function processDocumentWithEnhancedLabels(
   }
 }
 
+// Generate system prompt for query analysis
+function generateQueryAnalysisPrompt(): string {
+  const categoryValues = STANDARD_CATEGORIES.map((cat: any) => cat.value).join(', ');
+  
+  const systemPrompt = `You are a query intelligence agent for an enterprise knowledge assistant.
+
+Given a user query, extract the following fields:
+1. intent: [factual | technical | comparison | overview]
+2. entities: Important people, companies, products, features
+3. primaryCategory: Single best match from [${categoryValues}]
+4. secondaryCategories: Up to 2 other relevant values from the same list
+5. suggestedFilters: Any constraints implied by the user (e.g. timeframe, product version)
+6. expectedContentTypes: Ideal formats to answer the query (e.g. case study, FAQ, contract)
+7. confidence: 0.0 - 1.0
+8. technicalLevel: 1 (basic) to 5 (expert)
+9. querySpecificity: Classify as "specific" (asks for a concrete fact, feature, or named entity), "general" (broad but focused category like "benefits of Workstream" or "how it works"), or "vague" (underspecified, lacks clear scope or entities — e.g., "tell me more", "what can it do")
+
+***IMPORTANT FOR FOLLOW-UP QUERIES:***
+If the input query contains conversation history (e.g., markers like "Given this conversation context:", "Assistant:", "User:", "Answer this follow-up question:"), base your analysis (intent, categories, entities, specificity) PRIMARILY on the **LATEST user utterance** presented. Use the preceding history for context (e.g., resolving pronouns like "it" or "they") but let the **final question** dictate the core topic and classification.`;
+
+  return systemPrompt;
+}
+
+// Generate user prompt for query analysis
+function generateQueryAnalysisUserPrompt(query: string): string {
+  const categoryValues = STANDARD_CATEGORIES.map((cat: any) => cat.value).join(', '); 
+
+  return `Query: "${query}"
+
+Return a JSON object with fields:
+- intent
+- entities: [{type, name, importance}]
+- primaryCategory
+- secondaryCategories
+- suggestedFilters
+- expectedContentTypes
+- technicalLevel
+- confidence
+- querySpecificity
+
+All category fields MUST use values from: [${categoryValues}]
+querySpecificity MUST be one of: "specific", "general", "vague"
+
+**Reminder:** If the Query text above includes conversation history, focus your analysis on the **FINAL user question** within that text.`;
+}
+
 /**
- * Analyze a user query using Gemini to understand intent, entities, and context
- * 
- * @param query The user query string
- * @returns A promise resolving to the QueryAnalysisResult
+ * Analyze a user query using Gemini to extract structured information
  */
 export async function analyzeQueryWithGemini(
   query: string
 ): Promise<QueryAnalysisResult> {
-  // Get the category values from STANDARD_CATEGORIES to use in the prompt
-  const categoryValues = STANDARD_CATEGORIES.map(cat => cat.value).join(', ');
-  
-  const systemPrompt = `You are an expert query analyzer for a RAG system. Analyze the user query and extract:
-1.  **Intent**: What is the user trying to achieve? (choose one: factual, technical, comparison, overview)
-2.  **Entities**: Key people, companies, products, features mentioned.
-3.  **Primary Category**: The single most relevant category for this query, chosen ONLY from this list: [${categoryValues}]. Default to GENERAL if unsure.
-4.  **Secondary Categories**: 1-2 additional relevant categories from the same list: [${categoryValues}].
-5.  **Suggested Filters**: Any implicit filters (e.g., specific date range, technical level).
-6.  **Expected Content Types**: What kind of document content would best answer this? (e.g., tutorial, API doc, case study, pricing page).
-7.  **Confidence**: Your confidence (0-1) in this analysis.
-8.  **Technical Level**: How technical is the query? (1=basic, 5=expert)`;
+  const startTime = Date.now();
+  try {
+    const systemPrompt = generateQueryAnalysisPrompt();
+    const userPrompt = generateQueryAnalysisUserPrompt(query);
 
-  const userPrompt = `Query: "${query}"
-
-Return the analysis as a JSON object with fields: intent, entities (array of {type, name, importance}), primaryCategory, secondaryCategories (array), suggestedFilters (object), expectedContentTypes (array), technicalLevel (number 1-5), confidence (number).
-
-Ensure 'primaryCategory' and 'secondaryCategories' use ONLY values from the provided list: [${categoryValues}].`;
-
-  const responseSchema = {
-    type: "object",
-    properties: {
-      intent: { type: "string", enum: ["factual", "technical", "comparison", "overview"] },
+    // Define the expected JSON schema for the response
+    const responseSchema = {
+      intent: "string",
       entities: {
         type: "array",
         items: {
@@ -526,46 +555,63 @@ Ensure 'primaryCategory' and 'secondaryCategories' use ONLY values from the prov
           required: ["type", "name", "importance"]
         }
       },
-      primaryCategory: { type: "string", enum: [...STANDARD_CATEGORIES.map(c => c.value), "GENERAL"] },
-      secondaryCategories: { type: "array", items: { type: "string", enum: STANDARD_CATEGORIES.map(c => c.value) } },
-      suggestedFilters: { type: "object" },
-      expectedContentTypes: { type: "array", items: { type: "string" } },
-      confidence: { type: "number", minimum: 0, maximum: 1 },
-      technicalLevel: { type: "number", minimum: 1, maximum: 5 }
-    },
-    required: ["intent", "entities", "primaryCategory", "secondaryCategories", "suggestedFilters", "expectedContentTypes", "confidence", "technicalLevel"]
-  };
+      primaryCategory: "string",
+      secondaryCategories: {
+        type: "array",
+        items: { type: "string" }
+      },
+      suggestedFilters: { type: "object" }, 
+      expectedContentTypes: {
+        type: "array",
+        items: { type: "string" }
+      },
+      technicalLevel: "number",
+      confidence: "number",
+      querySpecificity: { type: "string", enum: ["specific", "general", "vague"] }
+    };
 
-  try {
-    const result = await generateStructuredGeminiResponse(
+    logInfo('[API QueryAnalysis] Calling Gemini for query analysis');
+    
+    const analysisResult = await generateStructuredGeminiResponse(
       systemPrompt,
       userPrompt,
       responseSchema
     );
 
-    // Validate and return with defaults
+    const duration = Date.now() - startTime;
+    logInfo(`[API QueryAnalysis] Gemini Query Analysis Success in ${duration}ms`);
+    
+    if (!analysisResult || typeof analysisResult.intent !== 'string') {
+      throw new Error('Invalid response structure from query analysis LLM');
+    }
+
     return {
-      intent: result?.intent || 'factual',
-      entities: result?.entities || [],
-      primaryCategory: result?.primaryCategory || 'GENERAL',
-      secondaryCategories: result?.secondaryCategories || [],
-      suggestedFilters: result?.suggestedFilters || {},
-      expectedContentTypes: result?.expectedContentTypes || [],
-      confidence: result?.confidence || 0.5,
-      technicalLevel: result?.technicalLevel || 1
+      intent: analysisResult.intent as QueryAnalysisResult['intent'],
+      entities: Array.isArray(analysisResult.entities) ? analysisResult.entities : [],
+      primaryCategory: analysisResult.primaryCategory,
+      secondaryCategories: Array.isArray(analysisResult.secondaryCategories) ? analysisResult.secondaryCategories : [],
+      suggestedFilters: analysisResult.suggestedFilters || {},
+      expectedContentTypes: Array.isArray(analysisResult.expectedContentTypes) ? analysisResult.expectedContentTypes : [],
+      confidence: typeof analysisResult.confidence === 'number' ? analysisResult.confidence : 0,
+      technicalLevel: typeof analysisResult.technicalLevel === 'number' ? analysisResult.technicalLevel : undefined,
+      querySpecificity: analysisResult.querySpecificity as QueryAnalysisResult['querySpecificity'] || 'general'
     };
+
   } catch (error) {
-    logError('Error analyzing query with Gemini', error);
-    // Return a default analysis on error
+    const duration = Date.now() - startTime;
+    logError('[API QueryAnalysis] Gemini Query Analysis Error', { error: error instanceof Error ? error.message : String(error) });
+    
+    // Return a default/empty analysis result on error
     return {
-      intent: 'factual',
+      intent: 'overview', // Default intent
       entities: [],
-      primaryCategory: 'GENERAL',
+      primaryCategory: undefined,
       secondaryCategories: [],
       suggestedFilters: {},
       expectedContentTypes: [],
-      confidence: 0.1,
-      technicalLevel: 1
+      confidence: 0,
+      technicalLevel: undefined,
+      querySpecificity: 'general' // <-- Default value on error
     };
   }
 }

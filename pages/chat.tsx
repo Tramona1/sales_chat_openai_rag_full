@@ -459,15 +459,27 @@ export default function ChatPage() {
         try {
           console.log(`[${clientRequestId}] Attempting fallback to /api/chat endpoint`);
           
+          // ---> Define the structured fallback prompt (Updated) <--- 
+          const fallbackSystemPrompt = "System: You are a helpful assistant answering questions about Workstream's products. Be direct and informative.";
+          const fallbackUserPrompt = `User: ${messageText}`;
+          // ---> TODO: Add query classification if available <---
+          // const queryClassification = ...;
+          // const fallbackPrompt = `${fallbackSystemPrompt}\n${fallbackUserPrompt}\n${queryClassification ? `[Query Type: ${queryClassification}]` : ''}`;
+          // For now, just send system + user prompt
+          const fallbackMessages = [
+            { role: 'system', content: fallbackSystemPrompt },
+            // Include conversation history if appropriate? Maybe just the last few turns?
+            // { role: 'user', content: conversationHistory[conversationHistory.length - 1]?.content }, // Example: Last user msg
+            // { role: 'assistant', content: conversationHistory[conversationHistory.length - 1]?.content }, // Example: Last bot msg
+            { role: 'user', content: messageText } // Current user message
+          ];
+
           const chatResponse = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              messages: [
-                ...conversationHistory,
-                { role: 'user', content: messageText }
-              ],
-              model: 'gemini'
+              messages: fallbackMessages, // Send structured messages
+              model: 'gemini' // Ensure model is specified if required by /api/chat
             })
           });
           

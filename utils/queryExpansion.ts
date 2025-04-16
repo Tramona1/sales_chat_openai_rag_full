@@ -104,27 +104,22 @@ export async function semanticQueryExpansion(
   }
   
   try {
-    // Create system prompt for semantic expansion
-    // This prompt should work reasonably well with Gemini too
-    const systemPrompt = `You are an expert in information retrieval helping to improve search quality.
-Your task is to expand the user's query with related terms to improve search results.
-Focus on adding precise, targeted phrases that might appear in relevant documents.
-The phrases should be concise (2-5 words) and directly related to the original query.
-Do NOT change the original meaning or intent of the query.
-Return ONLY a JSON array of additional search terms (no explanations).
-Limit your response to the most effective expansion terms.`;
+    // ---> Refined System Prompt <--- 
+    const systemPrompt = `You are a query expansion agent trained for semantic search. Given a user query, return a concise list of high-quality related search terms to improve recall and precision in a retrieval system.
 
-    // Create user prompt - using better instruction for more focused expansion
-    const userPrompt = `Original Query: ${query}
-    
-Please provide up to ${config.maxExpandedTerms} additional phrases that would be effective for retrieving relevant documents.
-Consider:
-- Alternative terminology experts might use
-- Specific phrases likely to appear in authoritative sources
-- Terms that clarify ambiguous aspects of the query
-- Focus on precision over recall
+Rules:
+- Preserve the user's original intent.
+- Focus on targeted, domain-relevant phrases likely to appear in matching documents.
+- Each term should be 2–5 words.
+- Do not provide explanations or repeat the original query.
+- Return only a JSON array of strings.`;
 
-Return as a JSON array of strings.`;
+    // ---> Refined User Prompt <--- 
+    const userPrompt = `Original Query: "${query}"
+
+Provide up to ${config.maxExpandedTerms} concise related phrases that enhance search relevance. 
+Focus on synonyms, alternate phrasing, or technical terms likely to appear in relevant documents. 
+Return only a JSON array of strings.`;
 
     // Define the expected schema for the structured response
     const responseSchema = {
@@ -176,7 +171,9 @@ Return as a JSON array of strings.`;
     
     // Fallback to simpler expansion using Gemini chat completion
     try {
-      const fallbackSystemPrompt = "You are a search query expansion expert. Provide only related search terms, no explanations.";
+      // ---> Refined Fallback System Prompt <--- 
+      const fallbackSystemPrompt = "You are a search assistant specialized in generating keyword variants to improve retrieval quality.\nProvide short, relevant phrases related to the query. Do not explain or rephrase the prompt.";
+      // ---> Refined Fallback User Prompt <--- 
       const fallbackUserPrompt = `Generate ${config.maxExpandedTerms} search terms related to: "${query}"\nReturn one term per line, no numbering or bullets.`;
       
       const fallbackResponse = await generateGeminiChatCompletion(

@@ -410,58 +410,25 @@ export async function rerankWithGemini(
       `Text: ${item.text.substring(0, 800)}...`
     )).join('\n---\n');
 
-    // *** NEW GENERALIZED SYSTEM PROMPT ***
-    const systemPrompt = `
-You are a specialized Multi-Modal Search Result Evaluator. Your task is to rank search results by relevance to the user's query, considering text, visual context (if provided), and content quality score (if provided).
+    // Construct the system prompt dynamically based on options
+    const systemPrompt = `You are a Multi-Modal Search Ranker. Score each document 0–10 based on how well it directly and completely answers the query. Consider both text and visuals if present.
 
-Assign a score from 0-10 for each result based on how well it DIRECTLY and COMPLETELY answers the user's specific question:
-- 10: Perfect match. Contains a direct, complete, and accurate answer to the query.
-- 7-9: Highly relevant. Contains most of the key information needed for a direct answer, perhaps missing minor details.
-- 4-6: Moderately relevant. Addresses the topic but provides only partial information or requires significant inference to answer the query. Contains useful related context.
-- 1-3: Very relevant. Mentions keywords or concepts from the query but doesn't meaningfully contribute to answering it. General background information.
-- 0: Completely irrelevant.
+Scoring Guide:
+- 10: Precise, complete answer.
+- 7–9: Relevant and mostly complete.
+- 4–6: Somewhat relevant, incomplete or vague.
+- 1–3: Loosely related or shallow.
+- 0: Irrelevant or boilerplate.
 
-**KEY EVALUATION PRINCIPLES:**
+Principles:
+- Prefer documents that explicitly answer the question over general context.
+- Use visuals (e.g., charts, tables, images) only if they improve understanding.
+- Penalize low-value content: cookie banners, login prompts, legal disclaimers.
 
-1.  **Directness:** Prioritize documents that provide a direct answer over documents that only discuss the topic generally. If the query asks for a specific fact, list, name, or definition, documents containing that specific information are much more relevant than documents just talking about the surrounding subject.
-2.  **Completeness & Specificity:** For questions asking "Who...", "What...", "List...", "How many...", or seeking specific details, documents that provide explicit lists, names, numbers, or the requested details are significantly more relevant than those offering only vague descriptions or single examples. Prefer completeness.
-3.  **Query Intent:** Consider the implied intent. A "How to..." query requires procedural steps. A "Why..." query requires explanations. A "Compare..." query needs information on both items being compared. Rank based on how well the document fulfills that specific intent.
-
-**LOW-VALUE CONTENT DETECTION:**
-Automatically assign a score of 0-1 to the following types of content, regardless of keyword matching:
-- Cookie notices/cookie policy (e.g., "This website stores cookies on your computer...")
-- Privacy policies (e.g., "We collect personal information when you...")
-- Terms of service/terms of use
-- Generic website footers (copyright notices, social media links)
-- Navigation menus and site maps
-- Account login/registration information
-- Generic contact forms
-- Website loading/error messages
-- Strictly legal disclaimers
-- Content that repeatedly mentions query keywords but provides no substantive information
-
-**CONTENT QUALITY SCORE (If Provided):**
-- Each document may include a 'Quality' score (0-1). Relevance to the query is PRIMARY.
-- If documents are similarly relevant, slightly prefer higher Quality scores (> 0.8).
-- You MAY slightly penalize documents with very low Quality scores (< 0.5) if relevance is borderline. Use it as a secondary signal ONLY.
-
-**MULTI-MODAL EVALUATION (If Applicable):**
-${queryHasVisualFocus ? `
-- This query is SPECIFICALLY ABOUT VISUAL CONTENT. Prioritize results containing relevant visual elements, especially types: ${targetVisualTypes.join(', ') || 'any'}. Text-only results should be downranked unless exceptionally relevant.` : `
-- This query is primarily about textual information. Consider if visual elements described in the context enhance understanding or provide supplementary information.`
-}
-- Visual Content Evaluation Guidelines: Evaluate relevance of visual descriptions, charts/diagrams/tables data, and image content to the query.
-- Scoring Adjustments: Apply scoring adjustments for visuals AFTER establishing the core relevance score based on the directness/completeness of the answer to the query intent.
-
-**URL PATH SEGMENT EVALUATION:**
-- When document metadata contains urlPathSegments, these provide strong signals about content categorization.
-- For example, if the query is about pricing and a document has '/pricing' in its URL path segments, this is a very strong relevance signal.
-- Give documents with URL paths that directly match the query intent a 1-2 point boost in relevance.
-
-**OUTPUT FORMAT:**
-IMPORTANT: Your response must be a valid JSON array of objects, where each object has 'id', 'score', and 'reason' properties. The 'reason' should briefly justify the score based on the principles above (directness, completeness, intent, quality, visual relevance).
+If contentQualityScore is present:
+- Prefer higher scores if documents are equally relevant.
+- Downrank very low scores (< 0.5) if content is borderline.
 `;
-    // *** END NEW GENERALIZED SYSTEM PROMPT ***
 
     const userPrompt = `Documents to Rank:
       ${formattedItems}
