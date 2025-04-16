@@ -40,6 +40,7 @@ interface SearchResultItem {
   score: number;
   vectorScore?: number;
   keywordScore?: number;
+  source?: string;
   // Add the 'item' field that MultiModalSearchResult requires
   item: {
     id: string;
@@ -698,6 +699,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         score: result.score || result.similarity || 0.5,
         vectorScore: result.vectorScore,
         keywordScore: result.keywordScore,
+        source: result.source,
         // Ensure the 'item' structure matches MultiModalSearchResult
         item: {
           id: result.id || '', // Keep fallback, but needs verification
@@ -775,11 +777,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ).filter(Boolean);
     
     // Prepare context for answer generation
-    let context = processedResults.map(result => ({
+    let contextForAnswer: SearchResultItem[] = processedResults.map(result => ({
       text: typeof result.text === 'string' ? result.text : JSON.stringify(result),
       source: result.metadata?.source || result.item?.metadata?.source || 'Unknown Source',
-      metadata: result.metadata || result.item?.metadata || {}
+      metadata: result.metadata || result.item?.metadata || {},
+      score: result.score || 0, // Ensure score exists
+      // We might need to explicitly pass the `item` if generateAnswer expects it
+      item: result.item || { id: result.id || '', text: result.text || '', metadata: result.metadata || {} }
     }));
+
+    // ---> ADD COMPANY CONTEXT TO ANSWER GENERATION <---
+    const companyContextData = req.body.options?.companyContext;
+    if (companyContextData && companyContextData.companyInfo) {
+        logInfo('[Query API] Adding Company Context to Answer Generation');
+        const companyContextText = `Specific Information about ${companyContextData.companyName || 'the company'}:
+${companyContextData.companyInfo}`;
+        
+        // Create a context item for the company info
+        const companyContextItem: SearchResultItem = {
+            text: companyContextText,
+            source: 'Provided Company Context',
+            metadata: { isCompanyContext: true },
+            score: 1.0, // Give it high relevance
+            item: { id: 'company-context', text: companyContextText, metadata: { isCompanyContext: true } }
+        };
+        
+        // Prepend company context to the main context array
+        contextForAnswer.unshift(companyContextItem);
+    }
+    // ---> END COMPANY CONTEXT ADDITION <---
     
     // If we have previous document references, prioritize them in the context
     // But DON'T include them in the hybrid search (which was causing structure issues)
@@ -793,13 +819,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logInfo(`Adding ${uniquePreviousRefs.length} previously referenced documents to context`);
         
         // Add these documents at the beginning of the context for priority in answer generation only
-        context = [
+        contextForAnswer = [
           ...uniquePreviousRefs.map(ref => ({
             text: ref.text,
             source: ref.source,
-            metadata: { ...ref.metadata, isPreviouslyReferenced: true }
+            metadata: { ...ref.metadata, isPreviouslyReferenced: true },
+            score: 1.0, // Add required score property
+            item: { // Add required item property
+              id: ref.id || 'prev-ref',
+              text: ref.text,
+              metadata: {
+                ...ref.metadata,
+                isPreviouslyReferenced: true
+              }
+            }
           })),
-          ...context
+          // Use the contextForAnswer which might include company info now
+          ...contextForAnswer 
         ];
       }
     }
@@ -832,7 +868,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     // ---> End Recommendation C <---
 
-    const answer = await generateAnswer(originalQuery, context, {
+    const answer = await generateAnswer(originalQuery, contextForAnswer, {
       systemPrompt: systemPromptForGeneration, // Pass the tailored prompt
       includeSourceCitations: includeCitations,
       maxSourcesInAnswer: 5,
