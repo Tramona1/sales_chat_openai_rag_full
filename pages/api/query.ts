@@ -258,8 +258,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       includeCitations = false,
       includeMetadata = true,
       useContextualRetrieval = true,
-      conversationHistory = [] 
+      conversationHistory = [],
+      options = {} 
     } = req.body;
+
+    // ---> Extract company context if available <---\
+    const companyContextData = options?.companyContext;
+    if (companyContextData) {
+      logInfo(`[${requestId}] Company context provided for: ${companyContextData.companyName || 'Unknown Company'}`);
+      logDebug(`[${requestId}] Company Info Snippet:`, companyContextData.companyInfo?.substring(0, 100));
+      logDebug(`[${requestId}] Sales Notes Snippet:`, companyContextData.salesNotes?.substring(0, 100));
+    }
+    // ---> End company context extraction <---\
 
     console.log(`[${requestId}] Query parameters received:`, {
       queryLength: originalQuery?.length || 0,
@@ -506,34 +516,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     
-    // ---> **FIX 2 REVISED: General Override for ALL Follow-ups** <---
+    // ---> **REVISED Follow-up Filter Logic** <---
     if (isLikelyFollowUp && originalQuery) {
-        logInfo('[Follow-up Filter Override] Follow-up detected. Overriding filters using original query only.');
+        logInfo('[Follow-up Filter Logic] Applying refined filters for follow-up.');
 
-        // Re-extract categories and keywords based *only* on the original query
-        const { 
-            primaryCategory: originalPrimary, 
-            secondaryCategories: originalSecondary, 
-            keywords: originalKeywords 
+        // 1. Analyze the ORIGINAL short query to get its core topic
+        const {
+            primaryCategory: originalPrimary,
+            secondaryCategories: originalSecondary,
+            keywords: originalKeywords
         } = extractCategoriesFromQuery(originalQuery);
+        logInfo(`[Follow-up Filter Logic] Analysis of original query: Primary=${originalPrimary || 'none'}, Secondary=${originalSecondary.join(',') || 'none'}, Keywords=${originalKeywords.join(',') || 'none'}`);
 
-        // Override the filter settings derived from potentially skewed analysis
+        // 2. Determine the best primary category
         if (originalPrimary) {
+            // If the short query clearly indicates a primary category, use it.
             searchOptions.filter.primaryCategory = originalPrimary;
-            logInfo(`[Follow-up Filter Override] Overriding primary category from original query: ${originalPrimary}`);
+            logInfo(`[Follow-up Filter Logic] Setting primary category from original query: ${originalPrimary}`);
+        } else if (searchOptions.filter.primaryCategory && searchOptions.filter.primaryCategory !== DocumentCategoryType.GENERAL) {
+            // If the original analysis had a specific primary category, keep it unless the short query strongly contradicts.
+            logInfo(`[Follow-up Filter Logic] Retaining primary category from initial analysis: ${searchOptions.filter.primaryCategory}`);
         } else {
+            // Otherwise default to GENERAL
             searchOptions.filter.primaryCategory = DocumentCategoryType.GENERAL;
-            logInfo(`[Follow-up Filter Override] No primary category from original query, defaulting to GENERAL.`);
+            logInfo(`[Follow-up Filter Logic] Defaulting primary category to GENERAL.`);
         }
 
-        if (originalSecondary.length > 0) {
-            searchOptions.filter.secondaryCategories = originalSecondary;
-            logInfo(`[Follow-up Filter Override] Overriding secondary categories from original query: ${originalSecondary.join(', ')}`);
-        } else {
-            searchOptions.filter.secondaryCategories = []; // Clear secondary if none extracted
-        }
+        // 3. Combine secondary categories (Original + Analysis)
+        const combinedSecondary = new Set([
+            ...(searchOptions.filter.secondaryCategories || []), // Keep existing ones from analysis
+            ...originalSecondary // Add ones from the short query
+        ]);
+        // Don't include the primary category in secondary
+        combinedSecondary.delete(searchOptions.filter.primaryCategory);
+        searchOptions.filter.secondaryCategories = Array.from(combinedSecondary);
+        logInfo(`[Follow-up Filter Logic] Combined secondary categories: ${searchOptions.filter.secondaryCategories.join(',') || 'none'}`);
 
-        // ---> Suggestion 2: Sanitize Required Entities <---
+        // 4. Set Required Entities from the original query (seems effective)
         const STOPWORDS = new Set(['check', 'again', 'tell', 'about', 'list', 'show', 'get', 'me', 'us', 'our', 'is', 'the', 'a', 'an']);
         const cleanedRequiredEntities = originalKeywords.filter(
             kw => !STOPWORDS.has(kw.toLowerCase()) && kw.length > 2
@@ -541,24 +560,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         if (cleanedRequiredEntities.length > 0) {
             searchOptions.filter.requiredEntities = cleanedRequiredEntities;
-            searchOptions.filter.keywords = []; // Clear any keywords from broader analysis
-            logInfo(`[Follow-up Filter Override] Overriding required entities from original query (cleaned): ${cleanedRequiredEntities.join(', ')}`);
+            logInfo(`[Follow-up Filter Logic] Setting required entities from original query (cleaned): ${cleanedRequiredEntities.join(',')}`);
         } else {
-            searchOptions.filter.requiredEntities = [];
-            searchOptions.filter.keywords = [];
-            logInfo(`[Follow-up Filter Override] No suitable required entities extracted from original query.`);
+            // If no clean entities from original query, clear them.
+             searchOptions.filter.requiredEntities = [];
+            logInfo(`[Follow-up Filter Logic] No suitable required entities from original query.`);
         }
-        
-        // ---> Suggestion 3: Log entities from queryAnalysis for comparison <---
+
+        // 5. Add Optional Keywords from Company Context (if available)
+        const optionalKeywords = new Set(searchOptions.filter.keywords || []); // Start with existing keywords if any
+        if (companyContextData?.companyName) {
+            // Add variations of the company name
+            const nameVariations = [companyContextData.companyName, companyContextData.companyName.split(' ')[0]]; // e.g., "Starbucks Corporation", "Starbucks"
+            nameVariations.forEach(name => {
+                if (name && name.length > 2) optionalKeywords.add(name.toLowerCase());
+            });
+        }
+        // TODO: Potentially add industry keywords here if extractable
+
+        searchOptions.filter.keywords = Array.from(optionalKeywords);
+         if (searchOptions.filter.keywords.length > (searchOptions.filter.keywords?.length || 0)) { // Check if we added anything
+            logInfo(`[Follow-up Filter Logic] Added optional keywords from company context: ${searchOptions.filter.keywords.join(',')}`);
+        }
+
+        // Log final filters applied for follow-up
+        logInfo(`[Follow-up Filter Logic] Final Filters Applied - Primary: ${searchOptions.filter.primaryCategory}, Secondary: ${searchOptions.filter.secondaryCategories?.join(',')}, Required Entities: ${searchOptions.filter.requiredEntities?.join(',')}, Keywords: ${searchOptions.filter.keywords?.join(',')}`);
+
+        // Log entities from full queryAnalysis (for comparison - keep this log)
         const analysisEntities = (queryAnalysis.entities || [])
             .map(e => e.name?.toLowerCase())
             .filter(Boolean) as string[];
-        logInfo(`[Follow-up Filter Override] Entities from LLM analysis (for comparison): ${analysisEntities.join(', ')}`);
-        // --- End Suggestion 3 Logging ---
+        logInfo(`[Follow-up Filter Logic] Entities from LLM analysis (for comparison): ${analysisEntities.join(',') || 'none'}`);
 
-        logInfo(`[Follow-up Filter Override] Overridden Filters Applied - Primary: ${searchOptions.filter.primaryCategory}, Secondary: ${searchOptions.filter.secondaryCategories?.join(',')}, Required Entities: ${searchOptions.filter.requiredEntities?.join(',')}`);
-    }
-    // ---> ** END FIX 2 REVISED ** <---
+    } // End of the revised follow-up logic block
+    // ---> ** END REVISED Follow-up Logic ** <---
     
     // Perform search based on selected mode, using the real implementations
     if (searchMode === 'hybrid' || searchMode === 'default') {
@@ -786,27 +821,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       item: result.item || { id: result.id || '', text: result.text || '', metadata: result.metadata || {} }
     }));
 
-    // ---> ADD COMPANY CONTEXT TO ANSWER GENERATION <---
-    const companyContextData = req.body.options?.companyContext;
+    // ---> PREPEND COMPANY CONTEXT TO ANSWER GENERATION <---\
     if (companyContextData && companyContextData.companyInfo) {
-        logInfo('[Query API] Adding Company Context to Answer Generation');
-        const companyContextText = `Specific Information about ${companyContextData.companyName || 'the company'}:
-${companyContextData.companyInfo}`;
+        logInfo(`[${requestId}] Prepending Company Context to Answer Generation`);
+        // Construct context text, including sales notes if present
+        let companyContextText = `Company Background Information for ${companyContextData.companyName || 'the target company'}:\n${companyContextData.companyInfo}`;
+        if (companyContextData.salesNotes) {
+            companyContextText += `\n\nInternal Sales Notes:\n${companyContextData.salesNotes}`;
+        }
         
         // Create a context item for the company info
         const companyContextItem: SearchResultItem = {
             text: companyContextText,
-            source: 'Provided Company Context',
-            metadata: { isCompanyContext: true },
+            source: 'Provided Company Context & Notes',
+            metadata: { isCompanyContext: true, companyName: companyContextData.companyName },
             score: 1.0, // Give it high relevance
-            item: { id: 'company-context', text: companyContextText, metadata: { isCompanyContext: true } }
+            item: { 
+                id: 'company-context', 
+                text: companyContextText, 
+                metadata: { isCompanyContext: true, companyName: companyContextData.companyName } 
+            }
         };
         
         // Prepend company context to the main context array
         contextForAnswer.unshift(companyContextItem);
+        logDebug(`[${requestId}] Prepended company context item. New context length: ${contextForAnswer.length}`);
     }
-    // ---> END COMPANY CONTEXT ADDITION <---
-    
+    // ---> END COMPANY CONTEXT PREPENDING <---\
+
     // If we have previous document references, prioritize them in the context
     // But DON'T include them in the hybrid search (which was causing structure issues)
     if (previousDocumentReferences.length > 0) {
@@ -834,7 +876,7 @@ ${companyContextData.companyInfo}`;
               }
             }
           })),
-          // Use the contextForAnswer which might include company info now
+          // Use the potentially already modified contextForAnswer
           ...contextForAnswer 
         ];
       }
@@ -843,8 +885,21 @@ ${companyContextData.companyInfo}`;
     // Generate answer
     const answerStartTime = Date.now();
     
-    // ---> Recommendation C: Metadata Prompting (Tailoring) <---
+    // ---> MODIFY SYSTEM PROMPT BASED ON COMPANY CONTEXT <---
     let systemPromptForGeneration = BASE_ANSWER_SYSTEM_PROMPT; // Start with base prompt
+
+    if (companyContextData) {
+      logInfo(`[${requestId}] Modifying system prompt for company-specific context: ${companyContextData.companyName}`);
+      systemPromptForGeneration += `
+
+COMPANY-SPECIFIC CONTEXT INSTRUCTIONS:
+- You are answering questions specifically about the company: **${companyContextData.companyName || 'the target company'}**.
+- The first context block provides background information about this company (from external research and potentially internal sales notes).
+- Use this company background **in combination with** the subsequent retrieved search results (which contain information about Workstream's products/services) to formulate your answer.
+- Focus on how Workstream's solutions can specifically address the needs or challenges of **${companyContextData.companyName || 'the target company'}**, leveraging both context types.
+- If the query is general but asked in this company's chat, tailor the answer to be relevant to them if possible.`;
+    }
+    // ---> END SYSTEM PROMPT MODIFICATION <---
 
     // Add follow-up instructions if needed
     if (isLikelyFollowUp && conversationHistory && conversationHistory.length > 0) {
