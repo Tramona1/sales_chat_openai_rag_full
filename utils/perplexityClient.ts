@@ -440,6 +440,50 @@ interface CompanyCache {
   expires_at: string;
 }
 
+// Add check for Supabase table at initialization
+// Add near the top of the file, after constants
+
+// Check if the required Supabase table exists
+async function ensureSupabaseTableExists(client: any): Promise<boolean> {
+  try {
+    if (!client) return false;
+    
+    console.log('[VERCEL DEBUG] Checking if Supabase cache table exists...');
+    
+    // Try to query the table
+    const { data, error } = await client
+      .from(SUPABASE_CACHE_TABLE)
+      .select('id')
+      .limit(1);
+    
+    if (error) {
+      // Check if the error indicates the table doesn't exist
+      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+        console.error(`[VERCEL DEBUG] Table ${SUPABASE_CACHE_TABLE} does not exist. Creating table...`);
+        
+        // Table doesn't exist, try to create it
+        try {
+          const createTableResult = await client.rpc('create_company_cache_table');
+          console.log('[VERCEL DEBUG] Table creation result:', createTableResult);
+          return true;
+        } catch (createError) {
+          console.error('[VERCEL DEBUG] Failed to create table:', createError);
+          return false;
+        }
+      }
+      
+      console.error('[VERCEL DEBUG] Error checking Supabase table:', error);
+      return false;
+    }
+    
+    console.log(`[VERCEL DEBUG] Supabase table ${SUPABASE_CACHE_TABLE} exists.`);
+    return true;
+  } catch (error) {
+    console.error('[VERCEL DEBUG] Error in ensureSupabaseTableExists:', error);
+    return false;
+  }
+}
+
 /**
  * Verify if a company exists and get the correct company name
  * 
@@ -447,7 +491,11 @@ interface CompanyCache {
  * @returns Verification result with company details
  */
 export async function verifyCompanyIdentity(
-  companyName: string
+  companyName: string,
+  options: {
+    forceRefresh?: boolean;
+    useInMemoryCacheOnly?: boolean;
+  } = {}
 ): Promise<{
   exists: boolean;
   fullName?: string;
@@ -457,6 +505,9 @@ export async function verifyCompanyIdentity(
   suggestions?: CompanySuggestion[];
 }> {
   try {
+    // Honor cache overrides from options
+    let useInMemoryCacheOnly = options.useInMemoryCacheOnly || false;
+    
     // Clean the input company name
     const sanitizedCompanyName = sanitizeCompanyName(companyName);
     
@@ -498,6 +549,13 @@ export async function verifyCompanyIdentity(
     // Generate cache key using sanitized name
     const cacheKey = `company_verify_${encodeURIComponent(sanitizedCompanyName.toLowerCase().trim())}`;
     
+    console.log(`[VERCEL DEBUG] In-memory cache only mode: ${useInMemoryCacheOnly}`);
+
+    // Then update the /pages/api/company/verify.ts endpoint to provide the option:
+    // const result = await verifyCompanyIdentity(companyName, {
+    //   useInMemoryCacheOnly: !cacheTableExists
+    // });
+
     // Check the in-memory cache first (most efficient)
     const cachedResult = getFromCache(cacheKey);
     if (cachedResult) {
@@ -512,21 +570,34 @@ export async function verifyCompanyIdentity(
       };
     }
     
-    // Next, check the Supabase cache
-    let supabaseCache;
+    // Next, check the Supabase cache (with better error handling)
+    let supabaseClient = null;
     try {
       // Try to get Vercel-specific client first if in Vercel environment
-      let supabaseClient;
-      
       if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
         // Import vercelSupabaseClient dynamically to avoid circular dependencies
         try {
-          const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
-          supabaseClient = getVercelSupabaseAdmin();
-          logInfo('[perplexityClient] Using Vercel Supabase client for company verification');
+          console.log('[VERCEL DEBUG] Attempting to load Vercel Supabase client...');
+          const vercelModule = await import('./vercelSupabaseClient');
+          supabaseClient = vercelModule.getVercelSupabaseAdmin();
+          
+          if (supabaseClient) {
+            console.log('[VERCEL DEBUG] Successfully loaded Vercel Supabase client');
+            
+            // Check if the table exists
+            const tableExists = await ensureSupabaseTableExists(supabaseClient);
+            if (!tableExists) {
+              console.log('[VERCEL DEBUG] Using in-memory cache only as table does not exist');
+              useInMemoryCacheOnly = true;
+            }
+          } else {
+            console.log('[VERCEL DEBUG] Vercel Supabase client is null');
+          }
         } catch (vercelClientError) {
-          logError('[perplexityClient] Error importing Vercel Supabase client for storage', vercelClientError);
+          console.error('[VERCEL DEBUG] Error importing Vercel Supabase client:', vercelClientError);
+          
           // Fall back to standard client
+          console.log('[VERCEL DEBUG] Falling back to standard Supabase client');
           supabaseClient = createServiceClient();
         }
       } else {
@@ -534,38 +605,60 @@ export async function verifyCompanyIdentity(
         supabaseClient = createServiceClient();
       }
       
-      if (supabaseClient) {
-        const { data, error } = await supabaseClient
-          .from(SUPABASE_CACHE_TABLE)
-          .select('*')
-          .eq('id', cacheKey)
-          .single();
+      // Skip Supabase cache check if we've determined it's not working
+      if (!useInMemoryCacheOnly && supabaseClient) {
+        console.log('[VERCEL DEBUG] Checking Supabase cache for key:', cacheKey);
+        
+        try {
+          const { data, error } = await supabaseClient
+            .from(SUPABASE_CACHE_TABLE)
+            .select('*')
+            .eq('id', cacheKey)
+            .single();
           
-        if (!error && data && new Date(data.expires_at) > new Date()) {
-          // Cache hit - store in memory cache too
-          const cachedResult = data.data as {
-            exists: boolean;
-            fullName?: string;
-            description?: string;
-            industry?: string;
-            isRateLimited: boolean;
-            suggestions?: CompanySuggestion[];
-          };
-          
-          cacheWithExpiry(cacheKey, cachedResult, 
-            new Date(data.expires_at).getTime() - Date.now());
-          
-          logPerplexityUsage('verifyCompanyIdentity.supabaseCacheHit', { companyName });
-          return cachedResult;
+          if (error) {
+            console.error('[VERCEL DEBUG] Supabase cache error:', error);
+            // Continue without using cache
+          } else if (data && new Date(data.expires_at) > new Date()) {
+            // Cache hit - store in memory cache too
+            console.log('[VERCEL DEBUG] Supabase cache hit for company:', companyName);
+            
+            // Verify data structure
+            if (data.data && typeof data.data === 'object') {
+              const cachedResult = data.data as {
+                exists: boolean;
+                fullName?: string;
+                description?: string;
+                industry?: string;
+                isRateLimited: boolean;
+                suggestions?: CompanySuggestion[];
+              };
+              
+              console.log('[VERCEL DEBUG] Cache data validation successful');
+              
+              cacheWithExpiry(cacheKey, cachedResult, 
+                new Date(data.expires_at).getTime() - Date.now());
+              
+              logPerplexityUsage('verifyCompanyIdentity.supabaseCacheHit', { companyName });
+              return cachedResult;
+            } else {
+              console.error('[VERCEL DEBUG] Invalid cache data structure:', data.data);
+            }
+          } else {
+            console.log('[VERCEL DEBUG] No valid cache entry found');
+          }
+        } catch (queryError) {
+          console.error('[VERCEL DEBUG] Error querying Supabase cache:', queryError);
+          // Continue without using cache
         }
-      } else {
-        logWarning('[perplexityClient] Could not create Supabase client for cache lookup');
       }
     } catch (cacheError) {
       // Just log the error and continue - we'll try the API call
-      logError('[perplexityClient] Error checking Supabase cache', cacheError);
+      console.error('[VERCEL DEBUG] Error in Supabase cache lookup:', cacheError);
     }
     
+    console.log('[VERCEL DEBUG] Proceeding with Perplexity API call for company:', companyName);
+
     // Not in cache, perform verification via direct check or API
     // Create an improved verification prompt that emphasizes the exact company name
     const prompt = `My search query is exactly "${sanitizedCompanyName}". Verify if this specific company exists.
@@ -626,46 +719,32 @@ Important: I'm specifically looking for "${sanitizedCompanyName}" and not anothe
       // Cache the result
       cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
       
-      // Store in Supabase cache
-      const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
-      
-      try {
-        // Try to get Vercel-specific client first if in Vercel environment
-        let supabaseClient;
-        
-        if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-          // Import vercelSupabaseClient dynamically to avoid circular dependencies
-          try {
-            const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
-            supabaseClient = getVercelSupabaseAdmin();
-            logInfo('[perplexityClient] Using Vercel Supabase client for storing company verification');
-          } catch (vercelClientError) {
-            logError('[perplexityClient] Error importing Vercel Supabase client for storage', vercelClientError);
-            // Fall back to standard client
-            supabaseClient = createServiceClient();
-          }
-        } else {
-          // Use standard client for non-Vercel environments
-          supabaseClient = createServiceClient();
-        }
-        
-        if (supabaseClient) {
-          await supabaseClient
+      // Store in Supabase cache only if we have a client and the table exists
+      if (!useInMemoryCacheOnly && supabaseClient) {
+        try {
+          console.log('[VERCEL DEBUG] Attempting to store in Supabase cache');
+          const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
+          
+          const { data: upsertData, error: upsertError } = await supabaseClient
             .from(SUPABASE_CACHE_TABLE)
             .upsert({
               id: cacheKey,
               data: result,
               expires_at: expiresAt.toISOString()
             }, { onConflict: 'id' });
-        } else {
-          logError('[perplexityClient] Failed to create Supabase client for storing company verification cache');
+          
+          if (upsertError) {
+            console.error('[VERCEL DEBUG] Error storing in Supabase cache:', upsertError);
+          } else {
+            console.log('[VERCEL DEBUG] Successfully stored in Supabase cache');
+          }
+        } catch (storageError) {
+          console.error('[VERCEL DEBUG] Exception storing in Supabase cache:', storageError);
+          // Continue since we have the result even if caching fails
         }
-        
-        return result;
-      } catch (error) {
-        logError('[perplexityClient] Error storing company verification in Supabase', error);
-        return result; // Still return the result even if caching fails
       }
+      
+      return result;
     }
     
     // Improved extraction with clearer patterns
@@ -698,46 +777,32 @@ Important: I'm specifically looking for "${sanitizedCompanyName}" and not anothe
     // Cache the result
     cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
     
-    // Store in Supabase cache
-    const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
-    
-    try {
-      // Try to get Vercel-specific client first if in Vercel environment
-      let supabaseClient;
-      
-      if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-        // Import vercelSupabaseClient dynamically to avoid circular dependencies
-        try {
-          const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
-          supabaseClient = getVercelSupabaseAdmin();
-          logInfo('[perplexityClient] Using Vercel Supabase client for storing company verification');
-        } catch (vercelClientError) {
-          logError('[perplexityClient] Error importing Vercel Supabase client for storage', vercelClientError);
-          // Fall back to standard client
-          supabaseClient = createServiceClient();
-        }
-      } else {
-        // Use standard client for non-Vercel environments
-        supabaseClient = createServiceClient();
-      }
-      
-      if (supabaseClient) {
-        await supabaseClient
+    // Store in Supabase cache only if we have a client and the table exists
+    if (!useInMemoryCacheOnly && supabaseClient) {
+      try {
+        console.log('[VERCEL DEBUG] Attempting to store in Supabase cache');
+        const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
+        
+        const { data: upsertData, error: upsertError } = await supabaseClient
           .from(SUPABASE_CACHE_TABLE)
           .upsert({
             id: cacheKey,
             data: result,
             expires_at: expiresAt.toISOString()
           }, { onConflict: 'id' });
-      } else {
-        logError('[perplexityClient] Failed to create Supabase client for storing company verification cache');
+        
+        if (upsertError) {
+          console.error('[VERCEL DEBUG] Error storing in Supabase cache:', upsertError);
+        } else {
+          console.log('[VERCEL DEBUG] Successfully stored in Supabase cache');
+        }
+      } catch (storageError) {
+        console.error('[VERCEL DEBUG] Exception storing in Supabase cache:', storageError);
+        // Continue since we have the result even if caching fails
       }
-      
-      return result;
-    } catch (error) {
-      logError('[perplexityClient] Error storing company verification in Supabase', error);
-      return result; // Still return the result even if caching fails
     }
+    
+    return result;
     
   } catch (error) {
     logError('Error verifying company identity', error);
@@ -919,46 +984,33 @@ Format the information in clear sections and be factual. If you can't find relia
     // Cache the result
     cacheWithExpiry(cacheKey, result, COMPANY_INFO_CACHE_TIMEOUT);
     
-    // Store in Supabase cache
-    const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
-    
-    try {
-      // Try to get Vercel-specific client first if in Vercel environment
-      let supabaseClient;
-      
-      if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-        // Import vercelSupabaseClient dynamically to avoid circular dependencies
-        try {
-          const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
-          supabaseClient = getVercelSupabaseAdmin();
-          logInfo('[perplexityClient] Using Vercel Supabase client for storing company verification');
-        } catch (vercelClientError) {
-          logError('[perplexityClient] Error importing Vercel Supabase client for storage', vercelClientError);
-          // Fall back to standard client
-          supabaseClient = createServiceClient();
-        }
-      } else {
-        // Use standard client for non-Vercel environments
-        supabaseClient = createServiceClient();
-      }
-      
-      if (supabaseClient) {
-        await supabaseClient
+    // Store in Supabase cache only if we have a client and the table exists
+    const supabaseClient = createServiceClient();
+    if (supabaseClient) {
+      try {
+        console.log('[VERCEL DEBUG] Attempting to store in Supabase cache');
+        const expiresAt = new Date(Date.now() + COMPANY_INFO_CACHE_TIMEOUT);
+        
+        const { data: upsertData, error: upsertError } = await supabaseClient
           .from(SUPABASE_CACHE_TABLE)
           .upsert({
             id: cacheKey,
             data: result,
             expires_at: expiresAt.toISOString()
           }, { onConflict: 'id' });
-      } else {
-        logError('[perplexityClient] Failed to create Supabase client for storing company verification cache');
+        
+        if (upsertError) {
+          console.error('[VERCEL DEBUG] Error storing in Supabase cache:', upsertError);
+        } else {
+          console.log('[VERCEL DEBUG] Successfully stored in Supabase cache');
+        }
+      } catch (storageError) {
+        console.error('[VERCEL DEBUG] Exception storing in Supabase cache:', storageError);
+        // Continue since we have the result even if caching fails
       }
-      
-      return result;
-    } catch (error) {
-      logError('[perplexityClient] Error storing company verification in Supabase', error);
-      return result; // Still return the result even if caching fails
     }
+    
+    return result;
     
   } catch (error) {
     logError('Error fetching company information', error);
