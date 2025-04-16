@@ -216,7 +216,7 @@ Context:
 ${contextText}
 
 Query: ${query}
-${userDirective} // Append the user directive
+${userDirective}
 
 Answer:
 `;

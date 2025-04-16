@@ -15,9 +15,11 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message, role, timestamp }) =
       {isBot ? (
         <div className="prose prose-invert max-w-none text-gray-100">
           {/* @ts-ignore - Ignoring ReactMarkdown component type issues */}
-          <ReactMarkdown className="markdown-content">
-            {message}
-          </ReactMarkdown>
+          <div className="markdown-content">
+            <ReactMarkdown>
+              {message}
+            </ReactMarkdown>
+          </div>
         </div>
       ) : (
         <p className="text-gray-100 whitespace-pre-wrap">{message}</p>

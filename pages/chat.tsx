@@ -37,61 +37,115 @@ export default function ChatPage() {
   const [companyName, setCompanyName] = useState<string>('');
   const [companyInfo, setCompanyInfo] = useState<string>('');
   const [salesNotes, setSalesNotes] = useState<string>('');
+  const [messageCounter, setMessageCounter] = useState(0);
+  const processedInitialQuestionRef = useRef<string | null>(null);
+
+  // ---> Log Component Mount/Unmount <---
+  useEffect(() => {
+    console.log('[ChatPage LIFECYCLE] Component Mounted');
+    return () => {
+      console.log('[ChatPage LIFECYCLE] Component Unmounting');
+    };
+  }, []); // Empty dependency array runs only on mount and unmount
 
   // Initialize with welcome message and handle URL parameters
   useEffect(() => {
-    // Check if router is ready and has query parameters
-    if (!router.isReady) return;
+    const processInitialQuestion = async () => {
+      // ---> Log Initial useEffect Trigger <--- (moved inside async func)
+      console.log('[ChatPage useEffect INITIAL] Running effect for initial question/session load.');
 
-    const { question, autoResponse, session } = router.query;
-    
-    // If a session ID is provided, try to load that session
-    if (session && typeof session === 'string') {
-      loadChatSession(session);
-      return;
-    }
-    
-    // Handle initial state with welcome message
-    if (messages.length === 0) {
-      // Initialize with welcome message
-      const initialMessages: Message[] = [{
-        id: '0',
-        role: 'bot',
-        content: 'Welcome to the Workstream Knowledge Assistant! Ask questions about our HR, Payroll, and Hiring platform for the hourly workforce.',
-        timestamp: new Date()
-      }];
+      // Check if router is ready and has query parameters
+      if (!router.isReady) {
+        console.log('[ChatPage useEffect INITIAL] Router not ready, exiting effect.');
+        return;
+      }
+
+      const { question, autoResponse, session } = router.query;
       
-      // If we have a question parameter, also add the user question
-      if (question && typeof question === 'string') {
-        initialMessages.push({
-          id: '1',
-          role: 'user',
-          content: question,
+      // ---> Check if we've already processed this specific question <--- (moved inside async func)
+      if (question && typeof question === 'string' && question === processedInitialQuestionRef.current) {
+        console.log("[ChatPage useEffect INITIAL] Initial question already processed, skipping.");
+        return;
+      }
+
+      // If a session ID is provided, try to load that session
+      if (session && typeof session === 'string') {
+        // ---> Reset processed ref if loading a session <-----
+        processedInitialQuestionRef.current = null;
+        await loadChatSession(session); // await loading
+        return;
+      }
+      
+      // Handle initial state with welcome message only if messages are empty
+      if (messages.length === 0) {
+        // Initialize with welcome message
+        const initialMessages: Message[] = [{
+          id: '0',
+          role: 'bot',
+          content: 'Welcome to the Workstream Knowledge Assistant! Ask questions about our HR, Payroll, and Hiring platform for the hourly workforce.',
           timestamp: new Date()
-        });
+        }];
         
-        // Set all messages at once
-        setMessages(initialMessages);
-        
-        // If autoResponse is true, simulate loading and trigger the AI response
-        if (autoResponse === 'true') {
+        // If we have a question parameter, process it
+        if (question && typeof question === 'string') {
+          console.log("useEffect: Processing initial question from URL:", question);
+          const userMessage: Message = {
+            id: '1',
+            role: 'user',
+            content: question,
+            timestamp: new Date()
+          };
+          
+          // Set user message first
+          setMessages([...initialMessages, userMessage]);
+          
+          // ---> Mark this question as processed <---
+          processedInitialQuestionRef.current = question;
+          
+          // Set loading state
           setIsLoading(true);
           
-          // Slight delay to simulate AI thinking
-          setTimeout(() => {
-            // Process the message to get AI response
-            processMessageForResponse(question, initialMessages);
-          }, 800);
+          try {
+            // Get AI response
+            const botResponse = await processMessageForResponse(question, [...initialMessages, userMessage]);
+            
+            // Add bot response if valid
+            if (botResponse && botResponse.content) {
+              const botMessage: Message = {
+                id: `${Date.now()}_initial_bot`,
+                role: 'bot',
+                content: botResponse.content,
+                timestamp: new Date(),
+              };
+              setMessages(prev => [...prev, botMessage]); // Add bot message to the state
+            } else {
+              console.error("Initial question processing returned no content.");
+            }
+          } catch (error) {
+            console.error("Error processing initial question response:", error);
+            // Optionally add an error message to chat
+            const errorMessage: Message = {
+              id: `${Date.now()}_initial_error`,
+              role: 'bot',
+              content: "Sorry, I couldn't process the initial question.",
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, errorMessage]);
+          } finally {
+            setIsLoading(false); // Ensure loading is turned off
+          }
+
         } else {
-          // Process immediately without showing loading state first
-          processMessageForResponse(question, initialMessages);
+          // Just set welcome message if no question, reset processed ref
+          processedInitialQuestionRef.current = null;
+          setMessages(initialMessages);
         }
-      } else {
-        // Just set welcome message if no question
-        setMessages(initialMessages);
       }
-    }
-  }, [router.isReady]); // Only run this effect when router is ready
+    };
+
+    processInitialQuestion(); // Call the async function
+
+  }, [router.isReady, router.query]); // Dependencies: router readiness and query parameters
   
   // Function to load a chat session
   const loadChatSession = async (sessionId: string) => {
@@ -338,9 +392,9 @@ export default function ChatPage() {
       // Create a promise that rejects after timeout
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => {
-          console.log(`[${clientRequestId}] Request timed out after 30 seconds`);
-          reject(new Error('Request timed out after 30 seconds'));
-        }, 30000);
+          console.log(`[${clientRequestId}] Request timed out after 90 seconds`);
+          reject(new Error('Request timed out after 90 seconds'));
+        }, 90000);
       });
 
       // Create the actual fetch promise
@@ -523,82 +577,106 @@ export default function ChatPage() {
   
   // Send message and get response
   const handleSendMessage = async (overrideInput?: string) => {
+    // ---> Log Entry <---
+    console.log(`[handleSendMessage ENTRY] Function called. isLoading: ${isLoading}`);
+
     const messageText = overrideInput || input;
-    if (!messageText.trim() || isLoading) return;
+    if (!messageText.trim() || isLoading) {
+      // ---> Log Exit <---
+      console.log(`[handleSendMessage EXIT] Exiting early. isLoading: ${isLoading}, messageText empty: ${!messageText.trim()}`);
+      return;
+    }
+
+    // ---> Log isLoading Set <---
+    console.log(`[handleSendMessage] Setting isLoading to TRUE`);
+    setIsLoading(true);
 
     const clientMsgId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    console.log(`[${clientMsgId}] BEGIN handleSendMessage for: "${messageText.substring(0, 30)}${messageText.length > 30 ? '...' : ''}"`);
+    console.log(`[${clientMsgId}] BEGIN handleSendMessage processing for: "${messageText.substring(0, 30)}${messageText.length > 30 ? '...' : ''}"`);
 
-    // Check if this message is already in the list (to avoid duplication)
-    const messageExists = messages.some(msg => 
-      msg.role === 'user' && msg.content === messageText
-    );
-    
-    // Only add user message if it doesn't already exist
-    let updatedMessages = [...messages];
-    if (!messageExists) {
-      // Add user message
-      const userMessage: Message = {
-        id: Date.now().toString(),
-        role: 'user',
-        content: messageText,
-        timestamp: new Date()
-      };
-      
-      updatedMessages = [...messages, userMessage];
-      setMessages(updatedMessages);
-      console.log(`[${clientMsgId}] Added user message to state, new message count: ${updatedMessages.length}`);
-    }
-    
-    setInput('');
-    
-    // Track message sent event
-    trackEvent('chat_message_sent', {
-      session_id: sessionId || undefined,
-      event_data: {
-        message_type: 'text',
-        content_length: messageText.length,
-        is_company_specific: isCompanySpecificQuery(messageText)
-      }
-    });
-    
-    // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-    
-    // Process message to get response
-    console.log(`[${clientMsgId}] Calling processMessageForResponse`);
-    const botResponse = await processMessageForResponse(messageText, updatedMessages);
-    console.log(`[${clientMsgId}] Received bot response:`, {
-      hasContent: !!botResponse.content,
-      contentLength: botResponse.content?.length || 0,
-      hasCitations: Array.isArray(botResponse.citations) && botResponse.citations.length > 0,
-      hasSources: Array.isArray(botResponse.sources) && botResponse.sources.length > 0
-    });
+    try { // Wrap the main logic in try...finally to ensure isLoading is unset
+        const messageExists = messages.some(msg =>
+          msg.role === 'user' && msg.content === messageText
+        );
 
-    // Add bot's message to the state
-    if (botResponse && botResponse.content) {
-      const botMessage: Message = {
-        id: `${Date.now()}_bot`,
-        role: 'bot',
-        content: botResponse.content,
-        timestamp: new Date(),
-        // Potentially add sources/citations if needed from botResponse
-      };
-      console.log(`[${clientMsgId}] Adding bot message to state:`, {
-        id: botMessage.id,
-        role: botMessage.role,
-        contentPreview: botMessage.content.substring(0, 50) + (botMessage.content.length > 50 ? '...' : ''),
-        timestamp: botMessage.timestamp
-      });
-      
-      // Update state *again* to include the bot message
-      setMessages(prevMessages => [...prevMessages, botMessage]);
-      console.log(`[${clientMsgId}] COMPLETE handleSendMessage - Success`);
-    } else {
-      console.error(`[${clientMsgId}] No content in bot response:`, botResponse);
-      console.log(`[${clientMsgId}] COMPLETE handleSendMessage - Failed (no content in response)`);
+        let updatedMessages = [...messages];
+        if (!messageExists) {
+          const userMessage: Message = {
+            id: Date.now().toString(),
+            role: 'user',
+            content: messageText,
+            timestamp: new Date()
+          };
+          updatedMessages = [...messages, userMessage]; // Use current messages state
+          setMessages(updatedMessages); // Set user message immediately
+          console.log(`[${clientMsgId}] Added user message to state, new message count: ${updatedMessages.length}`);
+        }
+
+        setInput('');
+
+        // Track message sent event
+        trackEvent('chat_message_sent', {
+          session_id: sessionId || undefined,
+          event_data: {
+            message_type: 'text',
+            content_length: messageText.length,
+            is_company_specific: isCompanySpecificQuery(messageText)
+          }
+        });
+        
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+
+        console.log(`[${clientMsgId}] Calling processMessageForResponse`);
+        // IMPORTANT: Pass the state *after* adding the user message
+        const botResponse = await processMessageForResponse(messageText, updatedMessages);
+        console.log(`[${clientMsgId}] Received bot response:`, {
+           hasContent: !!botResponse.content,
+           contentLength: botResponse.content?.length || 0,
+           hasCitations: Array.isArray(botResponse.citations) && botResponse.citations.length > 0,
+           hasSources: Array.isArray(botResponse.sources) && botResponse.sources.length > 0
+        });
+
+        console.log(`[${clientMsgId}] Checking botResponse content. botResponse exists: ${!!botResponse}, botResponse.content exists: ${!!botResponse?.content}, content length: ${botResponse?.content?.length}`);
+
+        if (botResponse && botResponse.content) {
+          console.log(`[${clientMsgId}] Condition (botResponse && botResponse.content) is TRUE. Creating botMessage object.`);
+          const botMessage: Message = {
+            id: `${Date.now()}_bot`,
+            role: 'bot',
+            content: botResponse.content,
+            timestamp: new Date(),
+          };
+          console.log(`[${clientMsgId}] Adding bot message to state:`, {
+            id: botMessage.id,
+            role: botMessage.role,
+            contentPreview: botMessage.content.substring(0, 50) + (botMessage.content.length > 50 ? '...' : ''),
+            timestamp: botMessage.timestamp
+          });
+          
+          setMessages(prevMessages => {
+            console.log(`[${clientMsgId}] Inside setMessages: prevMessages length: ${prevMessages.length}`);
+            const newMessages = [...prevMessages, botMessage];
+            console.log(`[${clientMsgId}] Inside setMessages: newMessages length: ${newMessages.length}`);
+            setMessageCounter(count => count + 1); // Increment counter
+            return newMessages;
+          });
+
+          console.log(`[${clientMsgId}] Bot message state update dispatched`);
+        } else {
+          console.error(`[${clientMsgId}] No content in bot response:`, botResponse);
+          console.log(`[${clientMsgId}] COMPLETE handleSendMessage - Failed (no content in response)`);
+          // Optionally add an error message to the chat?
+          // setMessages(prev => [...prev, { id: `${Date.now()}_error`, role: 'bot', content: "Sorry, I couldn't generate a response.", timestamp: new Date() }]);
+        }
+    } catch (error) {
+        console.error(`[${clientMsgId}] Error within handleSendMessage main logic:`, error);
+        // Handle potential errors during the process, maybe add an error message to chat
+    } finally {
+        // ---> Log isLoading Unset <---
+        console.log(`[handleSendMessage] Setting isLoading to FALSE in finally block`);
+        setIsLoading(false);
     }
   };
   
@@ -700,6 +778,8 @@ export default function ChatPage() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      // ---> Log KeyDown Trigger <---
+      console.log('[ChatPage EVENT] Enter key pressed, calling handleSendMessage.');
       handleSendMessage();
     }
   };
@@ -736,6 +816,9 @@ export default function ChatPage() {
       console.log("Development mode: You can reload the page if the chat gets stuck");
     }
   };
+
+  // ---> Re-add Render Debug Log <---
+  console.log('[Render Debug] Messages array before return:', messages.map(m => ({ id: m.id, role: m.role, length: m.content.length })));
 
   return (
     <div className="flex flex-col h-screen bg-[#343541]">
@@ -822,7 +905,11 @@ export default function ChatPage() {
             style={{ maxHeight: '200px' }}
           />
           <button
-            onClick={() => handleSendMessage()}
+            onClick={() => {
+              // ---> Log Button Click <---
+              console.log('[ChatPage EVENT] Send button clicked, calling handleSendMessage.');
+              handleSendMessage();
+            }}
             disabled={isLoading || !input.trim()}
             className={`absolute right-3 top-3 rounded-md p-1 ${
               isLoading || !input.trim()
