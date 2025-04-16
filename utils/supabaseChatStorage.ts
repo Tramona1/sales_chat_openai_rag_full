@@ -7,7 +7,22 @@
 import { Session, SupabaseClient } from '@supabase/supabase-js';
 import { logError, logInfo } from './logger';
 import { CompanyInformation } from './perplexityClient';
-import { getSupabaseAdmin } from './supabaseClient';
+
+// Conditionally import the admin client
+// Use require for conditional logic compatible with different module systems
+let getSupabaseAdmin: () => SupabaseClient;
+if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+  try {
+    getSupabaseAdmin = require('./vercelSupabaseClient').getVercelSupabaseAdmin;
+    logInfo('[SupabaseChatStorage] Using Vercel Supabase client');
+  } catch (e) {
+    logError('Failed to load Vercel Supabase client, falling back to standard.', e);
+    getSupabaseAdmin = require('./supabaseClient').getSupabaseAdmin;
+  }
+} else {
+  getSupabaseAdmin = require('./supabaseClient').getSupabaseAdmin;
+  logInfo('[SupabaseChatStorage] Using standard Supabase client');
+}
 
 // Type definitions
 export interface StoredChatMessage {

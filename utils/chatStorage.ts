@@ -100,9 +100,9 @@ export async function saveChatSession(session: Omit<StoredChatSession, 'id' | 'c
   try {
     // In Vercel, try to use Supabase directly first
     if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-      // Import here to avoid circular dependencies
-      const { getSupabase } = await import('./supabaseClient');
-      const supabase = getSupabase();
+      // Import Vercel-specific client
+      const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
+      const supabase = getVercelSupabaseAdmin(); // Use Vercel client
       
       if (supabase) {
         const { data, error } = await supabase
@@ -258,9 +258,9 @@ export async function getChatSession(sessionId: string): Promise<StoredChatSessi
   try {
     // In Vercel, try to use Supabase directly first
     if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-      // Import here to avoid circular dependencies
-      const { getSupabase } = await import('./supabaseClient');
-      const supabase = getSupabase();
+      // Import Vercel-specific client
+      const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
+      const supabase = getVercelSupabaseAdmin(); // Use Vercel client
       
       if (supabase) {
         const { data, error } = await supabase
@@ -315,9 +315,9 @@ export async function updateChatSession(
     
     // In Vercel, try to use Supabase directly first
     if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-      // Import here to avoid circular dependencies
-      const { getSupabase } = await import('./supabaseClient');
-      const supabase = getSupabase();
+      // Import Vercel-specific client
+      const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
+      const supabase = getVercelSupabaseAdmin(); // Use Vercel client
       
       if (supabase) {
         const { data, error } = await supabase
@@ -365,8 +365,9 @@ export async function deleteChatSession(sessionId: string): Promise<boolean> {
   try {
     // In Vercel, try to use Supabase directly first
     if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-      const { getSupabase } = await import('./supabaseClient');
-      const supabase = getSupabase();
+      // Import Vercel-specific client
+      const { getVercelSupabaseAdmin } = await import('./vercelSupabaseClient');
+      const supabase = getVercelSupabaseAdmin(); // Use Vercel client
       
       if (supabase) {
         const { error } = await supabase
